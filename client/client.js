@@ -45,7 +45,14 @@
     if (p.query) parts.push('query=' + encodeURIComponent(p.query))
     if (p.category) parts.push('category=' + encodeURIComponent(p.category))
     if (p.limit) parts.push('limit=' + encodeURIComponent(String(p.limit)))
+    if (p.offset) parts.push('offset=' + encodeURIComponent(String(p.offset)))
     return '?' + parts.join('&')
+  }
+
+  function pageSlice(entries, size) {
+    var list = Array.isArray(entries) ? entries : []
+    var n = Math.max(1, Number(size) || 1)
+    return { items: list.slice(0, n), hasMore: list.length > n }
   }
 
   function workspaceOptions(input) {
@@ -99,7 +106,7 @@
     }
   }
 
-  var helpers = { validateDraft: validateDraft, groupEntries: groupEntries, nextToken: nextToken, buildEntriesQuery: buildEntriesQuery, workspaceOptions: workspaceOptions, errorKeyFor: errorKeyFor, validateImportDoc: validateImportDoc, importSummary: importSummary }
+  var helpers = { validateDraft: validateDraft, groupEntries: groupEntries, nextToken: nextToken, buildEntriesQuery: buildEntriesQuery, workspaceOptions: workspaceOptions, errorKeyFor: errorKeyFor, validateImportDoc: validateImportDoc, importSummary: importSummary, pageSlice: pageSlice }
 
   // ===== node 测试导出（CJS） =====
   if (typeof module !== 'undefined' && module.exports) {
@@ -111,7 +118,7 @@
 
   var API_BASE = '/plugins/dsh-memory'
   var NS = 'dsh-memory'
-  var PAGE_LIMIT = 200
+  var PAGE_SIZE = 50
 
   var ZH = {
     nav: '记忆',
@@ -157,7 +164,10 @@
     errLoopback: '仅允许本机访问',
     errInvalidJson: '请求数据无效',
     errRefreshed: '凭证已刷新，请重试',
-    truncated: '仅显示前 200 条，请用搜索缩小范围',
+    categoryAll: '全部分类',
+    pagePrev: '上一页',
+    pageNext: '下一页',
+    pageInfo: '第 {page} 页',
     workspaceUnknown: '未知工作区',
     entriesUnit: '条',
     workspaceTarget: '写入工作区',
@@ -218,7 +228,10 @@
     errLoopback: 'Loopback access only',
     errInvalidJson: 'Invalid request data',
     errRefreshed: 'Credentials refreshed; please retry',
-    truncated: 'Showing first 200 entries; narrow with search',
+    categoryAll: 'All categories',
+    pagePrev: 'Previous',
+    pageNext: 'Next',
+    pageInfo: 'Page {page}',
     workspaceUnknown: 'Unknown workspace',
     entriesUnit: 'entries',
     workspaceTarget: 'Writes to workspace',
@@ -275,6 +288,7 @@
     '.dm_dialog_footer{display:flex;justify-content:flex-end;gap:8px;margin-top:16px;}',
     '.dm_delete_preview{border:0.5px solid var(--dsw-alias-border-l1,rgba(0,0,0,0.08));border-radius:8px;padding:10px;margin:10px 0;white-space:pre-wrap;word-break:break-word;background:var(--dsw-alias-bg-layer-1,#fafafa);max-height:40vh;overflow-y:auto;}',
     '.dm_hint{color:var(--dsw-alias-label-tertiary,#999);font-size:12px;}',
+    '.dm_pager{display:flex;gap:10px;align-items:center;justify-content:center;margin:14px 0 4px;}',
     '.dm_toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--dsw-alias-toast-bg,var(--dsw-alias-state-business-primary,#2f6bff));color:var(--dsw-alias-toast-label,#fff);padding:8px 16px;border-radius:8px;z-index:1100;font-size:13px;}',
     '.dm_toast_error{background:var(--dsw-alias-state-error-primary,#d4380d);color:var(--dsw-alias-label-on-color,#fff);}',
     '.dm_nav_icon{display:block;}',
@@ -533,6 +547,12 @@
         var selection = selectionState[0]; var setSelection = selectionState[1]
         var queryState = useState('')
         var query = queryState[0]; var setQuery = queryState[1]
+        var categoryState = useState('')
+        var categoryFilter = categoryState[0]; var setCategoryFilter = categoryState[1]
+        var pageState = useState(0)
+        var page = pageState[0]; var setPage = pageState[1]
+        var hasMoreState = useState(false)
+        var hasMore = hasMoreState[0]; var setHasMore = hasMoreState[1]
         var editorState = useState(null)
         var editor = editorState[0]; var setEditor = editorState[1]
         var confirmState = useState(null)
@@ -555,21 +575,24 @@
         confirmRef.current = confirm
 
         // 列表请求：seq 守卫防止旧响应覆盖新结果；「全部」＝全局＋当前工作区。
+        // 多取一条（PAGE_SIZE+1）探测下一页；过滤/切换作用域时回到第一页。
         var refreshEntries = useCallback(function () {
           var seq = ++seqRef.current
-          var params = { query: query, limit: PAGE_LIMIT }
+          var params = { query: query, category: categoryFilter, limit: PAGE_SIZE + 1, offset: page * PAGE_SIZE }
           if (selection === 'global') params.scope = 'global'
           else if (selection === 'all') { params.scope = 'all'; params.workspace = currentCwd }
           else { params.scope = 'workspace'; params.workspace = selection }
           return api.entries(params).then(function (doc) {
             if (seq !== seqRef.current) return
-            setEntries(doc.entries || [])
+            var sliced = pageSlice(doc.entries, PAGE_SIZE)
+            setEntries(sliced.items)
+            setHasMore(sliced.hasMore)
             setListError('')
           }).catch(function (err) {
             if (seq !== seqRef.current) return
             setListError(errorText(err, t))
           })
-        }, [api, query, selection, currentCwd, t])
+        }, [api, query, categoryFilter, page, selection, currentCwd, t])
 
         var refreshWorkspaces = useCallback(function () {
           return api.workspaces().then(function (doc) { setWorkspaces(doc.workspaces || []) }).catch(function () {})
@@ -591,12 +614,12 @@
 
         useEffect(function () { loadInitial() }, [loadInitial])
 
-        // 选择/查询变化 → 刷新列表（查询防抖 300ms）
+        // 选择/查询/分类/页码变化 → 刷新列表（查询防抖 300ms）
         useEffect(function () {
           if (phase !== 'ready') return undefined
           var timer = setTimeout(function () { refreshEntries() }, query ? 300 : 0)
           return function () { clearTimeout(timer) }
-        }, [phase, query, selection, currentCwd, refreshEntries])
+        }, [phase, query, categoryFilter, page, selection, currentCwd, refreshEntries])
 
         // toast 自动消失
         useEffect(function () {
@@ -608,6 +631,10 @@
         var options = [{ value: 'all', kind: 'all' }].concat(workspaceOptions({ workspaces: workspaces, currentCwd: currentCwd }))
         var unknownWorkspaces = workspaces.filter(function (w) { return !w || typeof w.cwd !== 'string' || w.cwd === '' })
         var workspaceTarget = selection !== 'all' && selection !== 'global' ? selection : currentCwd
+
+        function changeQuery(value) { setQuery(value); setPage(0) }
+        function changeSelection(value) { setSelection(value); setPage(0) }
+        function changeCategory(value) { setCategoryFilter(value); setPage(0) }
 
         function openCreate() {
           if (busy) return
@@ -730,30 +757,35 @@
         }
 
         function renderList() {
+          var pager = (page > 0 || hasMore) ? h('div', { className: 'dm_pager' },
+            h('button', { className: 'dm_btn', disabled: page === 0 || busy, onClick: function () { setPage(page - 1) } }, t('pagePrev')),
+            h('span', { className: 'dm_hint' }, t('pageInfo').replace('{page}', String(page + 1))),
+            h('button', { className: 'dm_btn', disabled: !hasMore || busy, onClick: function () { setPage(page + 1) } }, t('pageNext'))) : null
           if (listError) {
             return h('div', { className: 'dm_empty' },
               h('div', null, t('listError') + ': ' + listError),
               h('button', { className: 'dm_btn', style: { marginTop: 10 }, onClick: function () { refreshEntries() } }, t('retry')))
           }
           if (entries.length === 0) {
-            return h('div', { className: 'dm_empty' },
-              h('div', null, query ? t('noResults') : t('empty')),
-              !query ? h('div', { className: 'dm_empty_hint' }, t('emptyHint')) : null)
+            return h('div', null,
+              h('div', { className: 'dm_empty' },
+                h('div', null, query || categoryFilter ? t('noResults') : t('empty')),
+                !query && !categoryFilter && page === 0 ? h('div', { className: 'dm_empty_hint' }, t('emptyHint')) : null),
+              pager)
           }
           function rows(list) {
             return list.map(function (entry) {
               return h(EntryRow, { key: entry.id, entry: entry, t: t, onEdit: openEdit, onDelete: openDelete })
             })
           }
-          var truncation = entries.length >= PAGE_LIMIT ? h('div', { className: 'dm_hint', style: { margin: '8px 0' } }, t('truncated')) : null
-          if (selection !== 'all') return h('div', null, rows(entries), truncation)
+          if (selection !== 'all') return h('div', null, rows(entries), pager)
           var groups = groupEntries(entries)
           return h('div', null,
             groups.global.length ? h('div', { className: 'dm_section_title' }, t('scopeGlobal') + ' · ' + groups.global.length + ' ' + t('entriesUnit')) : null,
             rows(groups.global),
             groups.workspace.length ? h('div', { className: 'dm_section_title' }, t('scopeWorkspace') + ' · ' + groups.workspace.length + ' ' + t('entriesUnit')) : null,
             rows(groups.workspace),
-            truncation)
+            pager)
         }
 
         return h('div', { className: 'dm_page' },
@@ -763,7 +795,7 @@
               h('div', { className: 'dm_subtitle' }, t('subtitle'))),
             h('button', { className: 'dm_btn dm_btn_primary', onClick: openCreate }, '+ ' + t('newMemory'))),
           h('div', { className: 'dm_toolbar' },
-            h('select', { className: 'dm_select', 'aria-label': t('scopeLabel'), value: selection, onChange: function (e) { setSelection(e.target.value) } },
+            h('select', { className: 'dm_select', 'aria-label': t('scopeLabel'), value: selection, onChange: function (e) { changeSelection(e.target.value) } },
               options.map(function (opt) {
                 var label = opt.kind === 'all' ? t('scopeAll')
                   : opt.kind === 'global' ? t('scopeGlobal')
@@ -773,7 +805,12 @@
               unknownWorkspaces.map(function (w) {
                 return h('option', { key: 'unknown-' + w.key, value: 'unknown-' + w.key, disabled: true }, t('workspaceUnknown') + ' (' + String(w.key).slice(0, 8) + '…)')
               })),
-            h('input', { className: 'dm_search', type: 'search', 'aria-label': t('searchPlaceholder'), placeholder: t('searchPlaceholder'), value: query, onChange: function (e) { setQuery(e.target.value) } }),
+            h('select', { className: 'dm_select', 'aria-label': t('categoryLabel'), value: categoryFilter, onChange: function (e) { changeCategory(e.target.value) } },
+              h('option', { value: '' }, t('categoryAll')),
+              h('option', { value: 'preference' }, t('catPreference')),
+              h('option', { value: 'fact' }, t('catFact')),
+              h('option', { value: 'decision' }, t('catDecision'))),
+            h('input', { className: 'dm_search', type: 'search', 'aria-label': t('searchPlaceholder'), placeholder: t('searchPlaceholder'), value: query, onChange: function (e) { changeQuery(e.target.value) } }),
             h('button', { className: 'dm_btn', onClick: handleExport, disabled: busy || phase !== 'ready' }, t('export')),
             h('button', { className: 'dm_btn', onClick: function () { if (fileInputRef.current) fileInputRef.current.click() }, disabled: busy || phase !== 'ready' }, t('import')),
             h('input', { ref: fileInputRef, type: 'file', accept: '.json,application/json', style: { display: 'none' }, onChange: handleImportFile })),

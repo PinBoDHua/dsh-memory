@@ -124,6 +124,22 @@ test('update and forget routes operate through the token', async () => {
   assert.equal(service.list({ scope: 'global' }).length, 0)
 })
 
+test('GET entries honors offset and category together', async () => {
+  const { service, handlers } = setup()
+  for (let i = 0; i < 4; i++) service.save({ content: `路由分页 ${i}`, scope: 'global', category: i % 2 ? 'fact' : 'decision' })
+  const res = fakeRes()
+  await handlers.entries(fakeReq({ url: '/plugins/dsh-memory/entries?query=%E8%B7%AF%E7%94%B1%E5%88%86%E9%A1%B5&category=decision&limit=1&offset=1' }), res)
+  assert.equal(res.statusCode, 200)
+  const doc = res.json()
+  assert.equal(doc.entries.length, 1)
+  assert.equal(doc.entries[0].category, 'decision')
+  const all = fakeRes()
+  await handlers.entries(fakeReq({ url: '/plugins/dsh-memory/entries?query=%E8%B7%AF%E7%94%B1%E5%88%86%E9%A1%B5&category=decision&limit=10' }), all)
+  const ids = all.json().entries.map((e) => e.id)
+  assert.equal(ids.length, 2)
+  assert.ok(ids.includes(doc.entries[0].id))
+})
+
 test('GET export returns the full document; loopback enforced', async () => {
   const { service, handlers } = setup()
   service.save({ content: '导出内容', scope: 'global' })

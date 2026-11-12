@@ -190,6 +190,54 @@ test('guard: ordinary prose passes', () => {
   }
 })
 
+test('search ranking: content hits outrank tag-only hits, more hits rank higher', async () => {
+  const root = tmpRoot()
+  // Save order is the REVERSE of expected relevance, so recency alone would fail.
+  store.saveEntry(root, { content: 'pnpm pnpm pnpm 重复提及', scope: 'global' })
+  await new Promise((r) => setTimeout(r, 5))
+  store.saveEntry(root, { content: 'pnpm 构建说明', scope: 'global' })
+  await new Promise((r) => setTimeout(r, 5))
+  store.saveEntry(root, { content: '无关条目', scope: 'global', tags: ['pnpm'] })
+  const hits = store.searchEntries(root, { query: 'pnpm', cwd: undefined })
+  assert.equal(hits.length, 3)
+  assert.equal(hits[0].content, 'pnpm pnpm pnpm 重复提及')
+  assert.equal(hits[1].content, 'pnpm 构建说明')
+  assert.equal(hits[2].content, '无关条目')
+})
+
+test('search ranking: exact phrase bonus beats scattered tokens', async () => {
+  const root = tmpRoot()
+  store.saveEntry(root, { content: '用户喜欢深色主题', scope: 'global' })
+  await new Promise((r) => setTimeout(r, 5))
+  store.saveEntry(root, { content: '深色 主题 设置 分散 词语', scope: 'global' })
+  const hits = store.searchEntries(root, { query: '深色 主题', cwd: undefined })
+  assert.equal(hits.length, 2)
+  assert.equal(hits[0].content, '用户喜欢深色主题')
+})
+
+test('search ranking: empty query keeps recency order', async () => {
+  const root = tmpRoot()
+  store.saveEntry(root, { content: '旧条目', scope: 'global' })
+  await new Promise((r) => setTimeout(r, 5))
+  store.saveEntry(root, { content: '新条目', scope: 'global' })
+  const hits = store.searchEntries(root, { query: '', cwd: undefined })
+  assert.equal(hits[0].content, '新条目')
+})
+
+test('search offset paginates the ranked result', () => {
+  const root = tmpRoot()
+  for (let i = 0; i < 5; i++) store.saveEntry(root, { content: `分页条目 ${i}`, scope: 'global' })
+  const page1 = store.searchEntries(root, { query: '分页', cwd: undefined, limit: 2, offset: 0 })
+  const page2 = store.searchEntries(root, { query: '分页', cwd: undefined, limit: 2, offset: 2 })
+  const page3 = store.searchEntries(root, { query: '分页', cwd: undefined, limit: 2, offset: 4 })
+  assert.equal(page1.length, 2)
+  assert.equal(page2.length, 2)
+  assert.equal(page3.length, 1)
+  const ids = [...page1, ...page2, ...page3].map((e) => e.id)
+  assert.equal(new Set(ids).size, 5)
+  assert.deepEqual(store.searchEntries(root, { query: '分页', cwd: undefined, limit: 2, offset: 99 }), [])
+})
+
 test('move: global -> workspace relocates the file and refreshes updated', async () => {
   const root = tmpRoot()
   const { entry } = store.saveEntry(root, { content: '待移动的事实', scope: 'global', tags: ['t'] })
@@ -274,6 +322,32 @@ test('listWorkspaceKey lists by directory key without cwd', () => {
   assert.equal(entries.length, 1)
   assert.equal(entries[0].content, '按键列出')
   assert.deepEqual(store.listWorkspaceKey(root, 'zzzz'), [])
+})
+
+test('render: category priority — preference before decision before fact, recency within category', () => {
+  const entries = [
+    { id: 'm-fact', scope: 'workspace', category: 'fact', content: '最新事实', updated: '2026-01-03' },
+    { id: 'm-dec', scope: 'workspace', category: 'decision', content: '较新决策', updated: '2026-01-02' },
+    { id: 'm-pref', scope: 'global', category: 'preference', content: '最旧偏好', updated: '2026-01-01' },
+  ]
+  const full = renderSection(entries, { budgetChars: 6000 })
+  const iPref = full.indexOf('m-pref')
+  const iDec = full.indexOf('m-dec')
+  const iFact = full.indexOf('m-fact')
+  assert.ok(iPref >= 0 && iDec >= 0 && iFact >= 0)
+  assert.ok(iPref < iDec && iDec < iFact, 'preference → decision → fact order')
+  // Tight budget keeps the preference even though it is the oldest entry.
+  const line = '- [preference] 最旧偏好 (id: m-pref)'
+  const tight = renderSection(entries, { budgetChars: line.length + 1 })
+  assert.ok(tight.includes('m-pref'))
+  assert.ok(!tight.includes('m-fact'))
+  assert.ok(tight.includes('未注入'))
+  // Recency within the same category.
+  const sameCat = renderSection([
+    { id: 'm-old', scope: 'global', category: 'fact', content: '旧', updated: '2026-01-01' },
+    { id: 'm-new', scope: 'global', category: 'fact', content: '新', updated: '2026-01-02' },
+  ], { budgetChars: 6000 })
+  assert.ok(sameCat.indexOf('m-new') < sameCat.indexOf('m-old'))
 })
 
 test('render: guidance, budget, grouping, empty', () => {

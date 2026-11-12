@@ -128,7 +128,7 @@ export function apply(ctx, rawConfig) {
 
   const searchTool = {
     name: 'memory_search',
-    description: '检索跨会话记忆：关键词大小写不敏感、多词须全部命中；空查询＝按更新时间列出。Search cross-session memory (case-insensitive, all terms must match; empty query lists recent memories).',
+    description: '检索跨会话记忆：关键词大小写不敏感、多词须全部命中，非空查询按相关度排序；空查询＝按更新时间列出。Search cross-session memory (case-insensitive, all terms must match, ranked by relevance; empty query lists recent memories).',
     parameters: {
       type: 'object',
       properties: {

@@ -7,7 +7,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import helpers from '../client/client.js'
 
-const { validateDraft, groupEntries, nextToken, buildEntriesQuery, workspaceOptions, errorKeyFor, validateImportDoc, importSummary } = helpers
+const { validateDraft, groupEntries, nextToken, buildEntriesQuery, workspaceOptions, errorKeyFor, validateImportDoc, importSummary, pageSlice } = helpers
 
 test('validateDraft accepts a complete draft and rejects bad ones', () => {
   assert.deepEqual(validateDraft({ content: '一条事实', category: 'fact' }), { ok: true })
@@ -39,6 +39,17 @@ test('buildEntriesQuery encodes values and omits empty params', () => {
     '?scope=workspace&workspace=D%3A%5Cproj%5Calpha&query=pnpm%20%E6%9E%84%E5%BB%BA',
   )
   assert.equal(buildEntriesQuery({ category: 'fact', limit: 5 }), '?scope=all&category=fact&limit=5')
+  assert.equal(buildEntriesQuery({ limit: 51, offset: 50 }), '?scope=all&limit=51&offset=50')
+  assert.equal(buildEntriesQuery({ limit: 51, offset: 0 }), '?scope=all&limit=51')
+})
+
+test('pageSlice splits items and detects a next page', () => {
+  const rows = [{ id: 'a' }, { id: 'b' }, { id: 'c' }]
+  assert.deepEqual(pageSlice(rows, 2), { items: [{ id: 'a' }, { id: 'b' }], hasMore: true })
+  assert.deepEqual(pageSlice(rows, 3), { items: rows, hasMore: false })
+  assert.deepEqual(pageSlice(rows, 5), { items: rows, hasMore: false })
+  assert.deepEqual(pageSlice([], 2), { items: [], hasMore: false })
+  assert.deepEqual(pageSlice(null, 2), { items: [], hasMore: false })
 })
 
 test('workspaceOptions builds global plus known workspaces and current cwd', () => {

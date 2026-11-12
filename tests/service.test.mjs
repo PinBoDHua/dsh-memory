@@ -136,6 +136,16 @@ test('status reports root and counts', () => {
   assert.deepEqual(status.counts, { global: 2, workspaces: 1 })
 })
 
+test('search offset paginates without overlap', () => {
+  const { service } = tmpService()
+  for (let i = 0; i < 5; i++) service.save({ content: `服务分页 ${i}`, scope: 'global' })
+  const p1 = service.search({ query: '服务分页', limit: 2, offset: 0 })
+  const p2 = service.search({ query: '服务分页', limit: 2, offset: 2 })
+  assert.equal(p1.length, 2)
+  assert.equal(p2.length, 2)
+  assert.equal(new Set([...p1, ...p2].map((e) => e.id)).size, 4)
+})
+
 const WS = 'D:\\proj\\alpha'
 
 test('update with scope moves between global and workspace', () => {
