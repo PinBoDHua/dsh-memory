@@ -238,6 +238,15 @@ test('search offset paginates the ranked result', () => {
   assert.deepEqual(store.searchEntries(root, { query: '分页', cwd: undefined, limit: 2, offset: 99 }), [])
 })
 
+test('update/move validation errors carry code invalid / no-workspace', () => {
+  const root = tmpRoot()
+  const { entry } = store.saveEntry(root, { content: '错误码', scope: 'global' })
+  assert.throws(() => store.updateEntry(root, entry.id, { category: 'bogus' }, undefined), (err) => err.code === 'invalid')
+  assert.throws(() => store.updateEntry(root, entry.id, { content: '   ' }, undefined), (err) => err.code === 'invalid')
+  assert.throws(() => store.moveEntry(root, entry.id, 'bogus', undefined), (err) => err.code === 'invalid')
+  assert.throws(() => store.moveEntry(root, entry.id, 'workspace', undefined), (err) => err.code === 'no-workspace')
+})
+
 test('meta.json: created on first write, schemaVersion 1, tolerant of corruption', () => {
   const root = tmpRoot()
   assert.ok(!fs.existsSync(path.join(root, 'meta.json')))

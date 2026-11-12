@@ -3,6 +3,20 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.5.1] - 2026-11-13
+
+### 修复 Fixed（UX 评审后的实证问题）
+- 陈旧闭包覆盖列表：写入完成回调一律经 ref 调用最新的 `refreshEntries`，busy 期间修改搜索/过滤不再被旧结果覆盖。
+- 删空末页自动回退一页，不再显示误导性空态；新建/导入成功后回到第一页，新条目立即可见。
+- 焦点陷阱：busy（控件全禁用）时 Tab 不再逃逸到背景页；关闭弹窗时触发按钮已卸载则把焦点归还面板容器。
+- 超大导入（>1 MB）返回 413 `body-too-large` 并有专门文案，不再误报「请求数据无效」；客户端选择文件时预检大小。
+- 导入不再复用已被 global 占用的 id（`findEntry` 先查 global，避免后续按 id 更新/删除命中错误条目）。
+- store 更新/移动的校验错误带 `invalid`/`no-workspace` code，路由正确映射 400 而非 500。
+
+### 改进 Changed
+- 未知路径工作区在工具栏下方给出说明（导出可达、如何手工修复索引），不再是无提示的死路。
+- 导入预览全部重复时给出「无需导入」说明。
+
 ## [0.5.0] - 2026-11-13
 
 ### 新增 Added
@@ -44,6 +58,7 @@ All notable changes to this project are documented here. Format follows Keep a C
 - 系统提示注入：指引＋字符预算内召回（`interpolate: false` 保护用户内容）。
 - 隐私护栏：密码/密钥/token 规则检测硬拒写。
 
+[0.5.1]: https://github.com/PinBoDHua/dsh-memory/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.2.0...v0.3.0

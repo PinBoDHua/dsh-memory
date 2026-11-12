@@ -191,6 +191,26 @@ test('update with scope moves over HTTP; duplicate maps to 409', async () => {
   assert.equal(service.list({ scope: 'global' }).length, 0)
 })
 
+test('oversized body maps to 413 body-too-large, not invalid-json', async () => {
+  const { handlers } = setup()
+  const auth = { 'x-rpc-key': TOKEN }
+  const big = { content: 'x'.repeat(1024 * 1024 + 10), scope: 'global' }
+  const res = fakeRes()
+  await handlers.save(fakeReq({ method: 'POST', url: '/plugins/dsh-memory/save', headers: auth, body: big }), res)
+  assert.equal(res.statusCode, 413)
+  assert.equal(res.json().error, 'body-too-large')
+})
+
+test('update with invalid category maps to 400 invalid (not 500)', async () => {
+  const { service, handlers } = setup()
+  const auth = { 'x-rpc-key': TOKEN }
+  const { entry } = service.save({ content: '分类校验', scope: 'global' })
+  const res = fakeRes()
+  await handlers.update(fakeReq({ method: 'POST', url: '/plugins/dsh-memory/update', headers: auth, body: { id: entry.id, category: 'bogus' } }), res)
+  assert.equal(res.statusCode, 400)
+  assert.equal(res.json().code, 'invalid')
+})
+
 test('service errors and bad input map to HTTP status codes', async () => {
   const { handlers } = setup()
   const auth = { 'x-rpc-key': TOKEN }

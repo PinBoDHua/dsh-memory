@@ -96,6 +96,7 @@
     if (msg === 'unauthorized') return 'errUnauthorized'
     if (msg === 'loopback-only') return 'errLoopback'
     if (msg === 'invalid-json') return 'errInvalidJson'
+    if (msg === 'body-too-large') return 'errBodyTooLarge'
     if (err.status === 403) return 'errUnauthorized'
     return null
   }
@@ -173,6 +174,7 @@
     errUnauthorized: '凭证无效',
     errLoopback: '仅允许本机访问',
     errInvalidJson: '请求数据无效',
+    errBodyTooLarge: '文件过大（超过 1 MB），请拆分后导入',
     errRefreshed: '凭证已刷新，请重试',
     categoryAll: '全部分类',
     pagePrev: '上一页',
@@ -185,6 +187,7 @@
     updatedAt: '更新于',
     sourceLabel: '来源会话',
     workspaceUnknown: '未知工作区',
+    unknownWorkspaceHint: '有工作区路径未知（索引损坏），无法在面板中浏览；可用「导出」查看全部记忆，或手工修复数据目录下的 workspaces/index.json。',
     entriesUnit: '条',
     workspaceTarget: '写入工作区',
     export: '导出',
@@ -196,6 +199,7 @@
     importRej: '拒绝',
     importRejHint: '被拒绝的条目（机密/无效/缺工作区）不会写入。',
     importConfirm: '确认导入',
+    importAllDup: '全部条目均已存在，无需导入。',
     imported: '导入完成',
     errDuplicate: '目标作用域已有相同内容的记忆',
     errImportDoc: '不是有效的 dsh-memory 导出文件（format/version/entries 不符）',
@@ -243,6 +247,7 @@
     errUnauthorized: 'Invalid credentials',
     errLoopback: 'Loopback access only',
     errInvalidJson: 'Invalid request data',
+    errBodyTooLarge: 'File too large (over 1 MB); split it before importing',
     errRefreshed: 'Credentials refreshed; please retry',
     categoryAll: 'All categories',
     pagePrev: 'Previous',
@@ -255,6 +260,7 @@
     updatedAt: 'Updated',
     sourceLabel: 'Source session',
     workspaceUnknown: 'Unknown workspace',
+    unknownWorkspaceHint: 'Some workspace paths are unknown (corrupt index) and cannot be browsed here. Use Export to see all memories, or repair workspaces/index.json in the data directory by hand.',
     entriesUnit: 'entries',
     workspaceTarget: 'Writes to workspace',
     export: 'Export',
@@ -266,6 +272,7 @@
     importRej: 'Rejected',
     importRejHint: 'Rejected entries (credentials/invalid/no workspace) are not written.',
     importConfirm: 'Import',
+    importAllDup: 'All entries already exist; nothing to import.',
     imported: 'Import complete',
     errDuplicate: 'Identical memory already exists in the target scope',
     errImportDoc: 'Not a valid dsh-memory export file (format/version/entries mismatch)',
@@ -487,7 +494,8 @@
             }
             if (e.key !== 'Tab') return
             var list = focusables()
-            if (list.length === 0) return
+            // busy 时控件全部 disabled：把焦点留在对话框内，不放去背景页。
+            if (list.length === 0) { e.preventDefault(); if (dialog) dialog.focus(); return }
             if (!dialog.contains(document.activeElement)) { e.preventDefault(); list[0].focus(); return }
             var first = list[0]
             var last = list[list.length - 1]
@@ -497,7 +505,10 @@
           document.addEventListener('keydown', onKey)
           return function () {
             document.removeEventListener('keydown', onKey)
-            if (previous && previous.focus) previous.focus()
+            // 触发按钮可能已随列表刷新卸载：归还焦点失败时退回面板容器。
+            if (previous && previous.focus && document.contains(previous)) { previous.focus(); return }
+            var page = document.querySelector('.dm_page')
+            if (page) { page.setAttribute('tabindex', '-1'); page.focus() }
           }
         }, [])
         return h('div', {
@@ -575,6 +586,9 @@
                     return h('li', { key: i }, '#' + (r.index + 1) + ' ' + String(r.reason || r.code || ''))
                   }),
                   rejected.length > 5 ? h('li', { key: 'more' }, '… +' + (rejected.length - 5)) : null))
+              : null,
+            summary.imported === 0 && summary.deduplicated > 0
+              ? h('div', { className: 'dm_hint', style: { marginTop: 8 } }, t('importAllDup'))
               : null),
           h('div', { className: 'dm_dialog_footer' },
             h('button', { className: 'dm_btn', onClick: props.onClose, disabled: props.busy }, t('cancel')),
@@ -653,6 +667,8 @@
           return api.entries(params).then(function (doc) {
             if (seq !== seqRef.current) return
             var sliced = pageSlice(doc.entries, PAGE_SIZE)
+            // 当前页被删空（如删掉末页最后一条）→ 自动回退一页，避免误导性空态。
+            if (sliced.items.length === 0 && page > 0) { setPage(page - 1); return }
             setEntries(sliced.items)
             setHasMore(sliced.hasMore)
             setListError('')
@@ -661,6 +677,11 @@
             setListError(errorText(err, t))
           })
         }, [api, query, categoryFilter, page, selection, currentCwd, t])
+
+        // 写入完成回调可能捕获旧的 refreshEntries（busy 期间过滤条件可变）；
+        // 一律经 ref 调用最新版本，避免陈旧过滤结果覆盖列表。
+        var refreshRef = useRef(refreshEntries)
+        refreshRef.current = refreshEntries
 
         var refreshWorkspaces = useCallback(function () {
           return api.workspaces().then(function (doc) { setWorkspaces(doc.workspaces || []) }).catch(function () {})
@@ -755,7 +776,9 @@
             if (editorRef.current === started) setEditor(null)
             var dedup = payload && payload.result && payload.result.deduplicated
             setToast({ kind: 'ok', text: dedup ? t('deduplicated') : t('saved') })
-            return refreshEntries()
+            // 新建条目按更新时间排在最前：回到第一页让它可见。
+            if (started.mode === 'create') setPage(0)
+            return refreshRef.current()
           }).then(function () {
             return refreshWorkspaces()
           }).catch(writeFailure).then(function () { setBusy(false) })
@@ -768,7 +791,7 @@
           api.forget({ id: confirm.id, workspace: workspaceTarget }).then(function () {
             if (confirmRef.current === started) setConfirm(null)
             setToast({ kind: 'ok', text: t('deleted') })
-            return refreshEntries()
+            return refreshRef.current()
           }).then(function () {
             return refreshWorkspaces()
           }).catch(writeFailure).then(function () { setBusy(false) })
@@ -795,6 +818,10 @@
           var file = e.target.files && e.target.files[0]
           e.target.value = ''
           if (!file || busy) return
+          if (file.size > 1024 * 1024) {
+            setToast({ kind: 'error', text: t('errBodyTooLarge') })
+            return
+          }
           file.text().then(function (text) {
             var doc
             try { doc = JSON.parse(text) } catch { setToast({ kind: 'error', text: t('errInvalidJson') }); return undefined }
@@ -818,7 +845,8 @@
             setImportPlan(null)
             var summary = importSummary(payload.result)
             setToast({ kind: 'ok', text: t('imported') + ' · ' + t('importNew') + ' ' + summary.imported + ' / ' + t('importDup') + ' ' + summary.deduplicated + ' / ' + t('importRej') + ' ' + summary.rejected })
-            return refreshEntries()
+            setPage(0)
+            return refreshRef.current()
           }).then(function () {
             return refreshWorkspaces()
           }).catch(writeFailure).then(function () { setBusy(false) })
@@ -882,6 +910,7 @@
             h('button', { className: 'dm_btn', onClick: handleExport, disabled: busy || phase !== 'ready' }, t('export')),
             h('button', { className: 'dm_btn', onClick: function () { if (fileInputRef.current) fileInputRef.current.click() }, disabled: busy || phase !== 'ready' }, t('import')),
             h('input', { ref: fileInputRef, type: 'file', accept: '.json,application/json', style: { display: 'none' }, onChange: handleImportFile })),
+          unknownWorkspaces.length > 0 ? h('div', { className: 'dm_hint', style: { margin: '0 0 12px' } }, t('unknownWorkspaceHint')) : null,
           phase === 'loading' ? h('div', { className: 'dm_empty' }, t('loading'))
             : phase === 'error' ? h('div', { className: 'dm_empty' },
               h('div', null, t('loadError') + ': ' + errorTextState),

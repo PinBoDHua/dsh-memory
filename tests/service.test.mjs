@@ -307,6 +307,19 @@ test('import resolves id collisions by allocating a new id', () => {
   assert.equal(new Set(ids).size, 2)
 })
 
+test('import avoids ids shadowed by global entries (findEntry prefers global)', () => {
+  const { service } = tmpService()
+  service.import({ entries: [{ id: 'm-shadow-aaaaaa', content: '全局原条目', scope: 'global' }] })
+  const result = service.import({ entries: [{ id: 'm-shadow-aaaaaa', content: '工作区新条目', scope: 'workspace', workspace: WS }] })
+  assert.equal(result.imported, 1)
+  const wsEntry = service.list({ scope: 'workspace', workspace: WS })[0]
+  assert.notEqual(wsEntry.id, 'm-shadow-aaaaaa', 'workspace import must not reuse a global id')
+  // updating the workspace entry by its new id must hit the workspace entry
+  const updated = service.update({ id: wsEntry.id, content: '改对了', workspace: WS })
+  assert.equal(updated.scope, 'workspace')
+  assert.equal(service.list({ scope: 'global' })[0].content, '全局原条目')
+})
+
 test('export -> import roundtrip into a fresh root restores everything', () => {
   const { service } = tmpService()
   service.save({ content: '全局偏好', scope: 'global', category: 'preference', tags: ['语言'] })

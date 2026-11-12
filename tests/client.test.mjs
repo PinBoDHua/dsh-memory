@@ -91,6 +91,7 @@ test('errorKeyFor maps service and route errors to locale keys', () => {
   assert.equal(errorKeyFor({ status: 403, message: 'unauthorized' }), 'errUnauthorized')
   assert.equal(errorKeyFor({ status: 403, message: 'loopback-only' }), 'errLoopback')
   assert.equal(errorKeyFor({ status: 400, message: 'invalid-json' }), 'errInvalidJson')
+  assert.equal(errorKeyFor({ status: 413, message: 'body-too-large' }), 'errBodyTooLarge')
   assert.equal(errorKeyFor({ status: 500, message: 'boom' }), null)
   assert.equal(errorKeyFor(null), null)
 })
