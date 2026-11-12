@@ -1,0 +1,53 @@
+{
+  "name": "dsh-memory",
+  "version": "0.1.0",
+  "description": "记忆 —— DSH 跨会话长期记忆插件：自动沉淀用户偏好、项目事实与重要决策，新会话按预算自动注入；Markdown 一事一文件、手工可编辑，密码/密钥/token 永不写入。Cross-session long-term memory for DeepSeek Harness.",
+  "type": "module",
+  "main": "index.js",
+  "icon": "./icon.svg",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/PinBoDHua/dsh-memory.git"
+  },
+  "homepage": "https://github.com/PinBoDHua/dsh-memory#readme",
+  "bugs": {
+    "url": "https://github.com/PinBoDHua/dsh-memory/issues"
+  },
+  "engines": {
+    "dsh": ">=0.2.0-rc.2",
+    "node": ">=22.6"
+  },
+  "keywords": [
+    "deepseek",
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "memory",
+    "long-term-memory",
+    "recall"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "exports": {
+    ".": "./index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "lib",
+    "locale/*.json",
+    "docs",
+    "tests",
+    "cordis.patch.yml",
+    "icon.svg",
+    "README.md",
+    "LICENSE"
+  ]
+}

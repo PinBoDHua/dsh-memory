@@ -1,0 +1,270 @@
+/**
+ * dsh-memory — DSH 跨会话长期记忆插件 Host entry.
+ *
+ * 机制（均为已验证的 DSH API）：
+ * - ctx.tools.register(...)：4 个记忆工具（纯对象定义＋原始 JSON Schema，
+ *   与 dsh-time-machine 相同），handler 经 exec.agent.session 拿到会话 id
+ *   与有效工作目录。
+ * - ctx.systemPrompt.section(...)：每次装配实时重读记忆文件，把全局＋
+ *   当前工作区记忆在预算内注入系统提示；interpolate: false 保护用户内容。
+ * - 数据：~/.dsh/.dsh-memory/ 下 Markdown + frontmatter，一事一文件。
+ *
+ * 刻意不 import 任何 @deepseek-ai/* 包：本地链接目录的 ESM 解析够不到
+ * DSH 安装树（与 dsh-time-machine / dsh-reverse-proxy-connect 同一做法）。
+ * 服务经 inject 声明由 ctx 提供；配置默认值在本文件内收敛。
+ *
+ * 隐私：密码/密钥/token 工具侧硬拒写；其他敏感信息由指引要求先问用户。
+ */
+import os from 'node:os'
+import path from 'node:path'
+import { detectSecret } from './lib/guard.js'
+import { GUIDANCE, renderSection } from './lib/render.js'
+import * as store from './lib/store.js'
+
+export const name = 'dsh-memory'
+export const inject = ['tools', 'systemPrompt']
+
+/** 配置字段与默认值（无 schemastery 依赖；经插件行 config 调整）。 */
+export const CONFIG_DEFAULTS = Object.freeze({
+  enabled: true,
+  autoInject: true,
+  injectionBudgetChars: 6000,
+})
+
+function resolveConfig(raw) {
+  const c = raw && typeof raw === 'object' ? raw : {}
+  const budget = Number(c.injectionBudgetChars)
+  return {
+    enabled: c.enabled !== false,
+    autoInject: c.autoInject !== false,
+    injectionBudgetChars: Number.isFinite(budget) && budget >= 0 ? budget : CONFIG_DEFAULTS.injectionBudgetChars,
+  }
+}
+
+function dataRoot() {
+  const home = process.env.DSH_HOME?.trim() || path.join(os.homedir(), '.dsh')
+  return path.join(home, '.dsh-memory')
+}
+
+export function apply(ctx, rawConfig) {
+  const config = resolveConfig(rawConfig)
+  if (!config.enabled) return
+  const root = dataRoot()
+
+  // workingDirectory 服务是会话有效目录的权威来源（会跟随 cd）；
+  // 可选查找，缺失时回退到不可变的 session.header.cwd。
+  let workingDirectory
+  try {
+    workingDirectory = ctx.get('workingDirectory')
+  } catch {
+    workingDirectory = undefined
+  }
+  const cwdOf = (session) => {
+    if (!session) return undefined
+    try {
+      const effective = workingDirectory?.get?.(session)
+      if (typeof effective === 'string' && effective !== '') return effective
+    } catch { /* 回退 header fall back to the immutable header */ }
+    const original = session.header?.cwd
+    return typeof original === 'string' && original !== '' ? original : undefined
+  }
+  const sessionOf = (exec) => exec?.agent?.session
+
+  const rejectSecret = (content) => {
+    const hit = detectSecret(content)
+    if (hit) {
+      throw new Error(`拒绝写入：检测到疑似机密（${hit.label}）。密码/密钥/token 永不进入记忆。Write rejected: suspected credential (${hit.label}). Credentials are never stored in memory.`)
+    }
+  }
+
+  const saveTool = {
+    name: 'memory_save',
+    description: '把一条值得长期记住的事实写入跨会话记忆（一事一条）。用户偏好→scope=global，项目事实/决策→scope=workspace。密码/密钥/token 会被拒绝。Save one durable fact to cross-session memory (one fact per entry); credentials are rejected.',
+    parameters: {
+      type: 'object',
+      properties: {
+        content: { type: 'string', description: '记忆内容，一条独立事实 The fact to remember, self-contained' },
+        category: { type: 'string', enum: ['preference', 'fact', 'decision'], description: '分类：preference=用户偏好 fact=事实 decision=决策（默认 fact）' },
+        scope: { type: 'string', enum: ['global', 'workspace'], description: 'global=用户级，跨项目共享；workspace=仅当前工作区（默认 workspace）' },
+        tags: { type: 'array', items: { type: 'string' }, description: '可选检索关键词 Optional search keywords' },
+      },
+      required: ['content'],
+      additionalProperties: false,
+    },
+    output: {
+      schema: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          scope: { type: 'string' },
+          category: { type: 'string' },
+          deduplicated: { type: 'boolean' },
+        },
+        required: ['id', 'scope', 'category', 'deduplicated'],
+      },
+      render: (_args, value) => [{
+        type: 'text',
+        text: value.deduplicated
+          ? `已有相同记忆，未重复写入：${value.id} (duplicate; existing memory kept)`
+          : `已记录记忆 ${value.id} [${value.category}/${value.scope}] (memory saved)`,
+      }],
+    },
+    isConcurrencySafe: () => false,
+    execute(args, exec) {
+      const session = sessionOf(exec)
+      const cwd = cwdOf(session)
+      const scope = args.scope ?? 'workspace'
+      rejectSecret(args.content)
+      const { entry, deduplicated } = store.saveEntry(root, {
+        content: args.content,
+        category: args.category ?? 'fact',
+        scope,
+        tags: args.tags ?? [],
+        cwd,
+        source: session?.id,
+      })
+      return { id: entry.id, scope: entry.scope, category: entry.category, deduplicated }
+    },
+  }
+
+  const searchTool = {
+    name: 'memory_search',
+    description: '检索跨会话记忆：关键词大小写不敏感、多词须全部命中；空查询＝按更新时间列出。Search cross-session memory (case-insensitive, all terms must match; empty query lists recent memories).',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: '关键词，空格分词；留空列出全部 Keywords; empty lists all' },
+        scope: { type: 'string', enum: ['global', 'workspace', 'all'], description: '检索范围（默认 all=全局+当前工作区）' },
+        category: { type: 'string', enum: ['preference', 'fact', 'decision'], description: '按分类过滤 Optional category filter' },
+        limit: { type: 'integer', description: '最多返回条数（默认 20）Max results (default 20)' },
+      },
+      additionalProperties: false,
+    },
+    output: {
+      schema: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            scope: { type: 'string' },
+            category: { type: 'string' },
+            content: { type: 'string' },
+            tags: { type: 'array', items: { type: 'string' } },
+            updated: { type: 'string' },
+          },
+          required: ['id', 'scope', 'category', 'content'],
+        },
+      },
+      render: (_args, entries) => [{
+        type: 'text',
+        text: entries.length === 0
+          ? '没有匹配的记忆 (no matching memories)'
+          : entries.map((e) => `- [${e.category}/${e.scope}] ${e.content} (id: ${e.id}, updated: ${e.updated})`).join('\n'),
+      }],
+    },
+    isConcurrencySafe: () => true,
+    execute(args, exec) {
+      const cwd = cwdOf(sessionOf(exec))
+      const entries = store.searchEntries(root, {
+        query: args.query ?? '',
+        scope: args.scope ?? 'all',
+        category: args.category,
+        cwd,
+        limit: args.limit ?? 20,
+      })
+      return entries.map((e) => ({ id: e.id, scope: e.scope, category: e.category, content: e.content, tags: e.tags, updated: e.updated }))
+    },
+  }
+
+  const updateTool = {
+    name: 'memory_update',
+    description: '按 id 更新一条记忆（新覆旧）：信息变化时原地更新，而不是新增重复条目。Update a memory by id (newer supersedes older) instead of adding a duplicate.',
+    parameters: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: '记忆 id（来自注入内容或 memory_search）Memory id' },
+        content: { type: 'string', description: '新内容（可选）New content' },
+        category: { type: 'string', enum: ['preference', 'fact', 'decision'], description: '新分类（可选）New category' },
+        tags: { type: 'array', items: { type: 'string' }, description: '新标签列表，整体替换（可选）Replacement tags' },
+      },
+      required: ['id'],
+      additionalProperties: false,
+    },
+    output: {
+      schema: {
+        type: 'object',
+        properties: { id: { type: 'string' }, updated: { type: 'string' } },
+        required: ['id', 'updated'],
+      },
+      render: (_args, value) => [{ type: 'text', text: `已更新记忆 ${value.id}（新覆旧）(memory updated)` }],
+    },
+    isConcurrencySafe: () => false,
+    execute(args, exec) {
+      const cwd = cwdOf(sessionOf(exec))
+      if (args.content !== undefined) rejectSecret(args.content)
+      const entry = store.updateEntry(root, args.id, { content: args.content, category: args.category, tags: args.tags }, cwd)
+      return { id: entry.id, updated: entry.updated }
+    },
+  }
+
+  const forgetTool = {
+    name: 'memory_forget',
+    description: '按 id 永久删除一条记忆。仅在用户要求忘记或确认清理时使用。Permanently delete a memory by id; use when the user asks to forget.',
+    parameters: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: '要删除的记忆 id Memory id to delete' },
+      },
+      required: ['id'],
+      additionalProperties: false,
+    },
+    output: {
+      schema: {
+        type: 'object',
+        properties: { id: { type: 'string' }, deleted: { type: 'boolean' } },
+        required: ['id', 'deleted'],
+      },
+      render: (_args, value) => [{ type: 'text', text: `已忘记记忆 ${value.id} (memory forgotten)` }],
+    },
+    isConcurrencySafe: () => false,
+    execute(args, exec) {
+      const cwd = cwdOf(sessionOf(exec))
+      const deleted = store.forgetEntry(root, args.id, cwd)
+      if (!deleted) throw new Error(`未找到记忆 / memory not found: ${args.id}`)
+      return { id: args.id, deleted: true }
+    },
+  }
+
+  // 每次装配实时重读：手工编辑记忆文件立即生效；任何读取失败都只降级为
+  // 纯指引文本，绝不让系统提示装配失败。
+  const sectionText = (assembly) => {
+    try {
+      const cwd = cwdOf(assembly?.agent?.session)
+      const entries = store.listAll(root, cwd)
+      return renderSection(entries, {
+        autoInject: config.autoInject,
+        budgetChars: config.injectionBudgetChars,
+      })
+    } catch {
+      return GUIDANCE
+    }
+  }
+
+  ctx.effect(() => {
+    const disposers = [
+      ctx.systemPrompt.section({ name: 'dsh-memory', order: 9500, interpolate: false, text: sectionText }),
+      ctx.tools.register(saveTool),
+      ctx.tools.register(searchTool),
+      ctx.tools.register(updateTool),
+      ctx.tools.register(forgetTool),
+    ]
+    return () => {
+      for (const dispose of disposers.reverse()) {
+        try {
+          dispose()
+        } catch { /* 卸载期容错 tolerate teardown races */ }
+      }
+    }
+  })
+}

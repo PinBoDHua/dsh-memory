@@ -1,0 +1,8 @@
+# dsh-memory — bundle patch
+#
+# 必须是 `insert`：裸写 `- id:` 是按 id 覆盖已存在条目的写法，
+# id 找不到时 dsh-app-boot 只警告并跳过。
+# 配置默认值由插件的 Config schema 提供，这里不写 config。
+- insert:
+    - id: dsh-memory
+      name: dsh-memory

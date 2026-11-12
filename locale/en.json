@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Memory",
+    "description": "Cross-session long-term memory: saves user preferences, project facts, and decisions as hand-editable Markdown entries, recalls them into new sessions within a character budget, and never stores passwords, keys, or tokens.",
+    "detail": "docs/DETAIL.md"
+  }
+}
