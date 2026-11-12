@@ -124,6 +124,56 @@ test('update and forget routes operate through the token', async () => {
   assert.equal(service.list({ scope: 'global' }).length, 0)
 })
 
+test('GET export returns the full document; loopback enforced', async () => {
+  const { service, handlers } = setup()
+  service.save({ content: '导出内容', scope: 'global' })
+  const res = fakeRes()
+  await handlers.export(fakeReq({ url: '/plugins/dsh-memory/export' }), res)
+  assert.equal(res.statusCode, 200)
+  const doc = res.json()
+  assert.equal(doc.format, 'dsh-memory-export')
+  assert.equal(doc.entries.length, 1)
+  assert.equal(doc.entries[0].content, '导出内容')
+  const remote = fakeRes()
+  await handlers.export(fakeReq({ url: '/plugins/dsh-memory/export', remoteAddress: '10.0.0.9' }), remote)
+  assert.equal(remote.statusCode, 403)
+})
+
+test('POST import requires token; dryRun and apply work over HTTP', async () => {
+  const { service, handlers } = setup()
+  const auth = { 'x-rpc-key': TOKEN }
+  const url = '/plugins/dsh-memory/import'
+  const body = { entries: [{ content: 'HTTP 导入', scope: 'global' }] }
+  const noKey = fakeRes()
+  await handlers.import(fakeReq({ method: 'POST', url, body }), noKey)
+  assert.equal(noKey.statusCode, 403)
+  const dry = fakeRes()
+  await handlers.import(fakeReq({ method: 'POST', url, headers: auth, body: { ...body, dryRun: true } }), dry)
+  assert.equal(dry.statusCode, 200)
+  assert.equal(dry.json().result.imported, 1)
+  assert.equal(service.list({ scope: 'global' }).length, 0)
+  const apply = fakeRes()
+  await handlers.import(fakeReq({ method: 'POST', url, headers: auth, body }), apply)
+  assert.equal(apply.statusCode, 200)
+  assert.equal(service.list({ scope: 'global' }).length, 1)
+})
+
+test('update with scope moves over HTTP; duplicate maps to 409', async () => {
+  const { service, handlers } = setup()
+  const auth = { 'x-rpc-key': TOKEN }
+  const { entry } = service.save({ content: '移动我', scope: 'global' })
+  service.save({ content: '移动我', scope: 'workspace', workspace: 'D:\\proj\\alpha' })
+  const dup = fakeRes()
+  await handlers.update(fakeReq({ method: 'POST', url: '/plugins/dsh-memory/update', headers: auth, body: { id: entry.id, scope: 'workspace', workspace: 'D:\\proj\\alpha' } }), dup)
+  assert.equal(dup.statusCode, 409)
+  assert.equal(dup.json().code, 'duplicate')
+  const ok = fakeRes()
+  await handlers.update(fakeReq({ method: 'POST', url: '/plugins/dsh-memory/update', headers: auth, body: { id: entry.id, scope: 'workspace', workspace: 'D:\\proj\\beta' } }), ok)
+  assert.equal(ok.statusCode, 200)
+  assert.equal(ok.json().result.scope, 'workspace')
+  assert.equal(service.list({ scope: 'global' }).length, 0)
+})
+
 test('service errors and bad input map to HTTP status codes', async () => {
   const { handlers } = setup()
   const auth = { 'x-rpc-key': TOKEN }

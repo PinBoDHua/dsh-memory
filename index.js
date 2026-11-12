@@ -177,7 +177,7 @@ export function apply(ctx, rawConfig) {
 
   const updateTool = {
     name: 'memory_update',
-    description: '按 id 更新一条记忆（新覆旧）：信息变化时原地更新，而不是新增重复条目。Update a memory by id (newer supersedes older) instead of adding a duplicate.',
+    description: '按 id 更新一条记忆（新覆旧）：信息变化时原地更新，而不是新增重复条目；可选 scope 在 global 与当前工作区之间移动。Update a memory by id (newer supersedes older) instead of adding a duplicate; optional scope moves it between global and the current workspace.',
     parameters: {
       type: 'object',
       properties: {
@@ -185,6 +185,7 @@ export function apply(ctx, rawConfig) {
         content: { type: 'string', description: '新内容（可选）New content' },
         category: { type: 'string', enum: ['preference', 'fact', 'decision'], description: '新分类（可选）New category' },
         tags: { type: 'array', items: { type: 'string' }, description: '新标签列表，整体替换（可选）Replacement tags' },
+        scope: { type: 'string', enum: ['global', 'workspace'], description: '可选：移动到新作用域（workspace 以当前会话工作目录为目标）；目标已有相同内容会被拒绝 Optional: move to a new scope; identical content in the target is rejected' },
       },
       required: ['id'],
       additionalProperties: false,
@@ -192,10 +193,10 @@ export function apply(ctx, rawConfig) {
     output: {
       schema: {
         type: 'object',
-        properties: { id: { type: 'string' }, updated: { type: 'string' } },
-        required: ['id', 'updated'],
+        properties: { id: { type: 'string' }, updated: { type: 'string' }, scope: { type: 'string' } },
+        required: ['id', 'updated', 'scope'],
       },
-      render: (_args, value) => [{ type: 'text', text: `已更新记忆 ${value.id}（新覆旧）(memory updated)` }],
+      render: (_args, value) => [{ type: 'text', text: `已更新记忆 ${value.id} [${value.scope}]（新覆旧）(memory updated)` }],
     },
     isConcurrencySafe: () => false,
     execute(args, exec) {
@@ -204,9 +205,10 @@ export function apply(ctx, rawConfig) {
         content: args.content,
         category: args.category,
         tags: args.tags,
+        scope: args.scope,
         workspace: cwdOf(sessionOf(exec)),
       })
-      return { id: entry.id, updated: entry.updated }
+      return { id: entry.id, updated: entry.updated, scope: entry.scope }
     },
   }
 

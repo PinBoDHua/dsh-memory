@@ -74,6 +74,7 @@
     if (code === 'secret') return 'errSecret'
     if (code === 'invalid') return 'errInvalid'
     if (code === 'no-workspace') return 'errNoWorkspace'
+    if (code === 'duplicate') return 'errDuplicate'
     var msg = err.message
     if (msg === 'unauthorized') return 'errUnauthorized'
     if (msg === 'loopback-only') return 'errLoopback'
@@ -82,7 +83,23 @@
     return null
   }
 
-  var helpers = { validateDraft: validateDraft, groupEntries: groupEntries, nextToken: nextToken, buildEntriesQuery: buildEntriesQuery, workspaceOptions: workspaceOptions, errorKeyFor: errorKeyFor }
+  function validateImportDoc(doc) {
+    if (!doc || typeof doc !== 'object') return { ok: false, error: 'bad-doc' }
+    if (doc.format !== 'dsh-memory-export' || doc.version !== 1) return { ok: false, error: 'bad-doc' }
+    if (!Array.isArray(doc.entries)) return { ok: false, error: 'bad-doc' }
+    return { ok: true }
+  }
+
+  function importSummary(plan) {
+    var p = plan || {}
+    return {
+      imported: Number(p.imported) || 0,
+      deduplicated: Number(p.deduplicated) || 0,
+      rejected: Array.isArray(p.rejected) ? p.rejected.length : 0,
+    }
+  }
+
+  var helpers = { validateDraft: validateDraft, groupEntries: groupEntries, nextToken: nextToken, buildEntriesQuery: buildEntriesQuery, workspaceOptions: workspaceOptions, errorKeyFor: errorKeyFor, validateImportDoc: validateImportDoc, importSummary: importSummary }
 
   // ===== node 测试导出（CJS） =====
   if (typeof module !== 'undefined' && module.exports) {
@@ -144,6 +161,18 @@
     workspaceUnknown: '未知工作区',
     entriesUnit: '条',
     workspaceTarget: '写入工作区',
+    export: '导出',
+    import: '导入',
+    exportDone: '已导出全部记忆',
+    importTitle: '导入记忆',
+    importNew: '新增',
+    importDup: '重复跳过',
+    importRej: '拒绝',
+    importRejHint: '被拒绝的条目（机密/无效/缺工作区）不会写入。',
+    importConfirm: '确认导入',
+    imported: '导入完成',
+    errDuplicate: '目标作用域已有相同内容的记忆',
+    errImportDoc: '不是有效的 dsh-memory 导出文件（format/version/entries 不符）',
   }
   var EN = {
     nav: 'Memory',
@@ -193,6 +222,18 @@
     workspaceUnknown: 'Unknown workspace',
     entriesUnit: 'entries',
     workspaceTarget: 'Writes to workspace',
+    export: 'Export',
+    import: 'Import',
+    exportDone: 'All memories exported',
+    importTitle: 'Import memories',
+    importNew: 'New',
+    importDup: 'Duplicates skipped',
+    importRej: 'Rejected',
+    importRejHint: 'Rejected entries (credentials/invalid/no workspace) are not written.',
+    importConfirm: 'Import',
+    imported: 'Import complete',
+    errDuplicate: 'Identical memory already exists in the target scope',
+    errImportDoc: 'Not a valid dsh-memory export file (format/version/entries mismatch)',
   }
 
   var CSS = [
@@ -294,9 +335,11 @@
           status: function () { return request(API_BASE + '/status') },
           workspaces: function () { return request(API_BASE + '/workspaces') },
           entries: function (params) { return request(API_BASE + '/entries' + buildEntriesQuery(params)) },
+          export: function () { return request(API_BASE + '/export') },
           save: function (input) { return post(API_BASE + '/save', input) },
           update: function (input) { return post(API_BASE + '/update', input) },
           forget: function (input) { return post(API_BASE + '/forget', input) },
+          import: function (input) { return post(API_BASE + '/import', input) },
         }
       }
 
@@ -403,18 +446,15 @@
               h('option', { value: 'fact' }, t('catFact')),
               h('option', { value: 'preference' }, t('catPreference')),
               h('option', { value: 'decision' }, t('catDecision')))),
-          isCreate
-            ? h('div', { className: 'dm_field' },
-              h('label', { className: 'dm_label', htmlFor: 'dm-scope' }, t('scopeLabel')),
-              h('select', { id: 'dm-scope', className: 'dm_select', disabled: props.busy, value: draft.scope, onChange: function (e) { field('scope', e.target.value) } },
-                h('option', { value: 'global' }, t('scopeGlobal')),
-                workspaceTarget ? h('option', { value: 'workspace' }, t('scopeWorkspace') + ' — ' + workspaceTarget) : null),
-              draft.scope === 'workspace' && workspaceTarget
-                ? h('div', { className: 'dm_hint', style: { marginTop: 4 } }, t('workspaceTarget') + ': ' + workspaceTarget)
-                : null)
-            : h('div', { className: 'dm_field' },
-              h('span', { className: 'dm_label' }, t('scopeLabel')),
-              h('span', null, draft.scope === 'global' ? t('scopeGlobal') : t('scopeWorkspace'))),
+          h('div', { className: 'dm_field' },
+            h('label', { className: 'dm_label', htmlFor: 'dm-scope' }, t('scopeLabel')),
+            h('select', { id: 'dm-scope', className: 'dm_select', disabled: props.busy, value: draft.scope, onChange: function (e) { field('scope', e.target.value) } },
+              h('option', { value: 'global' }, t('scopeGlobal')),
+              workspaceTarget ? h('option', { value: 'workspace' }, t('scopeWorkspace') + ' — ' + workspaceTarget) : null,
+              !workspaceTarget && draft.scope === 'workspace' ? h('option', { value: 'workspace', disabled: true }, t('scopeWorkspace')) : null),
+            draft.scope === 'workspace' && workspaceTarget
+              ? h('div', { className: 'dm_hint', style: { marginTop: 4 } }, t('workspaceTarget') + ': ' + workspaceTarget)
+              : null),
           h('div', { className: 'dm_field' },
             h('label', { className: 'dm_label', htmlFor: 'dm-tags' }, t('tagsLabel')),
             h('input', { id: 'dm-tags', className: 'dm_input', disabled: props.busy, value: draft.tags, onChange: function (e) { field('tags', e.target.value) } })),
@@ -433,6 +473,30 @@
           h('div', { className: 'dm_dialog_footer' },
             h('button', { className: 'dm_btn', onClick: props.onClose, disabled: props.busy }, t('cancel')),
             h('button', { className: 'dm_btn dm_btn_danger', onClick: props.onConfirm, disabled: props.busy }, t('del'))))
+      }
+
+      function ImportModal(props) {
+        var t = props.t
+        var summary = importSummary(props.plan)
+        var rejected = (props.plan && props.plan.rejected) || []
+        return h(Modal, { title: t('importTitle'), onClose: props.onClose, busy: props.busy },
+          h('h2', { className: 'dm_dialog_title' }, t('importTitle')),
+          h('div', { className: 'dm_delete_preview' },
+            h('div', null, t('importNew') + ': ' + summary.imported),
+            h('div', null, t('importDup') + ': ' + summary.deduplicated),
+            h('div', null, t('importRej') + ': ' + summary.rejected),
+            rejected.length > 0
+              ? h('div', { className: 'dm_hint', style: { marginTop: 8 } },
+                t('importRejHint'),
+                h('ul', { style: { margin: '4px 0 0', paddingLeft: 18 } },
+                  rejected.slice(0, 5).map(function (r, i) {
+                    return h('li', { key: i }, '#' + (r.index + 1) + ' ' + String(r.reason || r.code || ''))
+                  }),
+                  rejected.length > 5 ? h('li', { key: 'more' }, '… +' + (rejected.length - 5)) : null))
+              : null),
+          h('div', { className: 'dm_dialog_footer' },
+            h('button', { className: 'dm_btn', onClick: props.onClose, disabled: props.busy }, t('cancel')),
+            h('button', { className: 'dm_btn dm_btn_primary', onClick: props.onConfirm, disabled: props.busy || summary.imported === 0 }, t('importConfirm'))))
       }
 
       function currentSessionCwd(ctx) {
@@ -473,6 +537,9 @@
         var editor = editorState[0]; var setEditor = editorState[1]
         var confirmState = useState(null)
         var confirm = confirmState[0]; var setConfirm = confirmState[1]
+        var importState = useState(null)
+        var importPlan = importState[0]; var setImportPlan = importState[1]
+        var fileInputRef = useRef(null)
         var toastState = useState(null)
         var toast = toastState[0]; var setToast = toastState[1]
         var busyState = useState(false)
@@ -587,7 +654,7 @@
               tags: tags,
             })
           } else {
-            promise = api.update({ id: editor.id, content: editor.content.trim(), category: editor.category, tags: tags, workspace: workspaceTarget })
+            promise = api.update({ id: editor.id, content: editor.content.trim(), category: editor.category, tags: tags, scope: editor.scope, workspace: workspaceTarget })
           }
           promise.then(function (payload) {
             if (editorRef.current === started) setEditor(null)
@@ -606,6 +673,56 @@
           api.forget({ id: confirm.id, workspace: workspaceTarget }).then(function () {
             if (confirmRef.current === started) setConfirm(null)
             setToast({ kind: 'ok', text: t('deleted') })
+            return refreshEntries()
+          }).then(function () {
+            return refreshWorkspaces()
+          }).catch(writeFailure).then(function () { setBusy(false) })
+        }
+
+        function handleExport() {
+          if (busy) return
+          setBusy(true)
+          api.export().then(function (doc) {
+            var blob = new Blob([JSON.stringify(doc, null, 2)], { type: 'application/json' })
+            var url = URL.createObjectURL(blob)
+            var a = document.createElement('a')
+            a.href = url
+            a.download = 'dsh-memory-export-' + new Date().toISOString().slice(0, 10) + '.json'
+            document.body.appendChild(a)
+            a.click()
+            a.remove()
+            setTimeout(function () { URL.revokeObjectURL(url) }, 1000)
+            setToast({ kind: 'ok', text: t('exportDone') })
+          }).catch(writeFailure).then(function () { setBusy(false) })
+        }
+
+        function handleImportFile(e) {
+          var file = e.target.files && e.target.files[0]
+          e.target.value = ''
+          if (!file || busy) return
+          file.text().then(function (text) {
+            var doc
+            try { doc = JSON.parse(text) } catch { setToast({ kind: 'error', text: t('errInvalidJson') }); return undefined }
+            if (!validateImportDoc(doc).ok) {
+              setToast({ kind: 'error', text: t('errImportDoc') })
+              return undefined
+            }
+            setBusy(true)
+            return api.import({ entries: doc.entries, dryRun: true }).then(function (payload) {
+              setImportPlan({ entries: doc.entries, plan: payload.result })
+            }).catch(writeFailure).then(function () { setBusy(false) })
+          }).catch(function () {
+            setToast({ kind: 'error', text: t('errInvalidJson') })
+          })
+        }
+
+        function confirmImport() {
+          if (busy || !importPlan) return
+          setBusy(true)
+          api.import({ entries: importPlan.entries }).then(function (payload) {
+            setImportPlan(null)
+            var summary = importSummary(payload.result)
+            setToast({ kind: 'ok', text: t('imported') + ' · ' + t('importNew') + ' ' + summary.imported + ' / ' + t('importDup') + ' ' + summary.deduplicated + ' / ' + t('importRej') + ' ' + summary.rejected })
             return refreshEntries()
           }).then(function () {
             return refreshWorkspaces()
@@ -656,7 +773,10 @@
               unknownWorkspaces.map(function (w) {
                 return h('option', { key: 'unknown-' + w.key, value: 'unknown-' + w.key, disabled: true }, t('workspaceUnknown') + ' (' + String(w.key).slice(0, 8) + '…)')
               })),
-            h('input', { className: 'dm_search', type: 'search', 'aria-label': t('searchPlaceholder'), placeholder: t('searchPlaceholder'), value: query, onChange: function (e) { setQuery(e.target.value) } })),
+            h('input', { className: 'dm_search', type: 'search', 'aria-label': t('searchPlaceholder'), placeholder: t('searchPlaceholder'), value: query, onChange: function (e) { setQuery(e.target.value) } }),
+            h('button', { className: 'dm_btn', onClick: handleExport, disabled: busy || phase !== 'ready' }, t('export')),
+            h('button', { className: 'dm_btn', onClick: function () { if (fileInputRef.current) fileInputRef.current.click() }, disabled: busy || phase !== 'ready' }, t('import')),
+            h('input', { ref: fileInputRef, type: 'file', accept: '.json,application/json', style: { display: 'none' }, onChange: handleImportFile })),
           phase === 'loading' ? h('div', { className: 'dm_empty' }, t('loading'))
             : phase === 'error' ? h('div', { className: 'dm_empty' },
               h('div', null, t('loadError') + ': ' + errorTextState),
@@ -664,6 +784,7 @@
               : renderList(),
           editor ? h(EditorModal, { draft: editor, setDraft: setEditor, t: t, workspaceTarget: workspaceTarget, busy: busy, onSave: handleSave, onClose: function () { if (!busy) setEditor(null) } }) : null,
           confirm ? h(ConfirmModal, { entry: confirm, t: t, busy: busy, onConfirm: handleDelete, onClose: function () { if (!busy) setConfirm(null) } }) : null,
+          importPlan ? h(ImportModal, { plan: importPlan.plan, t: t, busy: busy, onConfirm: confirmImport, onClose: function () { if (!busy) setImportPlan(null) } }) : null,
           toast ? h('div', { className: 'dm_toast' + (toast.kind === 'error' ? ' dm_toast_error' : ''), role: toast.kind === 'error' ? 'alert' : 'status' }, toast.text) : null)
       }
 

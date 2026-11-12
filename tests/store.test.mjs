@@ -190,6 +190,92 @@ test('guard: ordinary prose passes', () => {
   }
 })
 
+test('move: global -> workspace relocates the file and refreshes updated', async () => {
+  const root = tmpRoot()
+  const { entry } = store.saveEntry(root, { content: '待移动的事实', scope: 'global', tags: ['t'] })
+  await new Promise((r) => setTimeout(r, 5))
+  const moved = store.moveEntry(root, entry.id, 'workspace', CWD_A)
+  assert.equal(moved.id, entry.id)
+  assert.equal(moved.scope, 'workspace')
+  assert.equal(moved.content, '待移动的事实')
+  assert.deepEqual(moved.tags, ['t'])
+  assert.ok(moved.updated > entry.updated)
+  assert.ok(!fs.existsSync(path.join(root, 'global', `${entry.id}.md`)))
+  assert.ok(fs.existsSync(path.join(root, 'workspaces', store.workspaceKey(CWD_A), `${entry.id}.md`)))
+  assert.equal(store.findEntry(root, entry.id, CWD_A).scope, 'workspace')
+  assert.equal(store.findEntry(root, entry.id, CWD_B), undefined)
+})
+
+test('move: workspace -> global and same-scope no-op', () => {
+  const root = tmpRoot()
+  const { entry } = store.saveEntry(root, { content: '工作区记忆', scope: 'workspace', cwd: CWD_A })
+  const moved = store.moveEntry(root, entry.id, 'global', CWD_A)
+  assert.equal(moved.scope, 'global')
+  assert.ok(fs.existsSync(path.join(root, 'global', `${entry.id}.md`)))
+  assert.equal(store.listScope(root, 'workspace', CWD_A).length, 0)
+  const before = fs.readFileSync(path.join(root, 'global', `${entry.id}.md`), 'utf8')
+  const noop = store.moveEntry(root, entry.id, 'global', CWD_A)
+  assert.equal(noop.scope, 'global')
+  assert.equal(fs.readFileSync(path.join(root, 'global', `${entry.id}.md`), 'utf8'), before)
+})
+
+test('move: duplicate content in target scope is rejected, source intact', () => {
+  const root = tmpRoot()
+  store.saveEntry(root, { content: '共同的内容', scope: 'workspace', cwd: CWD_A })
+  const { entry } = store.saveEntry(root, { content: '共同的内容', scope: 'global' })
+  assert.throws(() => store.moveEntry(root, entry.id, 'workspace', CWD_A), (err) => err.code === 'duplicate')
+  assert.equal(store.findEntry(root, entry.id, CWD_A).scope, 'global')
+  assert.equal(store.listScope(root, 'workspace', CWD_A).length, 1)
+})
+
+test('move: applies content/category/tags patch together with the move', () => {
+  const root = tmpRoot()
+  const { entry } = store.saveEntry(root, { content: '旧内容', scope: 'global' })
+  const moved = store.moveEntry(root, entry.id, 'workspace', CWD_A, { content: '新内容', category: 'decision', tags: ['v2'] })
+  assert.equal(moved.content, '新内容')
+  assert.equal(moved.category, 'decision')
+  assert.deepEqual(moved.tags, ['v2'])
+  assert.equal(moved.scope, 'workspace')
+  assert.equal(store.listScope(root, 'global', undefined).length, 0)
+})
+
+test('move: unknown id throws; workspace target without cwd throws', () => {
+  const root = tmpRoot()
+  assert.throws(() => store.moveEntry(root, 'm-nonexistent-000000', 'global', undefined), /not found/)
+  const { entry } = store.saveEntry(root, { content: 'x', scope: 'global' })
+  assert.throws(() => store.moveEntry(root, entry.id, 'workspace', undefined), /working directory/)
+})
+
+test('writeEntry preserves id and timestamps (import primitive)', () => {
+  const root = tmpRoot()
+  const entry = {
+    id: 'm-import-aaaaaa',
+    category: 'preference',
+    scope: 'global',
+    tags: ['导入'],
+    created: '2026-01-01T00:00:00.000Z',
+    updated: '2026-01-02T00:00:00.000Z',
+    source: 'old-session',
+    content: '导入的记忆',
+  }
+  store.writeEntry(root, entry, undefined)
+  const found = store.findEntry(root, 'm-import-aaaaaa', undefined)
+  assert.deepEqual(found, entry)
+  assert.equal(store.hasEntry(root, 'm-import-aaaaaa', 'global', undefined), true)
+  assert.equal(store.hasEntry(root, 'm-import-aaaaaa', 'workspace', CWD_A), false)
+  assert.equal(store.hasEntry(root, '../evil', 'global', undefined), false)
+})
+
+test('listWorkspaceKey lists by directory key without cwd', () => {
+  const root = tmpRoot()
+  store.saveEntry(root, { content: '按键列出', scope: 'workspace', cwd: CWD_A })
+  const key = store.workspaceKey(CWD_A)
+  const entries = store.listWorkspaceKey(root, key)
+  assert.equal(entries.length, 1)
+  assert.equal(entries[0].content, '按键列出')
+  assert.deepEqual(store.listWorkspaceKey(root, 'zzzz'), [])
+})
+
 test('render: guidance, budget, grouping, empty', () => {
   assert.ok(GUIDANCE.includes('memory_save'))
   assert.ok(renderSection([], {}).includes('暂无记忆'))

@@ -7,7 +7,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import helpers from '../client/client.js'
 
-const { validateDraft, groupEntries, nextToken, buildEntriesQuery, workspaceOptions, errorKeyFor } = helpers
+const { validateDraft, groupEntries, nextToken, buildEntriesQuery, workspaceOptions, errorKeyFor, validateImportDoc, importSummary } = helpers
 
 test('validateDraft accepts a complete draft and rejects bad ones', () => {
   assert.deepEqual(validateDraft({ content: '一条事实', category: 'fact' }), { ok: true })
@@ -63,9 +63,25 @@ test('errorKeyFor maps service and route errors to locale keys', () => {
   assert.equal(errorKeyFor({ code: 'secret', message: '拒绝写入…' }), 'errSecret')
   assert.equal(errorKeyFor({ code: 'invalid', message: '记忆内容不能为空…' }), 'errInvalid')
   assert.equal(errorKeyFor({ code: 'no-workspace', message: '…' }), 'errNoWorkspace')
+  assert.equal(errorKeyFor({ code: 'duplicate', message: '…' }), 'errDuplicate')
   assert.equal(errorKeyFor({ status: 403, message: 'unauthorized' }), 'errUnauthorized')
   assert.equal(errorKeyFor({ status: 403, message: 'loopback-only' }), 'errLoopback')
   assert.equal(errorKeyFor({ status: 400, message: 'invalid-json' }), 'errInvalidJson')
   assert.equal(errorKeyFor({ status: 500, message: 'boom' }), null)
   assert.equal(errorKeyFor(null), null)
+})
+
+test('validateImportDoc accepts only dsh-memory export v1 documents', () => {
+  const good = { format: 'dsh-memory-export', version: 1, entries: [] }
+  assert.deepEqual(validateImportDoc(good), { ok: true })
+  assert.deepEqual(validateImportDoc(null), { ok: false, error: 'bad-doc' })
+  assert.deepEqual(validateImportDoc({ format: 'other', version: 1, entries: [] }), { ok: false, error: 'bad-doc' })
+  assert.deepEqual(validateImportDoc({ format: 'dsh-memory-export', version: 2, entries: [] }), { ok: false, error: 'bad-doc' })
+  assert.deepEqual(validateImportDoc({ format: 'dsh-memory-export', version: 1, entries: {} }), { ok: false, error: 'bad-doc' })
+})
+
+test('importSummary condenses a plan into display counts', () => {
+  assert.deepEqual(importSummary({ imported: 3, deduplicated: 1, rejected: [{ index: 0, code: 'secret', reason: 'x' }] }), { imported: 3, deduplicated: 1, rejected: 1 })
+  assert.deepEqual(importSummary({}), { imported: 0, deduplicated: 0, rejected: 0 })
+  assert.deepEqual(importSummary(null), { imported: 0, deduplicated: 0, rejected: 0 })
 })

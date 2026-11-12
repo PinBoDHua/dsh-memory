@@ -1,7 +1,7 @@
 {
   "name": "dsh-memory",
-  "version": "0.2.0",
-  "description": "记忆 —— DSH 跨会话长期记忆插件：自动沉淀用户偏好、项目事实与重要决策，新会话按预算自动注入；Web 管理面板浏览/搜索/编辑/删除；Markdown 一事一文件、手工可编辑，密码/密钥/token 永不写入。Cross-session long-term memory for DeepSeek Harness with a Web management panel.",
+  "version": "0.3.0",
+  "description": "记忆 —— DSH 跨会话长期记忆插件：自动沉淀用户偏好、项目事实与重要决策，新会话按预算自动注入；Web 管理面板浏览/搜索/编辑/删除/跨作用域移动/导出导入；Markdown 一事一文件、手工可编辑，密码/密钥/token 永不写入。Cross-session long-term memory for DeepSeek Harness with a Web management panel.",
   "type": "module",
   "main": "index.js",
   "icon": "./icon.svg",
