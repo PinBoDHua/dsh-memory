@@ -238,6 +238,36 @@ test('search offset paginates the ranked result', () => {
   assert.deepEqual(store.searchEntries(root, { query: '分页', cwd: undefined, limit: 2, offset: 99 }), [])
 })
 
+test('meta.json: created on first write, schemaVersion 1, tolerant of corruption', () => {
+  const root = tmpRoot()
+  assert.ok(!fs.existsSync(path.join(root, 'meta.json')))
+  store.saveEntry(root, { content: '第一条', scope: 'global' })
+  const meta = JSON.parse(fs.readFileSync(path.join(root, 'meta.json'), 'utf8'))
+  assert.equal(meta.plugin, 'dsh-memory')
+  assert.equal(meta.schemaVersion, 1)
+  assert.ok(meta.createdAt)
+  const createdAt = meta.createdAt
+  store.saveEntry(root, { content: '第二条', scope: 'global' })
+  const meta2 = JSON.parse(fs.readFileSync(path.join(root, 'meta.json'), 'utf8'))
+  assert.equal(meta2.createdAt, createdAt, 'createdAt stable across writes')
+  fs.writeFileSync(path.join(root, 'meta.json'), '{corrupt', 'utf8')
+  store.saveEntry(root, { content: '第三条', scope: 'global' })
+  const meta3 = JSON.parse(fs.readFileSync(path.join(root, 'meta.json'), 'utf8'))
+  assert.equal(meta3.schemaVersion, 1, 'corrupt meta rebuilt')
+})
+
+test('workspaces listing ignores non-hash directories (lock dirs)', () => {
+  const root = tmpRoot()
+  store.saveEntry(root, { content: '锁目录测试', scope: 'workspace', cwd: CWD_A })
+  fs.mkdirSync(path.join(root, 'workspaces', '.lock'), { recursive: true })
+  fs.mkdirSync(path.join(root, 'workspaces', 'not-a-hash'), { recursive: true })
+  // service.workspaces() is the listing surface; store keeps raw dirs.
+  const base = path.join(root, 'workspaces')
+  const names = fs.readdirSync(base, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name)
+  assert.ok(names.includes('.lock'))
+  assert.equal(names.filter((n) => /^[a-f0-9]{16}$/.test(n)).length, 1)
+})
+
 test('move: global -> workspace relocates the file and refreshes updated', async () => {
   const root = tmpRoot()
   const { entry } = store.saveEntry(root, { content: '待移动的事实', scope: 'global', tags: ['t'] })

@@ -19,7 +19,7 @@ Cross-session long-term memory for DeepSeek Harness: durable user preferences, p
 ## Web 管理面板 Panel
 
 - 入口：左侧边栏「记忆」图标 → 主区域面板（与 Plugins 页同级）。
-- 能力：作用域切换（全局＋当前工作区 / 仅全局 / 各已知工作区）、分类过滤（全部/偏好/事实/决策）、关键词搜索（300ms 防抖、相关度排序）、分页（每页 50 条，上一页/下一页）、新建/编辑（内容、分类、标签、作用域）、删除二次确认、导出 JSON、导入（dry-run 预览＋确认）、操作结果提示。
+- 能力：作用域切换（全局＋当前工作区 / 仅全局 / 各已知工作区）、分类过滤（全部/偏好/事实/决策）、关键词搜索（300ms 防抖、相关度排序）、分页（每页 50 条，上一页/下一页）、新建/编辑（内容、分类、标签、作用域）、删除二次确认、条目详情（点击正文展开：创建/更新时间、来源会话、复制 id）、导出 JSON、导入（dry-run 预览＋确认）、操作结果提示。
 - 数据面：宿主 `webServer` 命名路由 `/plugins/dsh-memory/{status,entries,workspaces,export,save,update,forget,import}`，浏览器同源 fetch；进程级 token（status 下发），写操作校验 `X-RPC-Key`，全部路由仅回环可达。
 - 一个操作，两个调用方：面板与 agent 工具调用同一 `lib/service.js`，语义与失败原因完全一致。
 - 样式仅用 `--dsw-alias-*` 主题令牌，自动跟随亮/暗主题；文案中英双语（zh/en）。
@@ -39,6 +39,7 @@ Cross-session long-term memory for DeepSeek Harness: durable user preferences, p
 
 ```
 .dsh-memory/
+├── meta.json                 # 存储元数据：schemaVersion/createdAt（首次写入时创建）
 ├── global/<id>.md
 └── workspaces/
     ├── index.json            # 目录哈希 → 工作区路径对照（仅供排查）
@@ -61,6 +62,8 @@ source: <session-id>
 ```
 
 写入为「临时文件＋改名」的原子写；每次操作实时重读磁盘，因此 DSH 运行中手工编辑文件也会立即生效。损坏的文件会被跳过而不是报错。
+
+并发与版本化：记忆按 home 共享，多个 DSH 进程可能同时写入。`index.json` 的读-改-写与批量导入的落盘阶段由跨进程写锁保护（原子 mkdir 互斥；持锁进程崩溃留下的陈旧锁按 mtime 自愈；获取超时抛错）。单条保存/更新本身是原子文件写，id 唯一，不需要锁。`meta.json` 记录 `schemaVersion`（当前 1），供未来存储迁移识别布局；缺失或损坏时自动重建，不影响读写。
 
 导出文档格式（面板「导出」生成，「导入」接受）：
 
@@ -98,7 +101,8 @@ global 条目的 `workspace` 为 `null`。导入保留原 id/时间戳/来源；
 - 面板「当前工作区」取会话初始目录（SessionSummary.cwd）；会话内 cd 后，agent 工具按有效目录写入，两者可能不同。
 - 索引损坏导致路径未知的工作区（cwd:null）在下拉中显示为「未知工作区」但不可选；其记忆在该工作区为会话工作目录时仍对 agent 工具与召回注入可见，也可直接编辑对应目录下的文件。
 - 与 DSH 既有机制互补：不接管 goals、skills、AGENTS.md，也不索引会话历史。
+- 并发写入下，单条保存的去重检查是尽力而为：两个进程同时写入完全相同的内容时可能各留一条（可手动删除）；文件与索引本身不会损坏或丢失。
 
 ## English summary
 
-dsh-memory gives the agent durable cross-session memory. Four tools (`memory_save`, `memory_search`, `memory_update`, `memory_forget`) and a Web management panel (sidebar "Memory" entry) share one service layer over one-fact-per-entry Markdown files under `~/.dsh/.dsh-memory/`, split into a global scope and per-workspace scopes keyed by the session's effective working directory. A system-prompt section re-reads the files on every assembly and injects entries within a configurable character budget, prioritizing preferences over decisions over facts (newest first within a category); the rest stay reachable via search. Non-empty searches are AND keyword matches ranked by relevance (content hits weigh most, exact phrases earn a bonus). The panel offers scope switching, category filtering, 50-entry pagination, and talks to loopback-only `webServer` routes guarded by a process token. Credentials are rejected at the service boundary; other sensitive information requires user confirmation per the injected guidance. Updates supersede in place and can move an entry between global and the current workspace (`memory_update` with `scope`; duplicates in the target are rejected with 409). The panel exports all memories as a versioned JSON document and imports them back with a dry-run preview, per-entry validation, dedupe, and preserved ids/timestamps. Forgetting is manual only. Hand edits to the Markdown files take effect immediately.
+dsh-memory gives the agent durable cross-session memory. Four tools (`memory_save`, `memory_search`, `memory_update`, `memory_forget`) and a Web management panel (sidebar "Memory" entry) share one service layer over one-fact-per-entry Markdown files under `~/.dsh/.dsh-memory/`, split into a global scope and per-workspace scopes keyed by the session's effective working directory. A system-prompt section re-reads the files on every assembly and injects entries within a configurable character budget, prioritizing preferences over decisions over facts (newest first within a category); the rest stay reachable via search. Non-empty searches are AND keyword matches ranked by relevance (content hits weigh most, exact phrases earn a bonus). The panel offers scope switching, category filtering, 50-entry pagination, and talks to loopback-only `webServer` routes guarded by a process token. Credentials are rejected at the service boundary; other sensitive information requires user confirmation per the injected guidance. Updates supersede in place and can move an entry between global and the current workspace (`memory_update` with `scope`; duplicates in the target are rejected with 409). The panel exports all memories as a versioned JSON document and imports them back with a dry-run preview, per-entry validation, dedupe, and preserved ids/timestamps. Forgetting is manual only. Hand edits to the Markdown files take effect immediately. Storage carries a `meta.json` schema version for future migrations, and a cross-process mkdir lock protects the workspace index and bulk-import writes when several DSH profiles share the same home. Panel rows expand on click to reveal created/updated timestamps, the source session, and a copy-id action.

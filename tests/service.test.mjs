@@ -126,14 +126,25 @@ test('update rejects credentials with code secret and keeps the old content', ()
   assert.equal(service.list({ scope: 'global' })[0].content, '正常内容')
 })
 
-test('status reports root and counts', () => {
+test('status reports root, schemaVersion and counts', () => {
   const { root, service } = tmpService()
   service.save({ content: '全局一', scope: 'global' })
   service.save({ content: '全局二', scope: 'global' })
   service.save({ content: '工作区一', scope: 'workspace', workspace: 'D:\\proj\\alpha' })
   const status = service.status()
   assert.equal(status.root, root)
+  assert.equal(status.schemaVersion, 1)
   assert.deepEqual(status.counts, { global: 2, workspaces: 1 })
+})
+
+test('workspaces() ignores lock and non-hash directories', () => {
+  const { root, service } = tmpService()
+  service.save({ content: '工作区一', scope: 'workspace', workspace: 'D:\\proj\\alpha' })
+  fs.mkdirSync(path.join(root, 'workspaces', '.lock'), { recursive: true })
+  fs.mkdirSync(path.join(root, 'workspaces', 'junk-dir'), { recursive: true })
+  const workspaces = service.workspaces()
+  assert.equal(workspaces.length, 1)
+  assert.match(workspaces[0].key, /^[a-f0-9]{16}$/)
 })
 
 test('search offset paginates without overlap', () => {

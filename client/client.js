@@ -55,6 +55,16 @@
     return { items: list.slice(0, n), hasMore: list.length > n }
   }
 
+  function entryDetailRows(entry) {
+    var e = entry || {}
+    var rows = [
+      { key: 'createdAt', value: e.created || '' },
+      { key: 'updatedAt', value: e.updated || '' },
+    ]
+    if (e.source) rows.push({ key: 'sourceLabel', value: e.source })
+    return rows
+  }
+
   function workspaceOptions(input) {
     var workspaces = (input && input.workspaces) || []
     var currentCwd = input && input.currentCwd
@@ -106,7 +116,7 @@
     }
   }
 
-  var helpers = { validateDraft: validateDraft, groupEntries: groupEntries, nextToken: nextToken, buildEntriesQuery: buildEntriesQuery, workspaceOptions: workspaceOptions, errorKeyFor: errorKeyFor, validateImportDoc: validateImportDoc, importSummary: importSummary, pageSlice: pageSlice }
+  var helpers = { validateDraft: validateDraft, groupEntries: groupEntries, nextToken: nextToken, buildEntriesQuery: buildEntriesQuery, workspaceOptions: workspaceOptions, errorKeyFor: errorKeyFor, validateImportDoc: validateImportDoc, importSummary: importSummary, pageSlice: pageSlice, entryDetailRows: entryDetailRows }
 
   // ===== node 测试导出（CJS） =====
   if (typeof module !== 'undefined' && module.exports) {
@@ -168,6 +178,12 @@
     pagePrev: '上一页',
     pageNext: '下一页',
     pageInfo: '第 {page} 页',
+    copyId: '复制 id',
+    copied: '已复制 id',
+    copyFailed: '复制失败，请手动选择',
+    createdAt: '创建于',
+    updatedAt: '更新于',
+    sourceLabel: '来源会话',
     workspaceUnknown: '未知工作区',
     entriesUnit: '条',
     workspaceTarget: '写入工作区',
@@ -232,6 +248,12 @@
     pagePrev: 'Previous',
     pageNext: 'Next',
     pageInfo: 'Page {page}',
+    copyId: 'Copy id',
+    copied: 'Id copied',
+    copyFailed: 'Copy failed; select manually',
+    createdAt: 'Created',
+    updatedAt: 'Updated',
+    sourceLabel: 'Source session',
     workspaceUnknown: 'Unknown workspace',
     entriesUnit: 'entries',
     workspaceTarget: 'Writes to workspace',
@@ -275,7 +297,10 @@
     '.dm_badge_decision{color:var(--dsw-alias-state-success-primary,#2da44e);border-color:currentColor;}',
     '.dm_scope_chip{font-size:11px;color:var(--dsw-alias-label-tertiary,#999);}',
     '.dm_time{font-size:11px;color:var(--dsw-alias-label-tertiary,#999);margin-left:auto;}',
-    '.dm_content{white-space:pre-wrap;word-break:break-word;margin:6px 0;line-height:1.55;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden;}',
+    '.dm_content{white-space:pre-wrap;word-break:break-word;margin:6px 0;line-height:1.55;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden;cursor:pointer;}',
+    '.dm_content_open{display:block;-webkit-line-clamp:unset;cursor:default;}',
+    '.dm_details{font-size:11px;color:var(--dsw-alias-label-secondary,#666);margin:6px 0;display:flex;flex-direction:column;gap:2px;}',
+    '.dm_btn_mini{padding:2px 8px;font-size:11px;align-self:flex-start;margin-top:4px;}',
     '.dm_meta{color:var(--dsw-alias-label-tertiary,#999);font-size:11px;word-break:break-all;}',
     '.dm_row_actions{display:flex;flex-direction:column;gap:6px;flex-shrink:0;}',
     '.dm_empty{border:0.5px dashed var(--dsw-alias-border-l2,rgba(0,0,0,0.15));border-radius:10px;padding:32px;text-align:center;color:var(--dsw-alias-label-secondary,#666);}',
@@ -314,6 +339,28 @@
 
       function splitTags(text) {
         return String(text || '').split(/[,，]/).map(function (s) { return s.trim() }).filter(Boolean)
+      }
+
+      function legacyCopy(text) {
+        var ta = document.createElement('textarea')
+        ta.value = text
+        ta.style.position = 'fixed'
+        ta.style.opacity = '0'
+        document.body.appendChild(ta)
+        ta.select()
+        var ok = false
+        try { ok = document.execCommand('copy') } catch { ok = false }
+        ta.remove()
+        return ok
+      }
+
+      function copyText(text) {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          return navigator.clipboard.writeText(text).catch(function () {
+            return legacyCopy(text) ? undefined : Promise.reject(new Error('copy failed'))
+          })
+        }
+        return legacyCopy(text) ? Promise.resolve() : Promise.reject(new Error('copy unsupported'))
       }
 
       function errorText(err, t) {
@@ -380,13 +427,34 @@
       function EntryRow(props) {
         var entry = props.entry
         var t = props.t
+        var expandedState = useState(false)
+        var expanded = expandedState[0]; var setExpanded = expandedState[1]
+        function toggle() { setExpanded(!expanded) }
+        function copyId() {
+          copyText(entry.id).then(function () { props.onToast(t('copied'), 'ok') }, function () { props.onToast(t('copyFailed'), 'error') })
+        }
         return h('div', { className: 'dm_row' },
           h('div', { className: 'dm_row_main' },
             h('div', { className: 'dm_row_top' },
               h(Badge, { category: entry.category, t: t }),
               h('span', { className: 'dm_scope_chip' }, entry.scope === 'global' ? t('scopeGlobal') : t('scopeWorkspace')),
               h('span', { className: 'dm_time' }, formatTime(entry.updated))),
-            h('div', { className: 'dm_content', title: entry.content }, entry.content),
+            h('div', {
+              className: 'dm_content' + (expanded ? ' dm_content_open' : ''),
+              title: entry.content,
+              role: 'button',
+              tabIndex: 0,
+              'aria-expanded': expanded,
+              onClick: toggle,
+              onKeyDown: function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle() } },
+            }, entry.content),
+            expanded
+              ? h('div', { className: 'dm_details' },
+                entryDetailRows(entry).map(function (row) {
+                  return h('div', { key: row.key }, t(row.key) + ': ' + (row.key === 'sourceLabel' ? row.value : formatTime(row.value)))
+                }),
+                h('button', { className: 'dm_btn dm_btn_mini', onClick: copyId }, t('copyId')))
+              : null,
             h('div', { className: 'dm_meta' },
               (entry.tags && entry.tags.length ? entry.tags.join(' · ') + '  —  ' : '') + entry.id)),
           h('div', { className: 'dm_row_actions' },
@@ -775,7 +843,7 @@
           }
           function rows(list) {
             return list.map(function (entry) {
-              return h(EntryRow, { key: entry.id, entry: entry, t: t, onEdit: openEdit, onDelete: openDelete })
+              return h(EntryRow, { key: entry.id, entry: entry, t: t, onEdit: openEdit, onDelete: openDelete, onToast: function (text, kind) { setToast({ kind: kind, text: text }) } })
             })
           }
           if (selection !== 'all') return h('div', null, rows(entries), pager)

@@ -7,7 +7,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import helpers from '../client/client.js'
 
-const { validateDraft, groupEntries, nextToken, buildEntriesQuery, workspaceOptions, errorKeyFor, validateImportDoc, importSummary, pageSlice } = helpers
+const { validateDraft, groupEntries, nextToken, buildEntriesQuery, workspaceOptions, errorKeyFor, validateImportDoc, importSummary, pageSlice, entryDetailRows } = helpers
 
 test('validateDraft accepts a complete draft and rejects bad ones', () => {
   assert.deepEqual(validateDraft({ content: '一条事实', category: 'fact' }), { ok: true })
@@ -50,6 +50,19 @@ test('pageSlice splits items and detects a next page', () => {
   assert.deepEqual(pageSlice(rows, 5), { items: rows, hasMore: false })
   assert.deepEqual(pageSlice([], 2), { items: [], hasMore: false })
   assert.deepEqual(pageSlice(null, 2), { items: [], hasMore: false })
+})
+
+test('entryDetailRows lists created/updated and omits empty source', () => {
+  const entry = { created: '2026-01-01T00:00:00.000Z', updated: '2026-01-02T00:00:00.000Z', source: '' }
+  assert.deepEqual(entryDetailRows(entry), [
+    { key: 'createdAt', value: '2026-01-01T00:00:00.000Z' },
+    { key: 'updatedAt', value: '2026-01-02T00:00:00.000Z' },
+  ])
+  assert.deepEqual(entryDetailRows({ ...entry, source: 'sess-1' })[2], { key: 'sourceLabel', value: 'sess-1' })
+  assert.deepEqual(entryDetailRows(null), [
+    { key: 'createdAt', value: '' },
+    { key: 'updatedAt', value: '' },
+  ])
 })
 
 test('workspaceOptions builds global plus known workspaces and current cwd', () => {
