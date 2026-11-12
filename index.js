@@ -2,26 +2,33 @@
  * dsh-memory — DSH 跨会话长期记忆插件 Host entry.
  *
  * 机制（均为已验证的 DSH API）：
- * - ctx.tools.register(...)：4 个记忆工具（纯对象定义＋原始 JSON Schema，
- *   与 dsh-time-machine 相同），handler 经 exec.agent.session 拿到会话 id
- *   与有效工作目录。
+ * - lib/service.js 是记忆操作的唯一公共边界：agent 工具与 Web 面板的
+ *   HTTP 路由都调用它（一个操作，两个调用方）。
+ * - ctx.tools.register(...)：4 个记忆工具（纯对象定义＋原始 JSON Schema）。
  * - ctx.systemPrompt.section(...)：每次装配实时重读记忆文件，把全局＋
  *   当前工作区记忆在预算内注入系统提示；interpolate: false 保护用户内容。
+ * - ctx.webServer 命名路由 /plugins/dsh-memory/*：Web 管理面板的数据面，
+ *   进程级 token + 回环检查（与 dsh-time-machine 同一模式）。
  * - 数据：~/.dsh/.dsh-memory/ 下 Markdown + frontmatter，一事一文件。
  *
  * 刻意不 import 任何 @deepseek-ai/* 包：本地链接目录的 ESM 解析够不到
  * DSH 安装树（与 dsh-time-machine / dsh-reverse-proxy-connect 同一做法）。
- * 服务经 inject 声明由 ctx 提供；配置默认值在本文件内收敛。
  *
- * 隐私：密码/密钥/token 工具侧硬拒写；其他敏感信息由指引要求先问用户。
+ * 隐私：密码/密钥/token 服务层硬拒写；其他敏感信息由指引要求先问用户。
  */
+import { randomBytes } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { detectSecret } from './lib/guard.js'
+import { fileURLToPath } from 'node:url'
 import { GUIDANCE, renderSection } from './lib/render.js'
-import * as store from './lib/store.js'
+import { attachRoutes } from './lib/routes.js'
+import { createMemoryService } from './lib/service.js'
+
+const pkg = JSON.parse(readFileSync(fileURLToPath(new URL('./package.json', import.meta.url)), 'utf8'))
 
 export const name = 'dsh-memory'
+export const version = typeof pkg.version === 'string' ? pkg.version : '0.0.0'
 export const inject = ['tools', 'systemPrompt']
 
 /** 配置字段与默认值（无 schemastery 依赖；经插件行 config 调整）。 */
@@ -50,6 +57,8 @@ export function apply(ctx, rawConfig) {
   const config = resolveConfig(rawConfig)
   if (!config.enabled) return
   const root = dataRoot()
+  const service = createMemoryService({ root })
+  const controlToken = randomBytes(24).toString('hex')
 
   // workingDirectory 服务是会话有效目录的权威来源（会跟随 cd）；
   // 可选查找，缺失时回退到不可变的 session.header.cwd。
@@ -69,13 +78,6 @@ export function apply(ctx, rawConfig) {
     return typeof original === 'string' && original !== '' ? original : undefined
   }
   const sessionOf = (exec) => exec?.agent?.session
-
-  const rejectSecret = (content) => {
-    const hit = detectSecret(content)
-    if (hit) {
-      throw new Error(`拒绝写入：检测到疑似机密（${hit.label}）。密码/密钥/token 永不进入记忆。Write rejected: suspected credential (${hit.label}). Credentials are never stored in memory.`)
-    }
-  }
 
   const saveTool = {
     name: 'memory_save',
@@ -112,15 +114,12 @@ export function apply(ctx, rawConfig) {
     isConcurrencySafe: () => false,
     execute(args, exec) {
       const session = sessionOf(exec)
-      const cwd = cwdOf(session)
-      const scope = args.scope ?? 'workspace'
-      rejectSecret(args.content)
-      const { entry, deduplicated } = store.saveEntry(root, {
+      const { entry, deduplicated } = service.save({
         content: args.content,
         category: args.category ?? 'fact',
-        scope,
+        scope: args.scope ?? 'workspace',
         tags: args.tags ?? [],
-        cwd,
+        workspace: cwdOf(session),
         source: session?.id,
       })
       return { id: entry.id, scope: entry.scope, category: entry.category, deduplicated }
@@ -165,12 +164,11 @@ export function apply(ctx, rawConfig) {
     },
     isConcurrencySafe: () => true,
     execute(args, exec) {
-      const cwd = cwdOf(sessionOf(exec))
-      const entries = store.searchEntries(root, {
+      const entries = service.search({
         query: args.query ?? '',
         scope: args.scope ?? 'all',
         category: args.category,
-        cwd,
+        workspace: cwdOf(sessionOf(exec)),
         limit: args.limit ?? 20,
       })
       return entries.map((e) => ({ id: e.id, scope: e.scope, category: e.category, content: e.content, tags: e.tags, updated: e.updated }))
@@ -201,9 +199,13 @@ export function apply(ctx, rawConfig) {
     },
     isConcurrencySafe: () => false,
     execute(args, exec) {
-      const cwd = cwdOf(sessionOf(exec))
-      if (args.content !== undefined) rejectSecret(args.content)
-      const entry = store.updateEntry(root, args.id, { content: args.content, category: args.category, tags: args.tags }, cwd)
+      const entry = service.update({
+        id: args.id,
+        content: args.content,
+        category: args.category,
+        tags: args.tags,
+        workspace: cwdOf(sessionOf(exec)),
+      })
       return { id: entry.id, updated: entry.updated }
     },
   }
@@ -229,10 +231,7 @@ export function apply(ctx, rawConfig) {
     },
     isConcurrencySafe: () => false,
     execute(args, exec) {
-      const cwd = cwdOf(sessionOf(exec))
-      const deleted = store.forgetEntry(root, args.id, cwd)
-      if (!deleted) throw new Error(`未找到记忆 / memory not found: ${args.id}`)
-      return { id: args.id, deleted: true }
+      return service.forget({ id: args.id, workspace: cwdOf(sessionOf(exec)) })
     },
   }
 
@@ -241,7 +240,7 @@ export function apply(ctx, rawConfig) {
   const sectionText = (assembly) => {
     try {
       const cwd = cwdOf(assembly?.agent?.session)
-      const entries = store.listAll(root, cwd)
+      const entries = service.list({ scope: 'all', workspace: cwd })
       return renderSection(entries, {
         autoInject: config.autoInject,
         budgetChars: config.injectionBudgetChars,
@@ -267,4 +266,13 @@ export function apply(ctx, rawConfig) {
       }
     }
   })
+
+  // Web 管理面板的数据面：webServer 可选挂载，缺失时工具与注入仍可用。
+  try {
+    ctx.inject(['webServer'], (webCtx) => {
+      webCtx.effect(() => attachRoutes({ webCtx, service, token: controlToken, version }))
+    })
+  } catch (error) {
+    ctx.logger?.warn?.('dsh-memory: 无法挂载 Web 面板接口（没有 webServer 服务）', error)
+  }
 }

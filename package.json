@@ -1,7 +1,7 @@
 {
   "name": "dsh-memory",
-  "version": "0.1.0",
-  "description": "记忆 —— DSH 跨会话长期记忆插件：自动沉淀用户偏好、项目事实与重要决策，新会话按预算自动注入；Markdown 一事一文件、手工可编辑，密码/密钥/token 永不写入。Cross-session long-term memory for DeepSeek Harness.",
+  "version": "0.2.0",
+  "description": "记忆 —— DSH 跨会话长期记忆插件：自动沉淀用户偏好、项目事实与重要决策，新会话按预算自动注入；Web 管理面板浏览/搜索/编辑/删除；Markdown 一事一文件、手工可编辑，密码/密钥/token 永不写入。Cross-session long-term memory for DeepSeek Harness with a Web management panel.",
   "type": "module",
   "main": "index.js",
   "icon": "./icon.svg",
@@ -30,10 +30,20 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-sidebar",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-api-session-controller"
+      ]
     }
   },
   "exports": {
     ".": "./index.js",
+    "./client": "./client/client.js",
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json",
     "./locale/*.json": "./locale/*.json",
@@ -42,6 +52,7 @@
   "files": [
     "index.js",
     "lib",
+    "client",
     "locale/*.json",
     "docs",
     "tests",

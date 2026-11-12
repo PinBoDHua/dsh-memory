@@ -8,9 +8,18 @@ Cross-session long-term memory for DeepSeek Harness: durable user preferences, p
 - **双通道写入**：用户显式「记住/忘掉」＋ Agent 依据注入指引在对话中主动记录（自动写入后简短提示）。
 - **两级作用域**：`global`（用户级，跨项目共享）与 `workspace`（按会话有效工作目录隔离，互不污染）。
 - **自动召回**：会话装配系统提示时实时读取记忆，在字符预算内注入全局＋当前工作区条目；超出预算的条目提示用搜索获取。
+- **Web 管理面板**：侧边栏「记忆」入口打开独立面板，浏览/搜索/新建/编辑/删除，全局与工作区切换；与 agent 工具共用同一服务层。
 - **一事一条目**：每条记忆一个 Markdown 文件（frontmatter 存元数据），人类可读、可手工编辑，改动立即生效。
 - **新覆旧**：信息变化时原地更新；仅手动遗忘，不自动删除。
-- **隐私护栏**：密码/密钥/token 在工具侧被规则检测硬拒绝；其他敏感个人信息由指引要求先征得用户同意。
+- **隐私护栏**：密码/密钥/token 在服务层被规则检测硬拒绝；其他敏感个人信息由指引要求先征得用户同意。
+
+## Web 管理面板 Panel
+
+- 入口：左侧边栏「记忆」图标 → 主区域面板（与 Plugins 页同级）。
+- 能力：作用域切换（全局＋当前工作区 / 仅全局 / 各已知工作区）、关键词搜索（300ms 防抖）、新建/编辑（内容、分类、标签）、删除二次确认、操作结果提示。
+- 数据面：宿主 `webServer` 命名路由 `/plugins/dsh-memory/{status,entries,workspaces,save,update,forget}`，浏览器同源 fetch；进程级 token（status 下发），写操作校验 `X-RPC-Key`，全部路由仅回环可达。
+- 一个操作，两个调用方：面板与 agent 工具调用同一 `lib/service.js`，语义与失败原因完全一致。
+- 样式仅用 `--dsw-alias-*` 主题令牌，自动跟随亮/暗主题；文案中英双语（zh/en）。
 
 ## 工具 Tools
 
@@ -62,12 +71,15 @@ source: <session-id>
 
 ## 限制 Limitations
 
-- v1 无 Web 管理面板（规划中）；检索为关键词匹配，无语义/向量检索。
+- 检索为关键词匹配，无语义/向量检索。
 - 无自动衰减/自动清理；遗忘只能手动。
 - 自动记录依赖模型遵循注入指引，不是后台独立提取。
 - 记忆按 home 共享：同一台机器上的所有 profile 看到同一份记忆。
+- 面板不支持跨作用域移动条目（与工具一致）；编辑不改变作用域。
+- 面板「当前工作区」取会话初始目录（SessionSummary.cwd）；会话内 cd 后，agent 工具按有效目录写入，两者可能不同。
+- 索引损坏导致路径未知的工作区（cwd:null）在下拉中显示为「未知工作区」但不可选；其记忆在该工作区为会话工作目录时仍对 agent 工具与召回注入可见，也可直接编辑对应目录下的文件。
 - 与 DSH 既有机制互补：不接管 goals、skills、AGENTS.md，也不索引会话历史。
 
 ## English summary
 
-dsh-memory gives the agent durable cross-session memory. Four tools (`memory_save`, `memory_search`, `memory_update`, `memory_forget`) manage one-fact-per-entry Markdown files under `~/.dsh/.dsh-memory/`, split into a global scope and per-workspace scopes keyed by the session's effective working directory. A system-prompt section re-reads the files on every assembly and injects the newest entries within a configurable character budget; the rest stay reachable via search. Credentials are rejected at the tool boundary; other sensitive information requires user confirmation per the injected guidance. Updates supersede in place; forgetting is manual only. Hand edits to the Markdown files take effect immediately.
+dsh-memory gives the agent durable cross-session memory. Four tools (`memory_save`, `memory_search`, `memory_update`, `memory_forget`) and a Web management panel (sidebar "Memory" entry) share one service layer over one-fact-per-entry Markdown files under `~/.dsh/.dsh-memory/`, split into a global scope and per-workspace scopes keyed by the session's effective working directory. A system-prompt section re-reads the files on every assembly and injects the newest entries within a configurable character budget; the rest stay reachable via search. The panel talks to loopback-only `webServer` routes guarded by a process token. Credentials are rejected at the service boundary; other sensitive information requires user confirmation per the injected guidance. Updates supersede in place; forgetting is manual only. Hand edits to the Markdown files take effect immediately.
