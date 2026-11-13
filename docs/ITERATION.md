@@ -152,15 +152,46 @@ This file is the self-iteration ledger for dsh-memory: per-round increments, ver
 ### P3
 - [x] **备份 `-1` 后缀不被白名单识别**（0.24.24：正则允许 `(?:-\d{1,3})?`，备份按 mtime 排序轮转，count/lastBackup 准确）。
 - [x] **settings.json 覆盖层读-改-写无跨进程锁**：两进程并发 patch 不同键 14/20 轮丢一个键。方案：`withLock(root/.lock-settings)` 包住 read-modify-write。
-- [ ] **withLock 长临界区/双释放风险**：临界区超过 staleMs 会被抢占；finally 无条件删锁可删他人锁。方案：写批心跳刷新 mtime、锁内 owner nonce 校验后释放。
+- [x] **withLock 长临界区/双释放风险**（0.24.29：锁目录写入 owner nonce，释放前校验 nonce，超时被抢占后不会删他人锁；`touchLock` + `writeEntryBatch onProgress` 每 128 条刷新锁 mtime，长导入不再被并发进程判陈旧抢占）。
 - [x] **导出静默漏损坏条目**（0.24.28：导出/备份文档增加 `skipped` 计数（目录文件数−可解析条目数），损坏文件可被审计发现；导入端忽略该字段）。
 - [x] **gui-check 中断不清理**（0.24.26：模块级清理注册表 + SIGINT/SIGTERM/uncaughtException 统一 abort 路径（清理→数据根 diff 断言→非 0 退出）；`--abort-after=<ms>` 可复现注入；启动时扫描并清理 `__gui_`/`__livecheck_` 残留；实测 15s/45s 中断均零残留）。
 - [x] **data-snapshot 漏检面**（0.24.26：junk 清单覆盖 `.tmp-*`、`.lock-*`（验证锁除外）、条目目录非 .md、backups 非 .json；backups 改为内容 sha256；abort 路径也做 diff 断言）。
 - [x] **验证脚本并发不安全**（0.24.26：`scripts/verify-lock.mjs` 数据根互斥锁（陈旧自愈），live/gui 启动即获取、busy 快速退出；GUI CDP 端口默认随机动态）。
-- [ ] **迁移 meta 写失败被吞**：`migrateSchema` 原子写失败仍返回 true/pending=false，且每次启动重跑强制备份可挤掉历史备份。方案：写失败抛错记 migrationError，失败后备份节流。
-- [ ] **导入悬垂指针指向「根内已存在但无关」id 不修复**：占位 id 视作有效目标 → 永久隐藏。方案：仅保留同批前向引用与确实反向声明的目标，其余丢弃计 repaired。
+- [x] **迁移 meta 写失败被吞**（0.24.27：`migrateSchema` 写失败抛 code=io、服务层维持 `migrationPending`/`migrationError`，最近备份 10 分钟内复用避免轮转；`tests/service.test.mjs` 有回归）。
+- [x] **导入悬垂指针指向「根内已存在但无关」id 不修复**（0.24.24/0.24.27：磁盘目标必须反向声明 `supersedes` 才保留，否则丢弃计 repaired；`tests/import-atomic.test.mjs` repaired=5 断言；跨片同链由 0.24.29 `chunkEntriesPreservingLinks` 保证同批）。
 - [x] **包分发/引擎**：`files` 已补 `scripts`（0.24.28 + `tests/package.test.mjs` 守卫）；`engines.dsh` 严格 semver 口径仍待宿主实际校验语义确认（当前 link 安装可用，先记录不改）。
 - [x] **可观测/自愈边角**：`status.schemaVersion` 在 meta 损坏时回落 2 掩盖损坏（0.24.27：null+metaError）；未来 mtime 的锁永不 stale（0.24.27：绝对时间差）；live-check cleanup 先置 cleaned 再请求，任一步抛错即留残留（0.24.25 已改批量 forget，0.24.26 中断路径自检）。
-- [ ] **设置重载与在途保存窄窗口**（待验证）：备份触发的 loadSettings 可能让在途保存响应被丢弃、UI 短暂显示旧值。
+- [x] **设置重载与在途保存窄窗口**（0.24.10–0.24.15 GUI 用例 8b/8d/8e 已覆盖：备份触发重载不覆盖未保存草稿、重置不被在途保存回滚、慢网络防抖保存不覆盖 reset；连续两轮全套 GUI 通过，视为已验证）。
 
 dreaming/后台 LLM 提取、向量/图检索、完整 bi-temporal 四时间戳、git 版本化存储、画像 slots、回收站、默认 TTL、跨工作区移动（global↔当前工作区之外的组合）、会话级记忆开关。
+
+### 第五轮双端审计 backlog（2026-11-13，基线 0.24.29）
+
+> 三个只读审计员（宿主 / 面板 / 运维文档）的合并清单。0.24.29 已修项：分片导入按取代链分量打包（P1 数据损坏）、部分成功导入刷新 dataVersion、导出 skipped UI 提示、frontmatter 换行注入防护、busy 不粘滞 backupError、GUI profile 回收（实测回收 85 目录/9.7GB）、verify-lock 死 PID 自愈、settings 真并发测试、skipped 导入往返测试。
+
+#### P1
+- [ ] **30k 库全量遍历同步冻结宿主**：冷启动首次装配/list ~18s，热态 listAll/stats/export/recall ~1.45s，单条 forget ~1.6s；瓶颈是每条 statSync（29k 文件 1.25s）。方案：根级快照缓存（fs.watch + 写失效）或 ≤1s TTL＋写失效（需同步修改「手改立即生效」口径），装配层 sectionText 短 TTL 缓存。
+- [ ] **/import 单请求无条数上限**：32MB body 可装数万条，同步规划+写盘 5000 条 5.9s 冻结；dryRun 同样。方案：单请求 entries ≤1000（超出 400 invalid），客户端预演改分片汇总；可选 async writeEntryBatch 每 N 条 setImmediate。
+- [ ] **importId 幂等回执**：merge 重试会把用户新编辑回滚成备份旧内容。方案：service 内存 LRU（importId+chunkIndex → 结果）直接返回旧回执；客户端每片生成稳定 importId 重试复用。
+- [ ] **导入取代关系物化**：磁盘已存在目标方向判反（targetAllowed 对 supersedes 要求 diskTarget.supersedes === 本 id），合法链被 repaired 丢弃；批内只有前向 supersedes 时不补反向 superseded_by → 新旧结论并存/旧结论仍可见。方案：统一物化 planned 目标反向指针，磁盘目标按作用域可达校验后追加进同一 writeEntryBatch；targetAllowed 只校验作用域/自指/环。
+- [ ] **验证脚本临时条目改专用 workspaceKey**：强杀后 global 测试记忆会被系统提示注入（实测已发生）；专用不可达 cwd 的 workspace 条目不会进注入。live/gui 的临时条目与清理需同步改造。
+
+#### P2
+- [ ] **merge 导入可产生同作用域重复内容**：更新为目标已有内容时绕过 dedupeMap 不变量。方案：merge 更新前先查 normalizeContent 去重表。
+- [ ] **moveEntry 无回滚**：新文件写成后旧文件删除失败 → 同 id 双作用域并存。方案：删旧失败则回滚新文件并抛 io。
+- [ ] **withLock 陈旧自愈 check-then-rm 双持有**：两个等待者同时判陈旧时可在 stat→rm 窗口双持有。方案：rename 原子认领（失败者重试），或 rm 前紧邻二次 stat+owner 复核。
+- [ ] **settings 锁争用映射**：POST /settings 争用 500 internal、/settings/reset 吞超时仍 200。方案：转 code=busy（503），reset 不吞错。
+- [ ] **面板归档撤销在 busy 窗口被静默丢弃**（toast 已消失、归档仍生效）。方案：撤销类动作加 force/排队到 busy→false。
+- [ ] **分类 chip 计数失真**：选中分类后其它分类显示 0（byCategory 在分类过滤后聚合）。方案：筛选时隐藏分类数字或另取未过滤快照。
+- [ ] **分片导入不可取消**：busy 时 Esc/遮罩/取消全禁，单片挂起最长 180s。方案：停止按钮 + 当前片结算后跳出。
+- [ ] **撤销 toast 无条件抢焦点**：排队撤销 toast 展示时会打断输入框，回车可能误触撤销。方案：shouldFocusToastAction 纯函数（焦点已丢失且无弹窗才接管）。
+- [ ] **空态/错误态按钮卸载后焦点掉 body**：清除筛选/重试四处。方案：统一 focusPage()。
+- [ ] **dataVersion 写路径缺正向断言**：只有「不刷新」负例。方案：GUI/单测断言保存/删除/撤销/导入/取代各 +1、失败不 +1。
+- [ ] **分片导入失败/重试路径无自动化覆盖**。方案：mock fetch 第 2 片 500 → 提示已写入 d/t、重试不重复、最终全落盘。
+
+#### P3
+- [ ] **Windows 大小写不敏感 id 冲突**：同批 m-X/m-x 报 2 条实存 1 条。方案：占用集合按 toLowerCase 建键。
+- [ ] **i18n 错误拼接写死中文「：」、服务端 rejected.reason 双语直出**。方案：errorJoiner + code→错误键映射。
+- [ ] **导出/备份沿用 15s 超时**（大库可能误报超时且备份已成功）。方案：export/backup 独立 timeout（如 120s）+ 进行中文案。
+- [ ] **engines.dsh 严格 semver 不满足预发布宿主**（0.2.2-alpha.3）。方案：改 `>=0.2.0-0` 或 README 注明 includePrerelease 语义。
+- [ ] **设置重载与在途保存**：reset 不等待 in-flight save（窄窗口），可持 in-flight promise 串行化。

@@ -3,6 +3,33 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.24.29] - 2026-11-13
+
+### 修复 Fixed（第四轮审计 P3：锁长临界区/双释放）
+- **释放只删自己的锁**：锁目录写入 owner nonce，`withLock` 释放前校验 nonce；临界区超过 staleMs 被另一进程抢占后，旧持有者的 finally 不再无条件 `rmSync`（双释放会让第三人趁虚而入）。
+- **长临界区心跳**：新增 `touchLock(lockPath)`，`writeEntryBatch` 接受 `onProgress` 并在每 128 条（暂存+提交阶段）回调；`service.import` 借此刷新 `.lock-import` mtime，大导入不再被并发备份/导入判为陈旧抢占。
+- **设置重载竞态确认**：GUI 8b/8d/8e 已覆盖「备份触发重载不覆盖草稿 / 重置不被在途保存回滚 / 慢网络防抖保存不覆盖 reset」，连续两轮全套通过，标记为已验证。
+
+### 修复 Fixed（第五轮审计实测问题，同日追加）
+- **分片导入不再拆断取代链（P1 数据损坏）**：分包改用 `chunkEntriesPreservingLinks`（并查集按 id ↔ supersedes ↔ superseded_by 合并连通分量，同链必同批；超大分量独立成批）。此前 >300 条的备份恢复中，跨 300 边界的取代对被服务端按「不可达」修复丢弃，已取代的旧记忆重新变为活跃且 UI 无提示。`importSummary` 增加 `repaired` 并在导入结果提示中显示。
+- **部分成功导入刷新召回**：分片导入中途失败但已写入 >0 条时也 `bumpDataVersion()`，注入徽章/召回预览不再落后于真实数据。
+- **导出 `skipped` 在 UI 可见**：存在损坏条目时导出成功提示追加「另有 N 个损坏文件未被导出」。
+- **frontmatter 换行注入修复（安全）**：`serializeEntry` 对所有单行 frontmatter 字段做单行化（`source/superseded_at/last_access/created/updated` 等），导入含换行的 `source`/`superseded_at` 不再能注入 `archived: true`/`pinned: true` 让条目静默隐藏。
+- **busy 不再粘滞成备份失败**：`.lock-import` 争用导致的 `code=busy` 不写 `status.backupError`（瞬时/可重试），只有真实 IO 失败才可观测；live-check 连跑两次均 186/186。
+- **验证脚本临时 profile 回收**：gui-check 杀手 Edge 后等待并重试删除 profile，启动时清扫 owner 进程已死的 `dsh-memory-gui-profile-*`；实测一次运行回收 **85 个目录 / 约 9.7GB** 历史残留。
+- **verify-lock 死 PID 自愈**：owner 进程已不存在时立即视为陈旧（不再让强杀后的脚本阻塞 10 分钟）。
+- **设置并发回归测试真正并发**：`tests/settings.test.mjs` 由两次 `spawnSync`（串行）改为同时启动两个子进程，能捕获 `.lock-settings` 丢键回归。
+- **导出 skipped 导入往返测试 + DETAIL 示例补 `skipped`**；修正 ITERATION 第四轮两条已修项未勾选（迁移 meta 写失败、无关目标悬垂指针）。
+
+### 新增测试
+- `withLock` owner 校验（模拟被抢占后不删他人锁）、`touchLock` 刷新 mtime/不存在锁返回 false。
+- `writeEntryBatch` 300 条批量 onProgress 至少 4 次心跳且全部落盘。
+- `chunkEntriesPreservingLinks` 跨批取代对同批、超大分量独立成批、`importSummary.repaired`。
+- 导出含 skipped 文档 round-trip 导入、导入换行字段注入防护、settings 真并发、verify-lock 死 PID 自愈。
+
+### 验证证据
+- 单元 **304/304**；live **186/186（连跑两次）**；真实 GUI **84/84**（含分片导入跨片取代链、导出 skipped 提示）；数据根快照一致。
+
 ## [0.24.28] - 2026-11-13
 
 ### 修复 Fixed（第四轮审计面板/导出收尾）

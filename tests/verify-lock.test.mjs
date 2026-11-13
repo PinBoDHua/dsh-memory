@@ -46,6 +46,17 @@ test('stale lock self-heals after staleMs', () => {
   lock.release()
 })
 
+test('lock from a dead owner process self-heals immediately', () => {
+  const root = tmpRoot()
+  const stale = path.join(root, VERIFY_LOCK_NAME)
+  fs.mkdirSync(stale)
+  // 999999 在 Windows 上不是合法进程 id，process.kill(pid,0) 会抛 ESRCH。
+  fs.writeFileSync(path.join(stale, 'owner'), '999999', 'utf8')
+  const lock = acquireVerifyLock(root, { staleMs: 10 * 60 * 1000 })
+  assert.ok(lock)
+  lock.release()
+})
+
 test('missing root is created before locking', () => {
   const root = path.join(tmpRoot(), 'nested', 'data')
   const lock = acquireVerifyLock(root)

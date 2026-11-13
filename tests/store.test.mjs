@@ -331,6 +331,19 @@ test('move: superseded duplicate in target scope does not block the move', () =>
   assert.throws(() => store.moveEntry(root, activeDup.id, 'workspace', CWD_A), (err) => err.code === 'duplicate')
 })
 
+test('writeEntryBatch reports progress ticks for large batches (lock heartbeat)', () => {
+  const root = tmpRoot()
+  const now = new Date().toISOString()
+  const items = Array.from({ length: 300 }, (_, i) => ({
+    entry: { id: `m-progress-${i}`, category: 'fact', scope: 'global', tags: [], created: now, updated: now, source: '', content: `进度条目 ${i}` },
+  }))
+  const ticks = []
+  const written = store.writeEntryBatch(root, items, { onProgress: (i) => ticks.push(i) })
+  assert.equal(written, 300)
+  assert.ok(ticks.length >= 4, `expected heartbeat ticks (stage+commit every 128), got ${ticks.length}`)
+  assert.equal(store.listScope(root, 'global', undefined).length, 300)
+})
+
 test('atomicWrite cleans its temp file on failure; uniqueFileName avoids collisions', () => {
   const root = tmpRoot()
   const dir = path.join(root, 'files')

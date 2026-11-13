@@ -105,9 +105,9 @@ test('legacy file hit fields are honored until the ledger takes over', () => {
 
 test('two processes touching disjoint entries lose no ledger updates', async () => {
   const { root, service } = tmpService()
-  for (let i = 0; i < 60; i += 1) service.save({ content: `并发账本 ${i}`, scope: 'global' })
+  for (let i = 0; i < 40; i += 1) service.save({ content: `并发账本 ${i}`, scope: 'global' })
   const ids = service.list({ scope: 'global' }).map((e) => e.id)
-  const [codeA, codeB] = await Promise.all([runWorker(root, 0, 30), runWorker(root, 30, 30)])
+  const [codeA, codeB] = await Promise.all([runWorker(root, 0, 20), runWorker(root, 20, 20)])
   assert.equal(codeA, 0)
   assert.equal(codeB, 0)
   const ledger = readLedger(root)

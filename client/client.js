@@ -307,8 +307,78 @@ function settingsStatusNext(status, event) {
       imported: Number(p.imported) || 0,
       updated: Number(p.updated) || 0,
       deduplicated: Number(p.deduplicated) || 0,
+      repaired: Number(p.repaired) || 0,
       rejected: Array.isArray(p.rejected) ? p.rejected.length : 0,
     }
+  }
+
+  /**
+   * 分片导入分包（保留取代链）：把 id ↔ supersedes ↔ superseded_by 用并查集合并成
+   * 连通分量，同一分量必须落在同一批——否则跨片的取代指针会被服务端按「不可达」
+   * 修复丢弃，导致已取代的旧记忆重新变为活跃（静默数据损坏）。
+   * 分量超过 size 时单独成批（内容完整优先于批大小）。
+   */
+  function chunkEntriesPreservingLinks(entries, size) {
+    var list = Array.isArray(entries) ? entries : []
+    var n = Math.max(1, Math.floor(Number(size) || 1))
+    if (list.length === 0) return []
+    if (list.length <= n) return [list]
+    var parent = Object.create(null)
+    var indexOf = Object.create(null)
+    function find(x) {
+      while (parent[x] !== undefined && parent[x] !== x) {
+        parent[x] = parent[parent[x]]
+        x = parent[x]
+      }
+      return x
+    }
+    for (var i = 0; i < list.length; i++) {
+      var e = list[i]
+      if (!e || !e.id) continue
+      if (parent[e.id] === undefined) parent[e.id] = e.id
+      indexOf[e.id] = i
+    }
+    for (var j = 0; j < list.length; j++) {
+      var en = list[j]
+      if (!en || !en.id) continue
+      var links = [en.supersedes, en.superseded_by]
+      for (var k = 0; k < links.length; k++) {
+        var target = links[k]
+        if (!target || indexOf[target] === undefined) continue
+        var ra = find(en.id)
+        var rb = find(target)
+        if (ra !== rb) parent[ra] = rb
+      }
+    }
+    var order = []
+    var groups = Object.create(null)
+    for (var m = 0; m < list.length; m++) {
+      var item = list[m]
+      if (!item || !item.id) { order.push({ items: [item] }); continue }
+      var root = find(item.id)
+      if (!groups[root]) {
+        groups[root] = { items: [] }
+        order.push(groups[root])
+      }
+      groups[root].items.push(item)
+    }
+    var chunks = []
+    var current = []
+    for (var g = 0; g < order.length; g++) {
+      var items = order[g].items
+      if (items.length > n) {
+        if (current.length > 0) { chunks.push(current); current = [] }
+        chunks.push(items)
+        continue
+      }
+      if (current.length + items.length > n) {
+        chunks.push(current)
+        current = []
+      }
+      current = current.concat(items)
+    }
+    if (current.length > 0) chunks.push(current)
+    return chunks
   }
 
   function pageSlice(entries, size) {
@@ -359,7 +429,7 @@ function settingsStatusNext(status, event) {
     return (mb < 10 ? mb.toFixed(1) : Math.round(mb)) + ' MB'
   }
 
-  var helpers = { validateDraft: validateDraft, groupEntries: groupEntries, nextToken: nextToken, entriesParams: entriesParams, buildEntriesQuery: buildEntriesQuery, workspaceOptions: workspaceOptions, errorKeyFor: errorKeyFor, shouldQueueToast: shouldQueueToast, partitionSettled: partitionSettled, parseTags: parseTags, unwrapResult: unwrapResult, settingsStatusNext: settingsStatusNext, savedToastKey: savedToastKey, exportParams: exportParams, defaultViewSelection: defaultViewSelection, sectionCountsExact: sectionCountsExact, chunkEntries: chunkEntries, parseImportText: parseImportText, validateImportDoc: validateImportDoc, importSummary: importSummary, pageSlice: pageSlice, entryDetailRows: entryDetailRows, relativeTime: relativeTime, formatBytes: formatBytes, isExpired: isExpired, statusOf: statusOf, originOf: originOf, statusQueryFlags: statusQueryFlags }
+  var helpers = { validateDraft: validateDraft, groupEntries: groupEntries, nextToken: nextToken, entriesParams: entriesParams, buildEntriesQuery: buildEntriesQuery, workspaceOptions: workspaceOptions, errorKeyFor: errorKeyFor, shouldQueueToast: shouldQueueToast, partitionSettled: partitionSettled, parseTags: parseTags, unwrapResult: unwrapResult, settingsStatusNext: settingsStatusNext, savedToastKey: savedToastKey, exportParams: exportParams, defaultViewSelection: defaultViewSelection, sectionCountsExact: sectionCountsExact, chunkEntries: chunkEntries, chunkEntriesPreservingLinks: chunkEntriesPreservingLinks, parseImportText: parseImportText, validateImportDoc: validateImportDoc, importSummary: importSummary, pageSlice: pageSlice, entryDetailRows: entryDetailRows, relativeTime: relativeTime, formatBytes: formatBytes, isExpired: isExpired, statusOf: statusOf, originOf: originOf, statusQueryFlags: statusQueryFlags }
 
   // ===== node 测试导出（CJS） =====
   if (typeof module !== 'undefined' && module.exports) {
@@ -535,6 +605,8 @@ var IMPORT_TIMEOUT_MS = 180000
     importMergeLabel: '按 id 合并已存在条目（更新内容，保留创建时间）',
     importRejHint: '被拒绝的条目（机密/无效/缺工作区）不会写入。',
     importConfirm: '确认导入',
+    importRepaired: '修复取代指针 {n} 处',
+    exportSkipped: '另有 {n} 个损坏文件未被导出',
     importAllDup: '全部条目均已存在，无需导入。',
     importingProgress: '正在导入 {d}/{t}…',
     importPartialFail: '已写入 {d}/{t} 条后中断，可重试导入（已存在条目会去重/合并）',
@@ -759,6 +831,8 @@ var IMPORT_TIMEOUT_MS = 180000
     importMergeLabel: 'Merge existing by id (update content, keep created time)',
     importRejHint: 'Rejected entries (credentials/invalid/no workspace) are not written.',
     importConfirm: 'Import',
+    importRepaired: 'repaired {n} supersede pointer(s)',
+    exportSkipped: '{n} damaged file(s) were not exported',
     importAllDup: 'All entries already exist; nothing to import.',
     importingProgress: 'Importing {d}/{t}…',
     importPartialFail: 'Interrupted after writing {d}/{t} entries; retry is safe (existing entries are deduplicated/merged)',
@@ -2833,7 +2907,7 @@ var IMPORT_TIMEOUT_MS = 180000
             a.click()
             a.remove()
             setTimeout(function () { URL.revokeObjectURL(url) }, 1000)
-            showToast('ok', t('exportDone').replace('{n}', String((doc.entries || []).length)))
+            showToast('ok', t('exportDone').replace('{n}', String((doc.entries || []).length)) + (Number(doc.skipped) > 0 ? ' · ' + t('exportSkipped').replace('{n}', String(Number(doc.skipped))) : ''))
           }).catch(writeFailure).then(function () { setBusy(false) })
         }
 
@@ -2876,7 +2950,7 @@ var IMPORT_TIMEOUT_MS = 180000
           setBusy(true)
           var entries = importPlan.entries
           var mode = importPlan.mode
-          var chunks = chunkEntries(entries, IMPORT_CHUNK_SIZE)
+          var chunks = chunkEntriesPreservingLinks(entries, IMPORT_CHUNK_SIZE)
           var totals = { imported: 0, updated: 0, deduplicated: 0, repaired: 0, rejected: [] }
           var written = 0
           setImportProgress({ done: 0, total: entries.length })
@@ -2900,11 +2974,13 @@ var IMPORT_TIMEOUT_MS = 180000
             setImportProgress(null)
             bumpDataVersion()
             var summary = importSummary(totals)
-            showToast('ok', t('imported') + ' · ' + t('importNew') + ' ' + summary.imported + ' / ' + t('importUpdated') + ' ' + summary.updated + ' / ' + t('importDup') + ' ' + summary.deduplicated + ' / ' + t('importRej') + ' ' + summary.rejected)
+            var repairedNote = summary.repaired > 0 ? ' · ' + t('importRepaired').replace('{n}', String(summary.repaired)) : ''
+            showToast('ok', t('imported') + ' · ' + t('importNew') + ' ' + summary.imported + ' / ' + t('importUpdated') + ' ' + summary.updated + ' / ' + t('importDup') + ' ' + summary.deduplicated + ' / ' + t('importRej') + ' ' + summary.rejected + repairedNote)
             setPage(0)
             return refreshRef.current()
           }).catch(function (err) {
             // 分片导入中途失败：已提交的片是完整的，报告进度并提示重试（重试由内容去重吸收）。
+            if (written > 0) bumpDataVersion()
             var text = t('importPartialFail').replace('{d}', String(written)).replace('{t}', String(entries.length)) + '：' + errorText(err, t)
             showToast('error', text)
             setImportPlan(null)

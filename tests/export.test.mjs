@@ -100,3 +100,15 @@ test('export reports skipped damaged files instead of silently losing them', () 
   assert.ok(Array.isArray(all.entries) && all.entries.length >= 2)
   assert.equal(typeof all.skipped, 'number')
 })
+
+test('export document with skipped round-trips through import (unknown field ignored)', () => {
+  const { root, service } = tmpService()
+  fs.writeFileSync(path.join(root, 'global', 'm-rt-broken.md'), 'not frontmatter', 'utf8')
+  const doc = service.export({ scope: 'global' })
+  assert.equal(doc.skipped, 1)
+  // 导入到另一个干净库：skipped 是未知字段应被忽略，可解析条目正常进入预览。
+  const target = createMemoryService({ root: fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-memory-export-rt-')) })
+  const preview = target.import({ entries: doc.entries, dryRun: true })
+  assert.equal(preview.rejected.length, 0, 'importer ignores the skipped field')
+  assert.equal(preview.entries.length, 1)
+})

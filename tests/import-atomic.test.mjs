@@ -133,6 +133,25 @@ test('import rejects self/cycle/unreachable supersede pointers (never permanentl
   }
 })
 
+test('import sanitizes newline-bearing frontmatter fields (no field injection)', () => {
+  const { root, service } = tmpService()
+  service.import({ entries: [{
+    id: 'm-inject-src',
+    content: '换行注入测试',
+    scope: 'global',
+    source: 'sess-1\narchived: true\npinned: true',
+    superseded_at: '2026-01-01T00:00:00.000Z\narchived: true',
+  }] })
+  const file = path.join(root, 'global', 'm-inject-src.md')
+  const text = fs.readFileSync(file, 'utf8')
+  const fmLines = text.split('\n').filter((line) => /^(archived|pinned):/.test(line))
+  assert.deepEqual(fmLines, [], 'no injected frontmatter fields')
+  const parsed = store.findEntry(root, 'm-inject-src', undefined)
+  assert.equal(parsed.archived, undefined)
+  assert.equal(parsed.pinned, undefined)
+  assert.equal(service.search({ scope: 'global' }).some((e) => e.id === 'm-inject-src'), true, 'entry remains visible')
+})
+
 test('successful batch import writes all entries and refreshes workspace index', () => {
   const { root, service } = tmpService()
   const res = service.import({

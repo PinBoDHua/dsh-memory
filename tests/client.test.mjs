@@ -8,7 +8,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import helpers from '../client/client.js'
 
-const { validateDraft, groupEntries, nextToken, entriesParams, buildEntriesQuery, workspaceOptions, errorKeyFor, shouldQueueToast, partitionSettled, parseTags, unwrapResult, settingsStatusNext, savedToastKey, exportParams, defaultViewSelection, sectionCountsExact, chunkEntries, parseImportText, validateImportDoc, importSummary, pageSlice, entryDetailRows, relativeTime, formatBytes, isExpired, statusOf, originOf, statusQueryFlags } = helpers
+const { validateDraft, groupEntries, nextToken, entriesParams, buildEntriesQuery, workspaceOptions, errorKeyFor, shouldQueueToast, partitionSettled, parseTags, unwrapResult, settingsStatusNext, savedToastKey, exportParams, defaultViewSelection, sectionCountsExact, chunkEntries, chunkEntriesPreservingLinks, parseImportText, validateImportDoc, importSummary, pageSlice, entryDetailRows, relativeTime, formatBytes, isExpired, statusOf, originOf, statusQueryFlags } = helpers
 
 test('validateDraft accepts a complete draft and rejects bad ones', () => {
   assert.deepEqual(validateDraft({ content: '一条事实', category: 'fact' }), { ok: true })
@@ -243,6 +243,35 @@ test('chunkEntries splits import payloads into bounded atomic batches', () => {
   assert.equal(chunkEntries(items, 0).length, 320, 'invalid size falls back to 1 per chunk')
 })
 
+test('chunkEntriesPreservingLinks keeps supersede pairs in the same atomic batch', () => {
+  const entries = Array.from({ length: 320 }, (_, i) => ({ id: `m-link-${i}`, content: `条目 ${i}` }))
+  // 跨 300 边界的一对取代链：旧 299 被新 300 取代。
+  entries[299].superseded_by = entries[300].id
+  entries[300].supersedes = entries[299].id
+  const chunks = chunkEntriesPreservingLinks(entries, 300)
+  const batchOf = (id) => chunks.findIndex((chunk) => chunk.some((e) => e.id === id))
+  assert.equal(batchOf(entries[299].id), batchOf(entries[300].id), 'linked pair must stay in one batch')
+  assert.equal(chunks.flat().length, 320, 'no entry lost or duplicated')
+  assert.ok(chunks.every((chunk) => chunk.length <= 300), 'normal components respect batch size')
+})
+
+test('chunkEntriesPreservingLinks isolates oversized components instead of splitting them', () => {
+  const entries = Array.from({ length: 10 }, (_, i) => ({ id: `m-big-${i}` }))
+  // 6 条环/链连通分量 > size 3 → 单独成批，绝不拆开。
+  for (let i = 1; i < 6; i += 1) entries[i].supersedes = entries[i - 1].id
+  entries[0].superseded_by = entries[5].id
+  const chunks = chunkEntriesPreservingLinks(entries, 3)
+  const big = chunks.find((chunk) => chunk.length === 6)
+  assert.ok(big, 'oversized component gets its own batch')
+  assert.equal(chunks.flat().length, 10)
+})
+
+test('importSummary exposes repaired pointer count', () => {
+  const summary = importSummary({ imported: 2, updated: 1, deduplicated: 3, repaired: 4, rejected: [{ index: 0 }] })
+  assert.equal(summary.repaired, 4)
+  assert.equal(summary.rejected, 1)
+})
+
 test('sectionCountsExact only trusts group counts on a single full page', () => {
   assert.equal(sectionCountsExact(0, false, false), true)
   assert.equal(sectionCountsExact(1, false, false), false, 'later page is a slice')
@@ -387,10 +416,10 @@ test('validateImportDoc accepts only dsh-memory export v1 documents', () => {
 })
 
 test('importSummary condenses a plan into display counts', () => {
-  assert.deepEqual(importSummary({ imported: 3, deduplicated: 1, rejected: [{ index: 0, code: 'secret', reason: 'x' }] }), { imported: 3, updated: 0, deduplicated: 1, rejected: 1 })
-  assert.deepEqual(importSummary({}), { imported: 0, updated: 0, deduplicated: 0, rejected: 0 })
-  assert.deepEqual(importSummary(null), { imported: 0, updated: 0, deduplicated: 0, rejected: 0 })
-  assert.deepEqual(importSummary({ imported: 1, updated: 2, deduplicated: 0, rejected: [] }), { imported: 1, updated: 2, deduplicated: 0, rejected: 0 })
+  assert.deepEqual(importSummary({ imported: 3, deduplicated: 1, rejected: [{ index: 0, code: 'secret', reason: 'x' }] }), { imported: 3, updated: 0, deduplicated: 1, repaired: 0, rejected: 1 })
+  assert.deepEqual(importSummary({}), { imported: 0, updated: 0, deduplicated: 0, repaired: 0, rejected: 0 })
+  assert.deepEqual(importSummary(null), { imported: 0, updated: 0, deduplicated: 0, repaired: 0, rejected: 0 })
+  assert.deepEqual(importSummary({ imported: 1, updated: 2, deduplicated: 0, rejected: [] }), { imported: 1, updated: 2, deduplicated: 0, repaired: 0, rejected: 0 })
 })
 
 test('isExpired compares UTC dates inclusively and fails open on bad input', () => {

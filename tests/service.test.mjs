@@ -313,7 +313,7 @@ test('backup refuses quickly (busy, no partial snapshot) while another process h
   assert.ok(elapsed < 3000, `lock wait ${elapsed}ms (expected ~500ms cap)`)
   const dir = path.join(root, 'backups')
   assert.equal(fs.existsSync(dir) ? fs.readdirSync(dir).length : 0, 0, 'no partial backup written')
-  assert.match(String(service.status().backupError || ''), /备份失败/)
+  assert.equal(service.status().backupError, null, 'busy is transient and must not stick as a backup error')
   // 锁释放后恢复正常。
   const ok = service.backup()
   assert.ok(ok.file)

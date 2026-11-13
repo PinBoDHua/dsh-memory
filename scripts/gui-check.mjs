@@ -17,7 +17,7 @@
  */
 import { spawn } from 'node:child_process'
 import { createHash, createHmac } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { snapshotDataRoot, diffSnapshots } from './data-snapshot.mjs'
@@ -253,8 +253,55 @@ function check(name, cond, detail = '') {
 const lastEntriesRequest = () => [...requests].reverse().find((u) => u.includes('/entries'))
 const lastStatsRequest = () => [...requests].reverse().find((u) => u.includes('/stats'))
 
+function ownerPidAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (err) {
+    return err?.code === 'EPERM'
+  }
+}
+
+async function removeProfileDir(dir, attempts = 6) {
+  for (let i = 0; i < attempts; i += 1) {
+    try {
+      rmSync(dir, { recursive: true, force: true })
+      return true
+    } catch {
+      await sleep(400)
+    }
+  }
+  return false
+}
+
+/**
+ * 清扫历史 GUI 临时 profile：Windows 下 Edge 子进程句柄未释放会让 rm 失败而静默残留，
+ * 每次约 250MB。owner pid 已死或目录超过 1 小时即视为陈旧（仍可能被活进程占用时跳过）。
+ */
+function sweepStaleProfiles() {
+  const base = os.tmpdir()
+  let names = []
+  try { names = readdirSync(base) } catch { return }
+  const now = Date.now()
+  for (const name of names) {
+    if (!name.startsWith('dsh-memory-gui-profile-')) continue
+    const full = path.join(base, name)
+    let stat
+    try { stat = statSync(full) } catch { continue }
+    const match = /-(\d+)$/.exec(name)
+    const pid = match ? Number(match[1]) : 0
+    const stale = !ownerPidAlive(pid) || now - stat.mtimeMs > 3600_000
+    if (!stale) continue
+    for (let i = 0; i < 3; i += 1) {
+      try { rmSync(full, { recursive: true, force: true }); break } catch { /* 句柄仍在，下次再试 */ }
+    }
+  }
+}
+
 async function main() {
   if (!existsSync(EDGE)) throw new Error(`找不到 Edge：${EDGE}（可用 EDGE_PATH 指定）`)
+  sweepStaleProfiles()
   try { rmSync(USER_DATA, { recursive: true, force: true }) } catch { /* ignore */ }
   mkdirSync(USER_DATA, { recursive: true })
   const edge = spawn(EDGE, [
@@ -267,6 +314,12 @@ async function main() {
     '--window-size=1400,950',
     'about:blank',
   ], { stdio: 'ignore' })
+  // 最后兜底：即使浏览器句柄尚未释放，cleanup 注册表（含 abort 路径）也会杀 Edge 并重试删 profile。
+  registerCleanup(async () => {
+    try { edge.kill() } catch { /* ignore */ }
+    await sleep(400)
+    await removeProfileDir(USER_DATA)
+  })
   let failed = null
   try {
     console.log(`dsh-memory GUI check @ ${BASE}\n`)
@@ -463,6 +516,18 @@ async function main() {
       await sleep(1200)
       const exportRecallAfter = requests.filter((u) => u.includes('/recall-preview')).length
       check('导出不触发 recall-preview 全量刷新', exportRecallAfter === exportRecallBefore, `${exportRecallBefore} -> ${exportRecallAfter}`)
+      // 0.24.29：导出 skipped 在 UI 可见（临时放一个损坏 .md，导出后删掉）。
+      const brokenExportPath = path.join(ROOT, 'global', 'm-gui-broken-export.md')
+      registerCleanup(async () => { try { rmSync(brokenExportPath, { force: true }) } catch { /* ignore */ } })
+      writeFileSync(brokenExportPath, 'not frontmatter', 'utf8')
+      try {
+        await evaluate(`(() => { const btn = [...document.querySelectorAll('.dm_toolbtn')].find((b) => /导出|Export/.test((b.textContent || '').trim())); if (btn) btn.click(); return Boolean(btn) })()`)
+        await sleep(1200)
+        const exportToast = await evaluate(`(document.querySelector('.dm_toast_text') || {}).textContent || ''`)
+        check('导出提示损坏文件数（skipped）', /损坏|damaged/i.test(exportToast), exportToast)
+      } finally {
+        rmSync(brokenExportPath, { force: true })
+      }
     await evaluate(`(() => {
       const input = document.querySelector('input.dm_search')
       if (!input) return false
@@ -604,6 +669,10 @@ async function main() {
           scope: 'global',
           category: 'fact',
         }))
+        // 一对取代链横跨 300 条分片边界：分包必须保持同批，否则服务端会修复丢弃指针、
+        // 已取代的旧条目重新变为活跃（客户端 P1 回归）。
+        bigEntries[299].superseded_by = bigEntries[300].id
+        bigEntries[300].supersedes = bigEntries[299].id
         const bigIds = bigEntries.map((e) => e.id)
         registerCleanup(async () => { await forgetIds(bigIds); bigIds.length = 0 })
         const bigFile = path.join(dir, 'big-export.json')
@@ -635,7 +704,10 @@ async function main() {
           const listed = await apiJson(`/entries?query=${encodeURIComponent('GUI 分片导入')}&scope=global&limit=1000`)
           check('大导入按分片多次提交（≥2 次 /import）', importAfter - importBefore >= 2, `${importBefore} -> ${importAfter}`)
           check('大导入显示分片进度', sawProgress, 'progress text not observed')
-          check('大导入全部落盘（320 条）', (listed?.entries || []).length === 320, String((listed?.entries || []).length))
+          check('大导入全部落盘（319 可见 + 1 被取代）', (listed?.entries || []).length === 319, String((listed?.entries || []).length))
+          const pairDoc = await apiJson(`/entries?query=${encodeURIComponent('GUI 分片导入 299')}&scope=global&limit=50&include_superseded=true`)
+          const older = (pairDoc?.entries || []).find((e) => e.id === bigIds[299])
+          check('分片导入保留跨片取代链（旧条目仍隐藏）', Boolean(older) && older.superseded_by === bigIds[300], JSON.stringify(older && { id: older.id, superseded_by: older.superseded_by }))
         } finally {
           await forgetIds(bigEntries.map((e) => e.id))
           bigIds.length = 0
@@ -1220,22 +1292,22 @@ async function main() {
       await sleep(800)
     }
 
-    // 9) 无 JS 异常 + 截图
+    // 9) 无 JS 异常 + 截图（先截图：cleanup 钩子会杀 Edge，不能再发 CDP 请求）
     check('页面无未捕获 JS 异常', consoleLines.every((line) => !line.startsWith('exception:')), JSON.stringify(consoleLines.slice(0, 5)))
+    const shot = await send('Page.captureScreenshot', { format: 'png' })
+    writeFileSync(SHOT, Buffer.from(shot.data, 'base64'))
+    console.log(`  · 截图：${SHOT}`)
     // 真实数据根前后一致（临时记忆已清理、设置/备份已恢复；中断路径共用同一清理注册表）。
     await runCleanupHooks()
     const dataChangesGui = diffSnapshots(dataSnapshotBefore, snapshotDataRoot(ROOT))
     check('真实数据根快照前后一致（零残留）', dataChangesGui.length === 0, JSON.stringify(dataChangesGui.slice(0, 5)))
-    const shot = await send('Page.captureScreenshot', { format: 'png' })
-    writeFileSync(SHOT, Buffer.from(shot.data, 'base64'))
-    console.log(`  · 截图：${SHOT}`)
   } catch (err) {
     failed = err
     console.error('GUI CHECK 异常：', err)
   } finally {
     try { ws?.close() } catch { /* ignore */ }
     try { edge.kill() } catch { /* ignore */ }
-    try { rmSync(USER_DATA, { recursive: true, force: true }) } catch { /* ignore */ }
+    await removeProfileDir(USER_DATA)
   }
   console.log(`\n结果：${report.checks.filter((c) => c.ok).length} 通过，${report.checks.filter((c) => !c.ok).length} 失败`)
   if (!report.ok && consoleLines.length > 0) console.log('CONSOLE ' + JSON.stringify(consoleLines.slice(0, 20), null, 2))

@@ -10,11 +10,36 @@ import os from 'node:os'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { withLock } from '../lib/lock.js'
+import { withLock, touchLock } from '../lib/lock.js'
 
 function tmpRoot() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-memory-lock-'))
 }
+
+test('release does not delete a lock taken over by another owner (no double release)', () => {
+  const root = tmpRoot()
+  const lockPath = path.join(root, '.lock-owner')
+  withLock(lockPath, () => {
+    // 模拟临界区超时被另一进程抢占：锁目录被替换为别人 owner。
+    fs.rmSync(lockPath, { recursive: true, force: true })
+    fs.mkdirSync(lockPath)
+    fs.writeFileSync(path.join(lockPath, 'owner'), 'someone-else', 'utf8')
+  }, { timeoutMs: 500 })
+  assert.ok(fs.existsSync(lockPath), 'withLock must not delete another owner lock')
+})
+
+test('touchLock refreshes mtime so long critical sections are not stolen', () => {
+  const root = tmpRoot()
+  const lockPath = path.join(root, '.lock-heartbeat')
+  fs.mkdirSync(lockPath)
+  const old = new Date(Date.now() - 60_000)
+  fs.utimesSync(lockPath, old, old)
+  const before = fs.statSync(lockPath).mtimeMs
+  assert.equal(touchLock(lockPath), true)
+  const after = fs.statSync(lockPath).mtimeMs
+  assert.ok(after > before, `${after} should be newer than ${before}`)
+  assert.equal(touchLock(path.join(root, '.missing-lock')), false)
+})
 
 test('future-mtime stale lock self-heals (clock skew)', () => {
   const root = tmpRoot()
