@@ -8,7 +8,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import helpers from '../client/client.js'
 
-const { validateDraft, groupEntries, nextToken, entriesParams, buildEntriesQuery, workspaceOptions, errorKeyFor, shouldQueueToast, partitionSettled, parseTags, unwrapResult, settingsStatusNext, savedToastKey, exportParams, defaultViewSelection, sectionCountsExact, chunkEntries, chunkEntriesPreservingLinks, aggregateImportPlans, parseImportText, validateImportDoc, importSummary, pageSlice, entryDetailRows, relativeTime, formatBytes, isExpired, statusOf, originOf, statusQueryFlags } = helpers
+const { validateDraft, groupEntries, nextToken, entriesParams, buildEntriesQuery, workspaceOptions, errorKeyFor, shouldQueueToast, partitionSettled, parseTags, unwrapResult, settingsStatusNext, savedToastKey, exportParams, defaultViewSelection, sectionCountsExact, chunkEntries, chunkEntriesPreservingLinks, aggregateImportPlans, shouldFocusToastAction, categoryChipCount, importRejectText, parseImportText, validateImportDoc, importSummary, pageSlice, entryDetailRows, relativeTime, formatBytes, isExpired, statusOf, originOf, statusQueryFlags } = helpers
 
 test('validateDraft accepts a complete draft and rejects bad ones', () => {
   assert.deepEqual(validateDraft({ content: '一条事实', category: 'fact' }), { ok: true })
@@ -241,6 +241,39 @@ test('chunkEntries splits import payloads into bounded atomic batches', () => {
   assert.equal(chunks[0].length, 300)
   assert.equal(chunks[1].length, 20)
   assert.equal(chunkEntries(items, 0).length, 320, 'invalid size falls back to 1 per chunk')
+})
+
+test('importRejectText localizes known codes and falls back for unknown ones', () => {
+  const dict = { errSecret: '机密', errInvalid: '无效' }
+  const t = (key) => dict[key] ?? key
+  assert.equal(importRejectText({ code: 'secret', reason: '中文 / English' }, t), '机密')
+  assert.equal(importRejectText({ code: 'invalid' }, t), '无效')
+  assert.equal(importRejectText({ code: 'weird', reason: 'unknown reason' }, t), 'unknown reason')
+  assert.equal(importRejectText({}, t), '')
+})
+
+test('shouldFocusToastAction only takes focus when the user lost it', () => {
+  assert.equal(shouldFocusToastAction({}), true)
+  assert.equal(shouldFocusToastAction({ isBody: true }), true)
+  assert.equal(shouldFocusToastAction({ isConnected: false }), true)
+  assert.equal(shouldFocusToastAction({ isPage: true, isConnected: true }), true)
+  assert.equal(shouldFocusToastAction({ inCard: true, isConnected: true, tagName: 'BUTTON' }), true)
+  // 输入中/有弹窗/其它控件上不抢焦点（排队撤销吐司展示时会打断输入，回车可能误触）。
+  assert.equal(shouldFocusToastAction({ hasModal: true, isBody: true }), false)
+  assert.equal(shouldFocusToastAction({ tagName: 'INPUT', isConnected: true }), false)
+  assert.equal(shouldFocusToastAction({ tagName: 'TEXTAREA', isConnected: true }), false)
+  assert.equal(shouldFocusToastAction({ tagName: 'SELECT', isConnected: true }), false)
+  assert.equal(shouldFocusToastAction({ isContentEditable: true, isConnected: true, tagName: 'DIV' }), false)
+  assert.equal(shouldFocusToastAction({ tagName: 'BUTTON', isConnected: true }), false)
+})
+
+test('categoryChipCount hides misleading zero counts while category-filtered', () => {
+  const stats = { byCategory: { preference: 2, fact: 5, decision: 1 } }
+  assert.equal(categoryChipCount(stats, 'fact', ''), 5)
+  assert.equal(categoryChipCount(stats, 'fact', 'fact'), 5)
+  assert.equal(categoryChipCount(stats, 'preference', 'fact'), undefined, 'other categories hidden, not "0"')
+  assert.equal(categoryChipCount(null, 'fact', ''), null)
+  assert.equal(categoryChipCount({}, 'fact', ''), null)
 })
 
 test('aggregateImportPlans sums sharded dry-run previews', () => {

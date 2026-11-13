@@ -596,6 +596,48 @@ async function main() {
       })()`)
       check('分类 radiogroup 方向键切换且焦点跟随', catBefore !== null && catAfter.checked === (catBefore.current + 1) % 3 && catAfter.focused === catAfter.checked, JSON.stringify({ catBefore, catAfter }))
       check('分类 radiogroup roving tabIndex', catAfter.tabIndexes.filter((v) => v === '0').length === 1, JSON.stringify(catAfter.tabIndexes))
+      // 0.24.32：按分类筛选时 byCategory 是过滤后分布，其它分类 chip 不能显示误导性的 0。
+      const categoryChipClicked = await evaluate(`(() => {
+        const chips = [...document.querySelectorAll('.dm_chips:not(.dm_chips_status) .dm_chip')]
+        const target = chips.find((c) => c.getAttribute('aria-pressed') === 'false')
+        if (target) target.click()
+        return Boolean(target)
+      })()`)
+      await sleep(1100)
+      const catChipState = await evaluate(`(() => [...document.querySelectorAll('.dm_chips:not(.dm_chips_status) .dm_chip')].map((c) => ({ pressed: c.getAttribute('aria-pressed'), nums: c.querySelectorAll('.dm_chip_n').length })))()`)
+      check('分类筛选时其它分类隐藏 0 计数', categoryChipClicked && catChipState.filter((c) => c.nums > 0).length === 2, JSON.stringify(catChipState))
+      await evaluate(`(() => { const first = document.querySelector('.dm_chips:not(.dm_chips_status) .dm_chip'); if (first) first.click(); return Boolean(first) })()`)
+      await sleep(600)
+      // 1c-2) 筛选无结果 → 清除筛选：按钮自身随分支卸载，焦点必须回面板容器（0.24.32）。
+      await evaluate(`(() => {
+        const el = document.querySelector('input.dm_search')
+        if (!el) return false
+        Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(el, '__gui_no_match__')
+        el.dispatchEvent(new Event('input', { bubbles: true }))
+        return true
+      })()`)
+      await sleep(1200)
+      let clearBtnClicked = ''
+      for (let i = 0; i < 10; i += 1) {
+        const clicked = await evaluate(`(() => {
+          const btn = [...document.querySelectorAll('.dm_empty button')].find((b) => /清除筛选|Clear filters/.test((b.textContent || '').trim()))
+          if (btn) btn.click()
+          return btn ? (btn.textContent || '').trim() : ''
+        })()`)
+        if (clicked) { clearBtnClicked = clicked; break }
+        await sleep(300)
+      }
+      await sleep(600)
+      const clearFocus = await evaluate(`(() => { const a = document.activeElement; return { cls: a ? (a.className || a.tagName) : null, inPage: !!(a && a.classList && a.classList.contains('dm_page')) } })()`)
+      check('清除筛选后焦点回面板容器', Boolean(clearBtnClicked) && clearFocus.inPage, JSON.stringify({ clearBtnClicked, clearFocus }))
+      await evaluate(`(() => {
+        const el = document.querySelector('input.dm_search')
+        if (!el) return false
+        Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(el, '')
+        el.dispatchEvent(new Event('input', { bubbles: true }))
+        return true
+      })()`)
+      await sleep(800)
       // 1d) 标签：去重 + 12 个上限计数/提示（客户端与服务端同口径）
       await evaluate(`(() => {
         const input = document.querySelector('#dm-tags')
@@ -1095,6 +1137,58 @@ async function main() {
       const revivedEntry = (revivedList?.entries || []).find((e) => e.id === reviveBase.id)
       check('再次保存同内容显示「已恢复为活跃」', scopeSelected && globalPicked && /恢复|Restored/.test(reviveToast), reviveToast)
       check('复活后条目回到活跃且 id 不变', Boolean(revivedEntry) && !revivedEntry.archived, JSON.stringify(revivedEntry && { id: revivedEntry.id, archived: revivedEntry.archived }))
+      // 0.24.32：dataVersion 正向断言——归档/撤销归档各触发一次召回预览刷新。
+      await setInput('input.dm_search', `${marker2} 复活条目`)
+      await sleep(1400)
+      const recBeforeArchive = requests.filter((u) => u.includes('/recall-preview')).length
+      const archiveClicked = await evaluate(`(() => {
+        const btn = [...document.querySelectorAll('.dm_card_actions button')].find((b) => /归档|Archive/.test((b.textContent || '').trim()))
+        if (btn) btn.click()
+        return Boolean(btn)
+      })()`)
+      await sleep(1800)
+      const recAfterArchive = requests.filter((u) => u.includes('/recall-preview')).length
+      check('归档成功后召回预览刷新一次', archiveClicked && recAfterArchive - recBeforeArchive === 1, `${recBeforeArchive} -> ${recAfterArchive}`)
+      const undoClicked = await evaluate(`(() => { const btn = document.querySelector('.dm_toast button'); if (btn) btn.click(); return Boolean(btn) })()`)
+      await sleep(1800)
+      const recAfterUndo = requests.filter((u) => u.includes('/recall-preview')).length
+      check('撤销归档后召回预览再刷新一次', undoClicked && recAfterUndo - recAfterArchive === 1, `${recAfterArchive} -> ${recAfterUndo}`)
+      // 0.24.32：归档撤销在「列表刷新 busy 窗口」内也必须生效（toast 不应静默失效）。
+      await send('Network.emulateNetworkConditions', { offline: false, latency: 1500, downloadThroughput: -1, uploadThroughput: -1 })
+      const archiveAgain = await evaluate(`(() => {
+        const btn = [...document.querySelectorAll('.dm_card_actions button')].find((b) => /归档|Archive/.test((b.textContent || '').trim()))
+        if (btn) btn.click()
+        return Boolean(btn)
+      })()`)
+      let toastUndoReady = false
+      let toastUndoText = ''
+      for (let i = 0; i < 16; i += 1) {
+        await sleep(500)
+        const state = await evaluate(`(() => {
+          const toast = [...document.querySelectorAll('.dm_toast')].find((el) => /归档|Archived/.test(el.innerText || ''))
+          return toast ? { text: toast.innerText, hasAction: Boolean(toast.querySelector('button.dm_toast_action')) } : null
+        })()`)
+        if (state && state.hasAction) { toastUndoReady = true; toastUndoText = state.text; break }
+      }
+      const busyUndoClicked = await evaluate(`(() => {
+        const toast = [...document.querySelectorAll('.dm_toast')].find((el) => /归档|Archived/.test(el.innerText || ''))
+        const btn = toast && toast.querySelector('button.dm_toast_action')
+        if (btn) btn.click()
+        return Boolean(btn)
+      })()`)
+      await sleep(6500)
+      await send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 })
+      await sleep(700)
+      // 等页面从慢网络/在途刷新彻底 idle：否则后续用例在 busy 守卫下会连锁假失败。
+      for (let i = 0; i < 30; i += 1) {
+        const busyNow = await evaluate(`document.querySelector('[aria-busy="true"]') !== null`)
+        if (!busyNow) break
+        await sleep(300)
+      }
+      await sleep(600)
+      const busyUndoList = await apiJson(`/entries?query=${encodeURIComponent(`${marker2} 复活条目`)}&scope=global&include_superseded=true&include_expired=true&include_archived=true`)
+      const busyUndoEntry = (busyUndoList?.entries || []).find((e) => e.id === revivedEntry?.id)
+      check('归档撤销在刷新 busy 窗口内不被丢弃', archiveAgain && toastUndoReady && busyUndoClicked && Boolean(busyUndoEntry) && !busyUndoEntry.archived, JSON.stringify({ archived: busyUndoEntry?.archived, toastUndoText, updates: requests.filter((u) => u.includes('/update')).slice(-3) }))
       // 3. busy 期间卡片操作按钮禁用 + 列表 aria-busy
       await setInput('input.dm_search', marker2)
       await sleep(1200)

@@ -182,17 +182,21 @@ dreaming/后台 LLM 提取、向量/图检索、完整 bi-temporal 四时间戳�
 - [ ] **moveEntry 无回滚**：新文件写成后旧文件删除失败 → 同 id 双作用域并存。方案：删旧失败则回滚新文件并抛 io。
 - [ ] **withLock 陈旧自愈 check-then-rm 双持有**：两个等待者同时判陈旧时可在 stat→rm 窗口双持有。方案：rename 原子认领（失败者重试），或 rm 前紧邻二次 stat+owner 复核。
 - [ ] **settings 锁争用映射**：POST /settings 争用 500 internal、/settings/reset 吞超时仍 200。方案：转 code=busy（503），reset 不吞错。
-- [ ] **面板归档撤销在 busy 窗口被静默丢弃**（toast 已消失、归档仍生效）。方案：撤销类动作加 force/排队到 busy→false。
-- [ ] **分类 chip 计数失真**：选中分类后其它分类显示 0（byCategory 在分类过滤后聚合）。方案：筛选时隐藏分类数字或另取未过滤快照。
+- [x] **面板归档撤销在 busy 窗口被静默丢弃**（0.24.32：撤销类动作 `quickUpdate({force:true})` 绕过 busy 守卫；GUI 用 1.5s 延迟注入「归档→toast 出现→刷新 busy 中撤销」断言最终未归档）。
+- [x] **分类 chip 计数失真**（0.24.32：`categoryChipCount` 在分类筛选时隐藏其它分类数字，仅保留「全部」与当前分类；GUI 断言筛选后只有 2 个数字）。
 - [ ] **分片导入不可取消**：busy 时 Esc/遮罩/取消全禁，单片挂起最长 180s。方案：停止按钮 + 当前片结算后跳出。
-- [ ] **撤销 toast 无条件抢焦点**：排队撤销 toast 展示时会打断输入框，回车可能误触撤销。方案：shouldFocusToastAction 纯函数（焦点已丢失且无弹窗才接管）。
-- [ ] **空态/错误态按钮卸载后焦点掉 body**：清除筛选/重试四处。方案：统一 focusPage()。
-- [ ] **dataVersion 写路径缺正向断言**：只有「不刷新」负例。方案：GUI/单测断言保存/删除/撤销/导入/取代各 +1、失败不 +1。
+- [x] **撤销 toast 无条件抢焦点**（0.24.32：`shouldFocusToastAction` 纯函数——仅焦点已丢失/卡片动作按钮/面板容器时接管，输入框/可编辑区/有弹窗时不抢；单测覆盖 9 种描述符）。
+- [x] **空态/错误态按钮卸载后焦点掉 body**（0.24.32：`focusPage()` 用于清除筛选、列表/面板/设置重试；GUI 断言清除筛选后焦点回 `.dm_page`）。
+- [x] **dataVersion 写路径缺正向断言**（0.24.32：GUI 断言归档成功→召回预览 +1、撤销归档→再 +1；失败路径沿用「不刷新」语义）。
+- [ ] **dataVersion 失败路径正向断言**：保存/删除失败时不得 +1（低优先，当前负例覆盖主要回归面）。
+- [x] **撤销 toast 无条件抢焦点**（0.24.32：见上，已修）。
+- [x] **空态/错误态按钮卸载后焦点掉 body**（0.24.32：见上，已修）。
+- [x] **dataVersion 写路径缺正向断言**（0.24.32：见上，已修）。
 - [ ] **分片导入失败/重试路径无自动化覆盖**。方案：mock fetch 第 2 片 500 → 提示已写入 d/t、重试不重复、最终全落盘。
 
 #### P3
 - [ ] **Windows 大小写不敏感 id 冲突**：同批 m-X/m-x 报 2 条实存 1 条。方案：占用集合按 toLowerCase 建键。
-- [ ] **i18n 错误拼接写死中文「：」、服务端 rejected.reason 双语直出**。方案：errorJoiner + code→错误键映射。
+- [x] **i18n 错误拼接写死中文「：」、服务端 rejected.reason 双语直出**（0.24.32：`errJoin` 中英键替代硬编码冒号；导入拒绝项 `importRejectText` 已知 code 走本地化、未知才回退服务端 reason）。
 - [ ] **导出/备份沿用 15s 超时**（大库可能误报超时且备份已成功）。方案：export/backup 独立 timeout（如 120s）+ 进行中文案。
 - [ ] **engines.dsh 严格 semver 不满足预发布宿主**（0.2.2-alpha.3）。方案：改 `>=0.2.0-0` 或 README 注明 includePrerelease 语义。
 - [ ] **设置重载与在途保存**：reset 不等待 in-flight save（窄窗口），可持 in-flight promise 串行化。

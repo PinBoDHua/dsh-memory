@@ -160,6 +160,16 @@
     return options
   }
 
+  /** 导入拒绝项展示：已知错误码走本地化文案，未知才回退服务端双语 reason。 */
+  function importRejectText(rejected, t) {
+    var r = rejected || {}
+    var key = errorKeyFor(r)
+    if (key) {
+      try { return t(key) } catch { /* fall through */ }
+    }
+    return String(r.reason || r.code || '')
+  }
+
   function errorKeyFor(err) {
     if (!err) return null
     var code = err.code
@@ -398,7 +408,32 @@ function settingsStatusNext(status, event) {
     return totals
   }
 
-  function pageSlice(entries, size) {
+  /**
+ * 带撤销按钮的吐司展示时是否应接管焦点：只在焦点已丢失（body/面板容器/已卸载节点）
+ * 且无弹窗时接管。用户正在输入框/下拉/可编辑区时不得抢焦点——排队撤销吐司延迟出现
+ * 时抢焦点会打断输入，回车还可能误触一次真实写操作。
+ */
+function shouldFocusToastAction(info) {
+  var i = info || {}
+  if (i.hasModal) return false
+  if (i.isBody || !i.isConnected) return true
+  if (i.inCard) return true // 卡片上的归档/钉选按钮刷新后会卸载，接管到撤销按钮是安全且必要的
+  var tag = String(i.tagName || '').toLowerCase()
+  if (tag === 'input' || tag === 'textarea' || tag === 'select' || i.isContentEditable) return false
+  return i.isPage === true
+}
+
+/**
+ * 分类 chip 数字：按分类筛选时 byCategory 是「过滤后」的分布，其它分类恒为 0，
+ * 会被读成「库里没有这类记忆」。筛选态只在当前选中的分类 chip 上显示数字。
+ */
+function categoryChipCount(stats, category, categoryFilter) {
+  if (!stats || !stats.byCategory) return null
+  if (categoryFilter && categoryFilter !== category) return undefined // 隐藏
+  return Number(stats.byCategory[category]) || 0
+}
+
+function pageSlice(entries, size) {
     var list = Array.isArray(entries) ? entries : []
     var n = Math.max(1, Number(size) || 1)
     return { items: list.slice(0, n), hasMore: list.length > n }
@@ -446,7 +481,7 @@ function settingsStatusNext(status, event) {
     return (mb < 10 ? mb.toFixed(1) : Math.round(mb)) + ' MB'
   }
 
-  var helpers = { validateDraft: validateDraft, groupEntries: groupEntries, nextToken: nextToken, entriesParams: entriesParams, buildEntriesQuery: buildEntriesQuery, workspaceOptions: workspaceOptions, errorKeyFor: errorKeyFor, shouldQueueToast: shouldQueueToast, partitionSettled: partitionSettled, parseTags: parseTags, unwrapResult: unwrapResult, settingsStatusNext: settingsStatusNext, savedToastKey: savedToastKey, exportParams: exportParams, defaultViewSelection: defaultViewSelection, sectionCountsExact: sectionCountsExact, chunkEntries: chunkEntries, chunkEntriesPreservingLinks: chunkEntriesPreservingLinks, parseImportText: parseImportText, validateImportDoc: validateImportDoc, importSummary: importSummary, aggregateImportPlans: aggregateImportPlans, pageSlice: pageSlice, entryDetailRows: entryDetailRows, relativeTime: relativeTime, formatBytes: formatBytes, isExpired: isExpired, statusOf: statusOf, originOf: originOf, statusQueryFlags: statusQueryFlags }
+  var helpers = { validateDraft: validateDraft, groupEntries: groupEntries, nextToken: nextToken, entriesParams: entriesParams, buildEntriesQuery: buildEntriesQuery, workspaceOptions: workspaceOptions, errorKeyFor: errorKeyFor, shouldQueueToast: shouldQueueToast, partitionSettled: partitionSettled, parseTags: parseTags, unwrapResult: unwrapResult, settingsStatusNext: settingsStatusNext, savedToastKey: savedToastKey, exportParams: exportParams, defaultViewSelection: defaultViewSelection, sectionCountsExact: sectionCountsExact, chunkEntries: chunkEntries, chunkEntriesPreservingLinks: chunkEntriesPreservingLinks, parseImportText: parseImportText, validateImportDoc: validateImportDoc, importSummary: importSummary, aggregateImportPlans: aggregateImportPlans, shouldFocusToastAction: shouldFocusToastAction, categoryChipCount: categoryChipCount, importRejectText: importRejectText, pageSlice: pageSlice, entryDetailRows: entryDetailRows, relativeTime: relativeTime, formatBytes: formatBytes, isExpired: isExpired, statusOf: statusOf, originOf: originOf, statusQueryFlags: statusQueryFlags }
 
   // ===== node 测试导出（CJS） =====
   if (typeof module !== 'undefined' && module.exports) {
@@ -554,6 +589,7 @@ function newImportRunId() {
     errInvalidJson: '请求数据无效',
     errBodyTooLarge: '文件过大（超过 32 MB），请拆分后导入',
     errInternal: '操作失败，请稍后重试',
+    errJoin: '：',
     errRefreshed: '凭证已刷新，请重试',
     errTimeout: '请求超时，请重试',
     errNetwork: '网络异常，请检查连接后重试',
@@ -780,6 +816,7 @@ function newImportRunId() {
     errInvalidJson: 'Invalid request data',
     errBodyTooLarge: 'File too large (over 32 MB); split it before importing',
     errInternal: 'Operation failed; please retry',
+    errJoin: ': ',
     errRefreshed: 'Credentials refreshed; please retry',
     errTimeout: 'Request timed out; please retry',
     errNetwork: 'Network error; check your connection and retry',
@@ -1784,7 +1821,7 @@ function newImportRunId() {
               t('importRejHint'),
               h('ul', { style: { margin: '4px 0 0', paddingLeft: 18 } },
                 rejected.slice(0, 5).map(function (r, i) {
-                  return h('li', { key: i }, '#' + (r.index + 1) + ' ' + String(r.reason || r.code || ''))
+                  return h('li', { key: i }, '#' + (r.index + 1) + ' ' + importRejectText(r, t))
                 }),
                 rejected.length > 5 ? h('li', { key: 'more' }, '… +' + (rejected.length - 5)) : null))
             : null,
@@ -2393,9 +2430,20 @@ function newImportRunId() {
         // 带操作按钮的吐司（删除撤销）出现时把焦点移到动作按钮：确认删除后原触发按钮
 // 已随卡片卸载，不主动接管焦点的话键盘用户既丢失上下文、也无法到达撤销。
         useEffect(function () {
-          if (toast && toast.action && toastActionRef.current) {
-            try { toastActionRef.current.focus() } catch { /* 焦点接管失败不影响功能 */ }
+          if (!toast || !toast.action || !toastActionRef.current) return
+          var active = typeof document !== 'undefined' ? document.activeElement : null
+          var descriptor = {
+            hasModal: !!(typeof document !== 'undefined' && document.querySelector('.dm_dialog')),
+            isBody: !active || active === document.body,
+            isConnected: !!(active && active.isConnected),
+            tagName: active ? active.tagName : '',
+            isContentEditable: !!(active && active.isContentEditable),
+            isPage: !!(active && active.classList && active.classList.contains('dm_page')),
+            inCard: !!(active && active.closest && active.closest('.dm_card')),
           }
+          // 0.24.32：仅在焦点已丢失时接管，避免打断输入/被键盘回车误触撤销。
+          if (!shouldFocusToastAction(descriptor)) return
+          try { toastActionRef.current.focus() } catch { /* 焦点接管失败不影响功能 */ }
         }, [toast])
 
         function dismissToast() {
@@ -2730,11 +2778,16 @@ function newImportRunId() {
           setQuery('')
           setPage(0)
           setSelected([])
+          resetListScroll()
         }
         function changeStatus(value) { setStatusFilter(value); setPage(0); setSelected([]); resetListScroll() }
-        function clearAllFilters() { setQuery(''); setCategoryFilter(''); setOriginFilter(''); setTagFilter(''); setStatusFilter('active'); setPage(0); setSelected([]); resetListScroll() }
+        function focusPage() {
+          // 空态/错误态按钮触发后自身随分支卸载：焦点回面板容器，键盘用户不必从页首重来。
+          if (pageRef.current) { try { pageRef.current.focus() } catch { /* ignore */ } }
+        }
+        function clearAllFilters() { setQuery(''); setCategoryFilter(''); setOriginFilter(''); setTagFilter(''); setStatusFilter('active'); setPage(0); setSelected([]); resetListScroll(); focusPage() }
         // 被取代条目的「查看后继」：按 id 搜索（host query 匹配 id），回到活跃视图。
-        function jumpToEntry(id) { setStatusFilter('all'); setOriginFilter(''); setCategoryFilter(''); setTagFilter(''); setPage(0); setSelected([]); setQuery(String(id || '')) }
+        function jumpToEntry(id) { setStatusFilter('all'); setOriginFilter(''); setCategoryFilter(''); setTagFilter(''); setPage(0); setSelected([]); setQuery(String(id || '')); resetListScroll() }
         function changePage(value) { setPage(value); setSelected([]); resetListScroll() }
         function toggleSelect(id) {
           setSelected(function (prev) { return prev.indexOf(id) === -1 ? prev.concat([id]) : prev.filter(function (x) { return x !== id }) })
@@ -2765,14 +2818,15 @@ function newImportRunId() {
         }
 
         // 钉选/归档快捷操作：POST update 单字段 → 刷新；归档吐司复用撤销基建。
-        function quickUpdate(entry, patch, okKey, action) {
-          if (busy) return
-          setBusy(true)
+        function quickUpdate(entry, patch, okKey, action, opts) {
+          var forced = !!(opts && opts.force)
+          if (busy && !forced) return
+          if (!forced) setBusy(true)
           api.update(Object.assign({ id: entry.id, workspace: entry.scope === 'workspace' ? workspaceTarget : undefined }, patch)).then(function () {
             bumpDataVersion()
             showToast('ok', t(okKey), action)
             return refreshRef.current()
-          }).catch(writeFailure).then(function () { setBusy(false) })
+          }).catch(writeFailure).then(function () { if (!forced) setBusy(false) })
         }
         function togglePin(entry) {
           quickUpdate(entry, { pinned: !entry.pinned }, entry.pinned ? 'unpinnedMsg' : 'pinnedMsg')
@@ -2781,7 +2835,8 @@ function newImportRunId() {
           var restoring = !!entry.archived
           quickUpdate(entry, { archived: !restoring }, restoring ? 'restoredMsg' : 'archivedMsg', restoring ? undefined : {
             label: t('undo'),
-            run: function () { quickUpdate(entry, { archived: false }, 'restoredMsg') },
+            // 撤销不能被列表刷新期间的 busy 守卫静默丢弃（toast 已消失但归档仍生效）。
+            run: function () { quickUpdate(entry, { archived: false }, 'restoredMsg', undefined, { force: true }) },
           })
         }
 
@@ -2878,13 +2933,13 @@ function newImportRunId() {
               var text = outcome.ok.length === 1 ? t('deleted') : t('deletedN').replace('{n}', String(outcome.ok.length))
               var action = { label: t('undo'), run: function () { restoreEntries(outcome.ok, wsTarget) } }
               if (outcome.failed.length > 0) {
-                text = t('deletedPartial').replace('{n}', String(outcome.ok.length)).replace('{m}', String(outcome.failed.length)) + '：' + errorText(outcome.failed[0].error, t)
+                text = t('deletedPartial').replace('{n}', String(outcome.ok.length)).replace('{m}', String(outcome.failed.length)) + t('errJoin') + errorText(outcome.failed[0].error, t)
                 showToast('error', text, action)
               } else {
                 showToast('ok', text, action)
               }
             } else if (outcome.failed.length > 0) {
-              showToast('error', t('deleteFailed') + '：' + errorText(outcome.failed[0].error, t))
+              showToast('error', t('deleteFailed') + t('errJoin') + errorText(outcome.failed[0].error, t))
             }
             return refreshRef.current()
           }).then(function () {
@@ -3020,7 +3075,7 @@ function newImportRunId() {
             // 分片导入中途失败：已提交的片是完整的；保留弹窗，用户可用同一 runId 重试，
             // 已成功的片由服务端幂等回执直接返回、不会二次写盘。
             if (written > 0) bumpDataVersion()
-            var text = t('importPartialFail').replace('{d}', String(written)).replace('{t}', String(entries.length)) + '：' + errorText(err, t)
+            var text = t('importPartialFail').replace('{d}', String(written)).replace('{t}', String(entries.length)) + t('errJoin') + errorText(err, t)
             showToast('error', text)
             setImportProgress(null)
             return refreshRef.current()
@@ -3086,12 +3141,13 @@ function newImportRunId() {
                 }, h(Icon, { name: 'layers', size: 13 }), t('categoryAll'), h('span', { className: 'dm_chip_n' }, total === null ? '…' : String(total))),
                 cats.map(function (cat) {
                   var meta = CATEGORY_META[cat]
+                  var n = categoryChipCount(stats, cat, categoryFilter)
                   return h('button', {
                     key: cat, className: 'dm_chip', 'aria-pressed': categoryFilter === cat,
                     style: { '--dm-chip-c': meta.cat, '--dm-chip-soft': meta.soft },
                     onClick: function () { changeCategory(categoryFilter === cat ? '' : cat) },
                   }, h(Icon, { name: meta.icon, size: 13, strokeWidth: 2 }), t(meta.label),
-                    h('span', { className: 'dm_chip_n' }, stats ? String(stats.byCategory[cat] || 0) : '…'))
+                    n === undefined ? null : h('span', { className: 'dm_chip_n' }, n === null ? '…' : String(n)))
                 })),
               h('div', { className: 'dm_chips dm_chips_status', role: 'group', 'aria-label': t('statusFilterLabel') },
                 STATUS_CHIPS.map(function (s) {
@@ -3127,7 +3183,7 @@ function newImportRunId() {
             return h('div', { className: 'dm_empty' },
               h(Icon, { name: 'alert', size: 28, style: { color: 'var(--dm-danger)', marginBottom: 10 } }),
               h('div', null, t('listError') + ': ' + listError),
-              h('button', { className: 'dm_btn', style: { marginTop: 12 }, onClick: function () { refreshEntries() } }, h(Icon, { name: 'undo', size: 13 }), t('retry')))
+              h('button', { className: 'dm_btn', style: { marginTop: 12 }, onClick: function () { focusPage(); refreshEntries() } }, h(Icon, { name: 'undo', size: 13 }), t('retry')))
           }
           if (entries.length === 0) {
             // 空态区分「筛选无结果 / 某工作区为空 / 整库为空」，避免切到空工作区误报「记忆库还是空的」。
@@ -3254,12 +3310,12 @@ function newImportRunId() {
                 : phase === 'error' ? h('div', { className: 'dm_empty' },
                   h(Icon, { name: 'alert', size: 28, style: { color: 'var(--dm-danger)', marginBottom: 10 } }),
                   h('div', null, t('loadError') + ': ' + errorTextState),
-                  h('button', { className: 'dm_btn', style: { marginTop: 12 }, onClick: function () { loadInitial() } }, h(Icon, { name: 'undo', size: 13 }), t('retry')))
+                  h('button', { className: 'dm_btn', style: { marginTop: 12 }, onClick: function () { focusPage(); loadInitial() } }, h(Icon, { name: 'undo', size: 13 }), t('retry')))
                   : renderList()),
           h('div', { id: 'dm-panel-settings', role: 'tabpanel', 'aria-labelledby': 'dm-tab-settings', hidden: tab !== 'settings' },
             h(SettingsPage, {
               view: settings, draft: draft, busy: busy, status: settingsStatus, t: t, api: api, workspace: currentCwd, active: tab === 'settings',
-              error: settingsError, onRetry: loadSettings, onRetrySave: retrySaveSettings,
+              error: settingsError, onRetry: function () { focusPage(); loadSettings() }, onRetrySave: retrySaveSettings,
               onChange: changeSetting, onReset: resetSettings, onBackup: backupNow,
               onToast: function (text, kind) { showToast(kind, text) },
             })),

@@ -3,6 +3,20 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.24.32] - 2026-11-13
+
+### 修复 Fixed（第五轮面板审计 P2 收尾）
+- **归档撤销在刷新 busy 窗口内生效**：撤销类动作走 `quickUpdate(..., {force:true})` 绕过 busy 守卫；此前 toast 已消失但归档仍生效，安全网静默失效（GUI 用 1.5s 延迟注入「归档→toast→刷新中撤销」验证最终恢复活跃）。
+- **分类 chip 不再显示误导性 0**：`categoryChipCount` 在分类筛选时隐藏其它分类数字（byCategory 是过滤后分布，原会读成「库里没有这类记忆」），只保留「全部」与当前分类；GUI 断言筛选后仅 2 个数字。
+- **撤销 toast 不再无条件抢焦点**：`shouldFocusToastAction` 纯函数——仅焦点已丢失（body/已卸载节点）、面板容器或卡片动作按钮（刷新后会卸载）时接管；用户正在输入框/可编辑区或有弹窗时不抢，避免排队撤销 toast 打断输入、回车误触撤销。
+- **空态/错误态按钮卸载后焦点不再掉 body**：统一 `focusPage()` 用于清除筛选、列表错误重试、面板加载重试、设置加载重试；GUI 断言清除筛选后焦点回面板容器。
+- **i18n 错误拼接**：新增 `errJoin`（中英）替换硬编码全角冒号；导入拒绝项改用 `importRejectText`，已知错误码走本地化文案，未知才回退服务端 reason（英文界面不再出现中文句子）。
+- **dataVersion 正向断言**：GUI 断言归档成功 → 召回预览 +1、撤销归档 → 再 +1。
+- 其它：标签/「查看后继」导航补 `resetListScroll()`（与导航回顶部约定一致）。
+
+### 验证证据
+- 单元 **317/317**；live **192/192**；真实 GUI **89/89**（连续两轮通过）；数据根快照一致、零残留。
+
 ## [0.24.31] - 2026-11-13
 
 ### 新增 Added（第五轮运维审计 P1：验证脚本强杀残留）
