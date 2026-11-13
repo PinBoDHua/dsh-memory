@@ -3,6 +3,15 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.14.0] - 2026-11-13
+
+### 新增 Added
+- **注入召回预览**：设置页「注入与召回」组新增「召回预览」块，展示当前设置下实际注入条数、未注入条数、占用字符/预算，以及注入条目清单（分类色标＋内容截断，最多 30 条）；「刷新」按钮按需重算（反映已保存设置），自动注入关闭时标注「开启时预览」。调预算不再凭空想象。
+- 新路由 `GET /recall-preview`（workspace 参数）；`service.recallPreview()`。
+
+### 变更 Changed
+- `render.js` 提取纯函数 `selectInjection(entries,{budgetChars,decayEnabled,now})→{selected,omitted,usedChars}`，`renderSection` 改为基于它装配（输出完全等价，既有行为测试守护）；渲染与预览共用同一选择逻辑，杜绝口径漂移。
+
 ## [0.13.0] - 2026-11-13
 
 ### 变更 Changed
@@ -180,6 +189,7 @@ All notable changes to this project are documented here. Format follows Keep a C
 - 系统提示注入：指引＋字符预算内召回（`interpolate: false` 保护用户内容）。
 - 隐私护栏：密码/密钥/token 规则检测硬拒写。
 
+[0.14.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.10.0...v0.11.0

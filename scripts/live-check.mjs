@@ -60,11 +60,11 @@ async function main() {
 
   // 1. status：版本与 schema
   let token = ''
-  await check('status 报告 version=0.13.0 / schemaVersion=2 并下发 token', async () => {
+  await check('status 报告 version=0.14.0 / schemaVersion=2 并下发 token', async () => {
     const { status, json } = await req('GET', '/status')
     ok('status HTTP 200', status === 200, `got ${status}`)
     ok('status.ok', json?.ok === true)
-    ok('version === 0.13.0', json?.version === '0.13.0', `got ${json?.version}`)
+    ok('version === 0.14.0', json?.version === '0.14.0', `got ${json?.version}`)
     ok('schemaVersion === 2', json?.schemaVersion === 2, `got ${json?.schemaVersion}`)
     ok('token 非空', typeof json?.key === 'string' && json.key.length > 0)
     token = json?.key ?? ''
@@ -157,6 +157,14 @@ async function main() {
     ok('stats.byStatus 存在', json?.stats?.byStatus && typeof json.stats.byStatus.active === 'number')
   })
 
+  await check('GET /recall-preview 召回预览（0.14.0）', async () => {
+    const rp = await req('GET', '/recall-preview')
+    ok('recall-preview HTTP 200', rp.status === 200, `got ${rp.status}`)
+    const d = rp.json
+    ok('recall-preview 字段齐全', typeof d?.injected === 'number' && typeof d?.omitted === 'number' && typeof d?.usedChars === 'number' && typeof d?.budgetChars === 'number' && Array.isArray(d?.entries))
+    ok('recall-preview injected===entries.length', d?.injected === d?.entries?.length)
+  })
+
   // 4. settings：toggle 到反值验证后还原原值（GET 无 {result} 包裹；绝不 reset）
   await check('settings 新键 toggle 后还原', async () => {
     const before = await req('GET', '/settings')
@@ -195,6 +203,7 @@ async function main() {
     ok('bundle 含 0.10.0 新文案 显式要求/Requested', code.includes('显式要求') && code.includes('Requested'))
     ok('bundle 含 0.11.0 新文案 similarSaved', code.includes('similarSaved'))
     ok('bundle 含 0.12.0 新文案 auditTitle', code.includes('auditTitle'))
+    ok('bundle 含 0.14.0 新文案 recallTitle', code.includes('recallTitle'))
   })
 
   // 7. 清理测试条目

@@ -27,7 +27,7 @@ Cross-session long-term memory for DeepSeek Harness: durable user preferences, p
 - 视觉：「记忆星丛 Memory Atlas」——靛紫渐变主色＋分类三色（偏好琥珀/事实湛蓝/决策翡翠）＋玫红警示；环境光晕背景、品牌徽章、分类色轨卡片＋图标勋章、悬停浮起、入场级联动画、骨架屏、星座插画空态、吸顶毛玻璃工具栏、自定义滚动条；全部下拉为自定义无障碍 listbox（portal 浮层、图标＋选中勾、完整键盘导航），彻底主题化、无系统原生弹出层；深色跟随宿主 `body[data-ds-dark-theme]`，动效尊重 `prefers-reduced-motion`（并可在设置中关闭），窄屏响应式。
 - 记忆标签能力：作用域切换（全局＋当前工作区 / 仅全局 / 各已知工作区）、统计条（总数＋分类分布条＋计数筛选 chips＋全局/工作区计数）、关键词搜索（300ms 防抖、相关度排序、`/` 快捷聚焦、一键清空）、分页（每页条数可设 20/50/100）、新建/编辑（内容字数统计、分类单选卡片、标签、作用域、编辑含来源选择「显式要求/主动沉淀」、Ctrl/⌘+Enter 保存）、删除二次确认＋6 秒撤销（单条/批量，原样恢复 id/时间戳）、批量选择浮栏（Esc 清除）、标签点击直达搜索、相对时间（可设绝对时间，悬停见绝对时间）、条目详情（点击正文展开：创建/更新时间、来源会话、复制 id）、导出 JSON、导入（dry-run 预览瓦片＋确认）、相似记忆查重（扫描当前作用域活跃记忆两两相似度≥50%，相似对可「新取代旧」保留历史或「忽略」保留两条）、图标吐司（动作按钮＋倒计时进度条）。
 - 设置标签能力：见下「设置 Settings」。
-- 数据面：宿主 `webServer` 命名路由 `/plugins/dsh-memory/{status,entries,workspaces,cwd,stats,similar,export,settings,settings/reset,backup,save,update,forget,import}`，浏览器同源 fetch；进程级 token（status 下发），写操作校验 `X-RPC-Key`，全部路由仅回环可达。
+- 数据面：宿主 `webServer` 命名路由 `/plugins/dsh-memory/{status,entries,workspaces,cwd,stats,similar,recall-preview,export,settings,settings/reset,backup,save,update,forget,import}`，浏览器同源 fetch；进程级 token（status 下发），写操作校验 `X-RPC-Key`，全部路由仅回环可达。
 - 一个操作，两个调用方：面板与 agent 工具调用同一 `lib/service.js`，语义与失败原因完全一致。
 - 样式仅用 `--dsw-alias-*` 主题令牌，自动跟随亮/暗主题；文案中英双语（zh/en）。
 
@@ -101,7 +101,7 @@ global 条目的 `workspace` 为 `null`。导入保留原 id/时间戳/来源；
 | 组 | 字段 | 默认 | 说明 |
 |---|---|---|---|
 | 注入与召回 | `autoInject` | `true` | 是否把召回的记忆注入系统提示（关闭后工具仍可用）。 |
-| 注入与召回 | `injectionBudgetChars` | `6000` | 注入字符预算（0–20000）；按钉选最先→分类优先→类内衰减乘子装填，超出提示用 `memory_search`。 |
+| 注入与召回 | `injectionBudgetChars` | `6000` | 注入字符预算（0–20000）；按钉选最先→分类优先→类内衰减乘子装填，超出提示用 `memory_search`。设置页「召回预览」展示当前注入/未注入条数、占用字符与注入清单（`GET /recall-preview`，刷新按需重算）。 |
 | 注入与召回 | `autoExtractHint` | `true` | 自动提取动态提示：按会话活动量周期性提醒主 agent 沉淀记忆（零额外模型调用）。 |
 | 注入与召回 | `decayEnabled` | `true` | 软衰减排序：相关度×新近度乘子；关闭回退按更新时间排序。 |
 | 存储与备份 | `autoBackup` | `false` | 开启后每天自动导出全量到 `backups/`（启动 5 秒首检、每小时检查、距上次超 24h 才落盘）。 |

@@ -374,6 +374,12 @@
     autoInjectDesc: '装配系统提示时召回记忆（关闭后工具仍可用）',
     budgetLabel: '注入字符预算',
     budgetDesc: '超出预算的条目改用 memory_search 获取',
+    recallTitle: '召回预览',
+    recallRefresh: '刷新',
+    recallLoading: '加载中…',
+    recallHint: '反映已保存的设置；调整预算或开关后点「刷新」查看效果。',
+    recallSummary: '注入 {injected} 条 · 未注入 {omitted} 条 · 占用 {used}/{budget} 字符',
+    recallAutoOff: '（自动注入已关闭，以下为开启时的预览）',
     priorityNote: '注入顺序：钉选最先，其余 偏好 → 决策 → 事实（同级新者优先，软衰减影响排序）',
     privacyLabel: '机密拦截 · 始终启用',
     privacyDesc: '密码 / 密钥 / token 永不写入记忆，此护栏不可关闭。',
@@ -557,6 +563,12 @@
     autoInjectDesc: 'Recall memories when assembling the system prompt (tools still work when off)',
     budgetLabel: 'Injection character budget',
     budgetDesc: 'Entries beyond the budget stay reachable via memory_search',
+    recallTitle: 'Recall preview',
+    recallRefresh: 'Refresh',
+    recallLoading: 'Loading…',
+    recallHint: 'Reflects saved settings; click Refresh after changing the budget or toggles.',
+    recallSummary: '{injected} injected · {omitted} omitted · {used}/{budget} chars',
+    recallAutoOff: '(auto-inject is off; preview shown as if on)',
     priorityNote: 'Injection order: pinned first, then preference → decision → fact (newest first; soft decay affects ranking)',
     privacyLabel: 'Credential block · always on',
     privacyDesc: 'Passwords / keys / tokens are never stored. This guard cannot be disabled.',
@@ -742,6 +754,12 @@
     '.dm_audit_tag_new{background:color-mix(in srgb,var(--dm-primary) 14%,transparent);color:var(--dm-primary);}',
     '.dm_audit_content{font-size:13px;line-height:1.45;color:var(--dm-ink);word-break:break-word;}',
     '.dm_audit_actions{display:flex;justify-content:flex-end;gap:8px;margin-top:8px;}',
+    '.dm_recall{margin-top:10px;border:1px solid var(--dm-line2);border-radius:12px;padding:12px;background:var(--dm-bg);}',
+    '.dm_recall_head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;}',
+    '.dm_recall_list{display:flex;flex-direction:column;gap:6px;margin-top:8px;max-height:220px;overflow-y:auto;scrollbar-width:thin;}',
+    '.dm_recall_item{display:flex;gap:8px;align-items:flex-start;font-size:12.5px;line-height:1.4;}',
+    '.dm_recall_cat{flex-shrink:0;font-weight:700;font-size:11px;}',
+    '.dm_recall_content{color:var(--dm-ink);word-break:break-word;}',
     '.dm_tile{border:1px solid var(--dm-line);border-radius:12px;padding:12px;background:var(--dm-bg);text-align:center;}',
     '.dm_tile_num{font-family:Georgia,"Times New Roman",serif;font-size:26px;font-weight:700;line-height:1.1;font-variant-numeric:tabular-nums;}',
     '.dm_tile_label{font-size:11px;color:var(--dm-ink3);margin-top:3px;}',
@@ -1026,6 +1044,7 @@
           entries: function (params) { return request(API_BASE + '/entries' + buildEntriesQuery(params)) },
           stats: function (params) { return request(API_BASE + '/stats' + buildEntriesQuery(params)) },
           similar: function (params) { return request(API_BASE + '/similar' + buildEntriesQuery(params)) },
+          recallPreview: function (workspace) { return request(API_BASE + '/recall-preview' + (workspace ? '?workspace=' + encodeURIComponent(workspace) : '')) },
           export: function () { return request(API_BASE + '/export') },
           settings: function () { return request(API_BASE + '/settings') },
           saveSettings: function (input) { return post(API_BASE + '/settings', input) },
@@ -1437,6 +1456,45 @@
           props.children)
       }
 
+      function RecallPreview(props) {
+        var t = props.t
+        var api = props.api
+        var workspace = props.workspace
+        var dataState = useState(null)
+        var data = dataState[0]; var setData = dataState[1]
+        var errState = useState('')
+        var err = errState[0]; var setErr = errState[1]
+        var busyState = useState(false)
+        var busy = busyState[0]; var setBusy = busyState[1]
+        function load() {
+          setBusy(true)
+          api.recallPreview(workspace).then(function (doc) { setData(doc); setErr('') }).catch(function (e) { setErr(errorText(e, t)) }).then(function () { setBusy(false) })
+        }
+        useEffect(function () { load() }, [workspace])
+        var summary = data
+          ? t('recallSummary').replace('{injected}', String(data.injected)).replace('{omitted}', String(data.omitted)).replace('{used}', String(data.usedChars)).replace('{budget}', String(data.budgetChars))
+          : ''
+        return h('div', { className: 'dm_recall' },
+          h('div', { className: 'dm_recall_head' },
+            h('span', { className: 'dm_label' }, h(Icon, { name: 'database', size: 13 }), t('recallTitle')),
+            h('button', { className: 'dm_btn dm_btn_mini', onClick: load, disabled: busy }, h(Icon, { name: 'undo', size: 12 }), t('recallRefresh'))),
+          h('div', { className: 'dm_hint', style: { marginBottom: 6 } }, t('recallHint')),
+          err ? h('div', { className: 'dm_hint', style: { color: 'var(--dm-danger)' } }, err)
+            : !data ? h('div', { className: 'dm_hint' }, t('recallLoading'))
+            : h('div', null,
+              h('div', { className: 'dm_hint' }, summary + (data.autoInject ? '' : ' ' + t('recallAutoOff'))),
+              data.entries.length > 0
+                ? h('div', { className: 'dm_recall_list' },
+                  data.entries.slice(0, 30).map(function (e) {
+                    var meta = CATEGORY_META[e.category] || CATEGORY_META.fact
+                    return h('div', { key: e.id, className: 'dm_recall_item' },
+                      h('span', { className: 'dm_recall_cat', style: { color: meta.cat } }, t(meta.label)),
+                      h('span', { className: 'dm_recall_content' }, e.content.length > 60 ? e.content.slice(0, 60) + '…' : e.content))
+                  }),
+                  data.entries.length > 30 ? h('div', { className: 'dm_hint' }, '… +' + (data.entries.length - 30)) : null)
+                : null))
+      }
+
       function SettingsPage(props) {
         var t = props.t
         var view = props.view
@@ -1458,6 +1516,7 @@
               h(Toggle, { checked: draft.decayEnabled !== false, onChange: set('decayEnabled'), label: t('decayEnabledLabel'), disabled: props.busy })),
             h(SettingRow, { label: t('budgetLabel'), desc: t('budgetDesc') },
               h(Slider, { min: 0, max: bounds.budgetMax, step: 100, value: draft.injectionBudgetChars, onChange: set('injectionBudgetChars'), label: t('budgetLabel'), disabled: props.busy })),
+            h(RecallPreview, { t: t, api: props.api, workspace: props.workspace }),
             h('div', { className: 'dm_setnote' }, h(Icon, { name: 'info', size: 14, style: { flexShrink: 0, marginTop: 1 } }), t('priorityNote')),
             h('div', { className: 'dm_setnote' }, h(Icon, { name: 'info', size: 14, style: { flexShrink: 0, marginTop: 1 } }), t('enabledNote'))),
           h(SettingsGroup, { icon: 'lock', title: t('groupPrivacy'), style: { color: 'var(--dm-success)', background: 'var(--dm-success-soft)' } },
@@ -2357,7 +2416,7 @@
                   h('button', { className: 'dm_btn', onClick: function () { setSelected([]) }, disabled: busy }, t('clearSelection')))
                 : null)
             : h(SettingsPage, {
-              view: settings, draft: draft, busy: busy, saving: saving, savedOnce: savedOnce, t: t,
+              view: settings, draft: draft, busy: busy, saving: saving, savedOnce: savedOnce, t: t, api: api, workspace: currentCwd,
               onChange: changeSetting, onReset: resetSettings, onBackup: backupNow,
               onToast: function (text, kind) { showToast(kind, text) },
             }),
