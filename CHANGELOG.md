@@ -3,6 +3,14 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.15.0] - 2026-11-13
+
+### 新增 Added
+- **隐私护栏扩充**：新增多种常见独立令牌格式的硬拒写——GitLab `glpat-`、npm `npm_`、Stripe `sk_live_`/`rk_live_`/`sk_test_`/`rk_test_`、SendGrid `SG.…`、PyPI `pypi-`；GitHub token 前缀由 `ghp_` 扩充到 `ghp_/gho_/ghu_/ghs_/ghr_`（含 `github_pat_`）。均为高特异性前缀＋最小长度，避免误伤普通文本（仅提及前缀、无长尾令牌仍放行）。
+
+### 变更 Changed
+- 护栏仍为始终启用的硬护栏（服务层 save/update/import 共用 `detectSecret`）；新增格式不影响既有规则与「其他敏感信息先问用户」指引。
+
 ## [0.14.0] - 2026-11-13
 
 ### 新增 Added
@@ -189,6 +197,7 @@ All notable changes to this project are documented here. Format follows Keep a C
 - 系统提示注入：指引＋字符预算内召回（`interpolate: false` 保护用户内容）。
 - 隐私护栏：密码/密钥/token 规则检测硬拒写。
 
+[0.15.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.11.0...v0.12.0

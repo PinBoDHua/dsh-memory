@@ -19,7 +19,7 @@ Cross-session long-term memory for DeepSeek Harness: durable user preferences, p
 - **导出/导入**：面板一键导出全部记忆为带版本的 JSON（`dsh-memory-export` v1，含作用域与工作区路径与 v2 可选字段）；导入先 dry-run 预览（新增/重复跳过/拒绝计数），确认后落盘。逐条校验、机密硬拒、同内容去重（含批内）、保留原 id 与时间戳（id 被占用时自动新分配）。
 - **一事一条目**：每条记忆一个 Markdown 文件（frontmatter 存元数据），人类可读、可手工编辑，改动立即生效。
 - **新覆旧**：信息变化时原地更新，或走取代链；仅手动遗忘，不自动删除。
-- **隐私护栏**：密码/密钥/token（含 Bearer 令牌、带口令连接串）在服务层被规则检测硬拒绝；其他敏感个人信息由指引要求先征得用户同意，敏感话题默认不存。
+- **隐私护栏**：密码/密钥/token（含 Bearer 令牌、带口令连接串，以及 GitLab/npm/Stripe/SendGrid/PyPI/GitHub 等独立令牌格式）在服务层被规则检测硬拒绝；其他敏感个人信息由指引要求先征得用户同意，敏感话题默认不存。
 
 ## Web 管理面板 Panel
 

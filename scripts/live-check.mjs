@@ -60,11 +60,11 @@ async function main() {
 
   // 1. status：版本与 schema
   let token = ''
-  await check('status 报告 version=0.14.0 / schemaVersion=2 并下发 token', async () => {
+  await check('status 报告 version=0.15.0 / schemaVersion=2 并下发 token', async () => {
     const { status, json } = await req('GET', '/status')
     ok('status HTTP 200', status === 200, `got ${status}`)
     ok('status.ok', json?.ok === true)
-    ok('version === 0.14.0', json?.version === '0.14.0', `got ${json?.version}`)
+    ok('version === 0.15.0', json?.version === '0.15.0', `got ${json?.version}`)
     ok('schemaVersion === 2', json?.schemaVersion === 2, `got ${json?.schemaVersion}`)
     ok('token 非空', typeof json?.key === 'string' && json.key.length > 0)
     token = json?.key ?? ''
@@ -83,6 +83,12 @@ async function main() {
     if (idA) created.push(idA)
     const q = await req('GET', `/entries?query=${encodeURIComponent(RUN)}`)
     ok('entries 检索命中', (q.json?.entries ?? []).some((e) => e.id === idA))
+  })
+
+  await check('save 机密硬拒（0.15.0 新令牌格式）', async () => {
+    const rej = await req('POST', '/save', { token, body: { content: 'glpat-' + 'a'.repeat(24), scope: 'global', origin: 'auto' } })
+    ok('机密 save HTTP 400', rej.status === 400, `got ${rej.status}`)
+    ok('机密 code=secret', rej.json?.code === 'secret', JSON.stringify(rej.json))
   })
 
   await check('save 相似记忆提示（0.11.0）', async () => {
