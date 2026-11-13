@@ -72,7 +72,7 @@ This file is the self-iteration ledger for dsh-memory: per-round increments, ver
 
 **P1**
 - [x] **export/import 保真**（0.24.9）：导出附权威 `workspaceKey`，导入按 key 落盘——索引损坏不再拒绝、陈旧不再搬错工作区；旧导出按 cwd 兼容，merge 可按 key 合并。
-- [ ] **设置写入状态机**：`resetSettings`/`backupNow` 与在途自动保存无互斥（重置可能被旧响应回滚）；`saving` 在 seq 被推进时可能永久卡「保存中」；保存失败无脏标记/重试。
+- [x] **设置写入状态机**（0.24.10）：`settingsStatusNext` 纯函数统一 dirty/saving/savedOnce/error；重置使在途保存失效、saving 用 token 收敛不卡死、保存失败保留草稿并可重试、saving 时禁用重置/备份。
 
 **P2**
 - [ ] 客户端消费 `revived:true`：实际「复活为活跃」的保存目前显示成「已有相同记忆，未重复写入」。

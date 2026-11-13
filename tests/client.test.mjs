@@ -7,7 +7,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import helpers from '../client/client.js'
 
-const { validateDraft, groupEntries, nextToken, entriesParams, buildEntriesQuery, workspaceOptions, errorKeyFor, shouldQueueToast, partitionSettled, parseTags, unwrapResult, validateImportDoc, importSummary, pageSlice, entryDetailRows, relativeTime, formatBytes, isExpired, statusOf, originOf, statusQueryFlags } = helpers
+const { validateDraft, groupEntries, nextToken, entriesParams, buildEntriesQuery, workspaceOptions, errorKeyFor, shouldQueueToast, partitionSettled, parseTags, unwrapResult, settingsStatusNext, validateImportDoc, importSummary, pageSlice, entryDetailRows, relativeTime, formatBytes, isExpired, statusOf, originOf, statusQueryFlags } = helpers
 
 test('validateDraft accepts a complete draft and rejects bad ones', () => {
   assert.deepEqual(validateDraft({ content: '一条事实', category: 'fact' }), { ok: true })
@@ -190,6 +190,39 @@ test('unwrapResult unwraps write-route {result} envelopes (settings views)', () 
   assert.equal(unwrapResult(null), null)
   assert.equal(unwrapResult({ result: null }), null)
   assert.deepEqual(unwrapResult({ other: 1 }), { other: 1 })
+})
+
+test('settingsStatusNext: coherent save/reset/failure/retry transitions', () => {
+  // 初始状态（null 也安全）。
+  assert.deepEqual(settingsStatusNext(null, { type: 'init' }), { dirty: false, saving: false, savedOnce: false, error: '' })
+  let s = settingsStatusNext(null, { type: 'edit' })
+  assert.deepEqual(s, { dirty: true, saving: false, savedOnce: false, error: '' })
+  s = settingsStatusNext(s, { type: 'save-start' })
+  assert.equal(s.saving, true)
+  s = settingsStatusNext(s, { type: 'save-ok' })
+  assert.deepEqual(s, { dirty: false, saving: false, savedOnce: true, error: '' })
+
+  // 保存失败：保留脏标记与错误原因，footer 可显示「重试保存」，不谎报已保存。
+  s = settingsStatusNext(settingsStatusNext(s, { type: 'edit' }), { type: 'save-start' })
+  s = settingsStatusNext(s, { type: 'save-fail', error: '网络异常' })
+  assert.deepEqual(s, { dirty: true, saving: false, savedOnce: false, error: '网络异常' })
+  s = settingsStatusNext(settingsStatusNext(s, { type: 'save-start' }), { type: 'save-ok' })
+  assert.deepEqual(s, { dirty: false, saving: false, savedOnce: true, error: '' })
+
+  // 重置：清掉在途标记/脏标记与错误，成功后已保存。
+  s = settingsStatusNext({ dirty: true, saving: true, savedOnce: false, error: '旧错误' }, { type: 'reset-start' })
+  assert.deepEqual(s, { dirty: false, saving: false, savedOnce: false, error: '' })
+  s = settingsStatusNext(s, { type: 'reset-ok' })
+  assert.deepEqual(s, { dirty: false, saving: false, savedOnce: true, error: '' })
+  s = settingsStatusNext(s, { type: 'reset-fail', error: '重置失败' })
+  assert.deepEqual(s, { dirty: false, saving: false, savedOnce: false, error: '重置失败' })
+
+  // save-settled 只负责结束「保存中」，不清脏标记/错误（失败路径已单独置位）。
+  s = settingsStatusNext({ dirty: true, saving: true, savedOnce: false, error: 'x' }, { type: 'save-settled' })
+  assert.deepEqual(s, { dirty: true, saving: false, savedOnce: false, error: 'x' })
+  // 未知事件不改变状态（含 undefined event）。
+  assert.deepEqual(settingsStatusNext(s, { type: 'bogus' }), s)
+  assert.deepEqual(settingsStatusNext(s, undefined), s)
 })
 
 test('errorKeyFor maps service and route errors to locale keys', () => {

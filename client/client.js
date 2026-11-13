@@ -209,6 +209,26 @@
     return payload
   }
 
+  // 设置写入状态机（纯函数）：保存/重置/备份共用一套状态，解决「在途保存与重置互相
+// 回滚」「saving 卡在保存中」「保存失败无脏标记/重试」等问题。
+// 事件：edit / save-start / save-ok / save-fail / save-settled / reset-start /
+// reset-ok / reset-fail / load-ok。未知事件按状态机无变化处理。
+function settingsStatusNext(status, event) {
+  var base = status || { dirty: false, saving: false, savedOnce: false, error: '' }
+  var next = { dirty: base.dirty, saving: base.saving, savedOnce: base.savedOnce, error: base.error }
+  var type = event && event.type
+  if (type === 'edit') { next.dirty = true; next.error = '' }
+  else if (type === 'save-start') { next.saving = true; next.error = '' }
+  else if (type === 'save-ok') { next.saving = false; next.dirty = false; next.savedOnce = true; next.error = '' }
+  else if (type === 'save-fail') { next.saving = false; next.dirty = true; next.savedOnce = false; next.error = event.error || '' }
+  else if (type === 'save-settled') { next.saving = false }
+  else if (type === 'reset-start') { next.saving = false; next.dirty = false; next.savedOnce = false; next.error = '' }
+  else if (type === 'reset-ok') { next.saving = false; next.dirty = false; next.savedOnce = true; next.error = '' }
+  else if (type === 'reset-fail') { next.saving = false; next.savedOnce = false; next.error = event.error || '' }
+  else if (type === 'load-ok') { if (!next.dirty) next.error = '' }
+  return next
+}
+
   function validateImportDoc(doc) {
     if (!doc || typeof doc !== 'object') return { ok: false, error: 'bad-doc' }
     if (doc.format !== 'dsh-memory-export' || doc.version !== 1) return { ok: false, error: 'bad-doc' }
@@ -274,7 +294,7 @@
     return (mb < 10 ? mb.toFixed(1) : Math.round(mb)) + ' MB'
   }
 
-  var helpers = { validateDraft: validateDraft, groupEntries: groupEntries, nextToken: nextToken, entriesParams: entriesParams, buildEntriesQuery: buildEntriesQuery, workspaceOptions: workspaceOptions, errorKeyFor: errorKeyFor, shouldQueueToast: shouldQueueToast, partitionSettled: partitionSettled, parseTags: parseTags, unwrapResult: unwrapResult, validateImportDoc: validateImportDoc, importSummary: importSummary, pageSlice: pageSlice, entryDetailRows: entryDetailRows, relativeTime: relativeTime, formatBytes: formatBytes, isExpired: isExpired, statusOf: statusOf, originOf: originOf, statusQueryFlags: statusQueryFlags }
+  var helpers = { validateDraft: validateDraft, groupEntries: groupEntries, nextToken: nextToken, entriesParams: entriesParams, buildEntriesQuery: buildEntriesQuery, workspaceOptions: workspaceOptions, errorKeyFor: errorKeyFor, shouldQueueToast: shouldQueueToast, partitionSettled: partitionSettled, parseTags: parseTags, unwrapResult: unwrapResult, settingsStatusNext: settingsStatusNext, validateImportDoc: validateImportDoc, importSummary: importSummary, pageSlice: pageSlice, entryDetailRows: entryDetailRows, relativeTime: relativeTime, formatBytes: formatBytes, isExpired: isExpired, statusOf: statusOf, originOf: originOf, statusQueryFlags: statusQueryFlags }
 
   // ===== node 测试导出（CJS） =====
   if (typeof module !== 'undefined' && module.exports) {
@@ -494,6 +514,8 @@
     resetDefaults: '恢复默认',
     resetDone: '已恢复默认设置',
     settingsSaved: '设置已保存',
+    settingsUnsaved: '有未保存的修改',
+    settingsRetry: '重试保存',
     saving: '保存中…',
     copyPath: '复制路径',
     pathCopied: '已复制路径',
@@ -701,6 +723,8 @@
     resetDefaults: 'Reset to defaults',
     resetDone: 'Settings reset to defaults',
     settingsSaved: 'Settings saved',
+    settingsUnsaved: 'Unsaved changes',
+    settingsRetry: 'Retry save',
     saving: 'Saving…',
     copyPath: 'Copy path',
     pathCopied: 'Path copied',
@@ -945,6 +969,7 @@
     '.dm_backupmeta{font-size:11.5px;color:var(--dm-ink3);display:flex;gap:14px;flex-wrap:wrap;margin-top:8px;}',
     '.dm_setfooter{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;}',
     '.dm_savestate{font-size:11.5px;color:var(--dm-ink3);display:flex;gap:6px;align-items:center;}',
+    '.dm_linkbtn{border:none;background:transparent;color:var(--dm-primary);font:inherit;font-size:11px;cursor:pointer;text-decoration:underline;padding:0;}',
     '.dm_no_anim *,.dm_no_anim *::before,.dm_no_anim *::after{animation:none !important;transition:none !important;}',
     // ---- 自定义下拉 Select ----
     '.dm_selectwrap{position:relative;display:inline-block;min-width:0;}',
@@ -1723,7 +1748,7 @@
             h('div', { className: 'dm_backupmeta' },
               h('span', null, t('lastBackupLabel') + ': ' + (meta.backup.lastBackup ? formatTime(meta.backup.lastBackup) : t('neverBackup'))),
               h('span', null, t('backupCount').replace('{n}', String(meta.backup.count))),
-              h('button', { className: 'dm_btn dm_btn_mini', onClick: props.onBackup, disabled: props.busy }, h(Icon, { name: 'export', size: 12 }), t('backupNow')))),
+              h('button', { className: 'dm_btn dm_btn_mini', onClick: props.onBackup, disabled: props.busy || (props.status && props.status.saving) }, h(Icon, { name: 'export', size: 12 }), t('backupNow')))),
           h(SettingsGroup, { icon: 'sliders', title: t('groupPanel'), style: { color: 'var(--dm-pref)', background: 'var(--dm-pref-soft)' } },
             h(SettingRow, { label: t('defaultViewLabel') },
               h(Select, {
@@ -1746,10 +1771,16 @@
             h(SettingRow, { label: t('relativeTimeLabel'), desc: t('relativeTimeDesc') },
               h(Toggle, { checked: draft.relativeTime, onChange: set('relativeTime'), label: t('relativeTimeLabel'), disabled: props.busy }))),
           h('div', { className: 'dm_setfooter' },
-            h('button', { className: 'dm_btn dm_btn_danger', onClick: props.onReset, disabled: props.busy }, h(Icon, { name: 'undo', size: 14 }), t('resetDefaults')),
+            h('button', { className: 'dm_btn dm_btn_danger', onClick: props.onReset, disabled: props.busy || (props.status && props.status.saving) }, h(Icon, { name: 'undo', size: 14 }), t('resetDefaults')),
             h('span', { className: 'dm_savestate' },
-              props.saving ? h(Icon, { name: 'clock', size: 13 }) : props.savedOnce ? h(Icon, { name: 'check', size: 13, strokeWidth: 2.2 }) : null,
-              props.saving ? t('saving') : props.savedOnce ? t('settingsSaved') : '')))
+              (props.status && props.status.saving) ? h(Icon, { name: 'clock', size: 13 })
+                : (props.status && props.status.error) ? h(Icon, { name: 'alert', size: 13, style: { color: 'var(--dm-danger)' } })
+                  : (props.status && props.status.dirty) ? h(Icon, { name: 'edit', size: 13 })
+                    : (props.status && props.status.savedOnce) ? h(Icon, { name: 'check', size: 13, strokeWidth: 2.2 }) : null,
+              (props.status && props.status.saving) ? t('saving')
+                : (props.status && props.status.error) ? h('button', { className: 'dm_linkbtn', title: props.status.error, onClick: props.onRetrySave }, t('settingsRetry'))
+                  : (props.status && props.status.dirty) ? t('settingsUnsaved')
+                    : (props.status && props.status.savedOnce) ? t('settingsSaved') : '')))
       }
 
       // 自定义无障碍下拉：button + portal 浮层 listbox，彻底主题化（原生 select 弹出层无法跨浏览器主题化）。
@@ -2042,10 +2073,12 @@
         var settingsError = settingsErrorState[0]; var setSettingsError = settingsErrorState[1]
         var draftState = useState(null)
         var draft = draftState[0]; var setDraft = draftState[1]
-        var savingState = useState(false)
-        var saving = savingState[0]; var setSaving = savingState[1]
-        var savedOnceState = useState(false)
-        var savedOnce = savedOnceState[0]; var setSavedOnce = savedOnceState[1]
+        var settingsStatusState = useState({ dirty: false, saving: false, savedOnce: false, error: '' })
+        var settingsStatus = settingsStatusState[0]; var setSettingsStatusState = settingsStatusState[1]
+        var saveTokenRef = useRef(0)
+        function applySettingsEvent(event) {
+          setSettingsStatusState(function (prev) { return settingsStatusNext(prev, event) })
+        }
 
         var editorRef = useRef(null)
         editorRef.current = editor
@@ -2165,6 +2198,7 @@
             if (seq !== settingsSeq.current) return
             setSettings(view)
             setSettingsError('')
+            applySettingsEvent({ type: 'load-ok' })
             if (!dirtyRef.current) setDraft(view.effective)
           }).catch(function (err) {
             if (seq !== settingsSeq.current) return
@@ -2194,6 +2228,7 @@
 
         function changeSetting(key, value) {
           dirtyRef.current = true
+          applySettingsEvent({ type: 'edit' })
           setDraft(function (prev) {
             var next = Object.assign({}, prev)
             next[key] = value
@@ -2201,45 +2236,66 @@
           })
         }
 
+        // 单次保存（防抖到期/失败重试共用）：seq 让重置/重载失效在途响应，
+        // token 保证「保存中」只在最后一次请求结束时清除（不会卡死或被旧响应提前清掉）。
+        var saveDraft = useCallback(function () {
+          if (!draftRef.current) return
+          dirtyRef.current = false
+          var seq = ++settingsSeq.current
+          var token = ++saveTokenRef.current
+          applySettingsEvent({ type: 'save-start' })
+          api.saveSettings(draftRef.current).then(function (view) {
+            if (seq !== settingsSeq.current) return
+            setSettings(view)
+            setSettingsError('')
+            applySettingsEvent({ type: 'save-ok' })
+            // 服务端会夹取/规范化（如保留份数 0→1）：没有新编辑时把草稿回收为
+            // effective，避免输入框显示的值与实际保存值不一致。
+            if (!dirtyRef.current) setDraft(view.effective)
+          }).catch(function (err) {
+            if (seq !== settingsSeq.current) return
+            // 保存失败：保留草稿并标记脏，footer 提供重试，不谎报「已保存」。
+            dirtyRef.current = true
+            applySettingsEvent({ type: 'save-fail', error: errorText(err, t) })
+            showToast('error', errorText(err, t))
+          }).then(function () {
+            if (token === saveTokenRef.current) applySettingsEvent({ type: 'save-settled' })
+          })
+        }, [api, t])
+
         useEffect(function () {
           if (!dirtyRef.current || !draft) return undefined
-          var timer = setTimeout(function () {
-            dirtyRef.current = false
-            var seq = ++settingsSeq.current
-            setSaving(true)
-            api.saveSettings(draftRef.current).then(function (view) {
-              if (seq !== settingsSeq.current) return
-              setSettings(view)
-              setSettingsError('')
-              setSavedOnce(true)
-              // 服务端会夹取/规范化（如保留份数 0→1）：没有新编辑时把草稿回收为
-              // effective，避免输入框显示的值与实际保存值不一致。
-              if (!dirtyRef.current) setDraft(view.effective)
-            }).catch(function (err) {
-              if (seq !== settingsSeq.current) return
-              setSavedOnce(false)
-              showToast('error', errorText(err, t))
-            }).then(function () {
-              if (seq === settingsSeq.current) setSaving(false)
-            })
-          }, 600)
+          var timer = setTimeout(saveDraft, 600)
           return function () { clearTimeout(timer) }
-        }, [draft, api, t])
+        }, [draft, saveDraft])
+
+        function retrySaveSettings() {
+          if (settingsStatus.saving) return
+          dirtyRef.current = true
+          applySettingsEvent({ type: 'edit' })
+          saveDraft()
+        }
 
         function resetSettings() {
           if (busy) return
+          // 让在途保存/加载的响应失效：重置结果不能被旧保存响应回滚。
+          ++settingsSeq.current
+          applySettingsEvent({ type: 'reset-start' })
           setBusy(true)
           api.resetSettings().then(function (view) {
             setSettings(view)
             setDraft(view.effective)
             dirtyRef.current = false
-            setSavedOnce(true)
+            applySettingsEvent({ type: 'reset-ok' })
             showToast('ok', t('resetDone'))
-          }).catch(writeFailure).then(function () { setBusy(false) })
+          }).catch(function (err) {
+            applySettingsEvent({ type: 'reset-fail', error: errorText(err, t) })
+            writeFailure(err)
+          }).then(function () { setBusy(false) })
         }
 
         function backupNow() {
-          if (busy) return
+          if (busy || settingsStatus.saving) return
           setBusy(true)
           api.backup().then(function () {
             showToast('ok', t('backupDone'))
@@ -2730,8 +2786,8 @@
                 : null)
             : h('div', { id: 'dm-panel-settings', role: 'tabpanel', 'aria-labelledby': 'dm-tab-settings' },
             h(SettingsPage, {
-              view: settings, draft: draft, busy: busy, saving: saving, savedOnce: savedOnce, t: t, api: api, workspace: currentCwd,
-              error: settingsError, onRetry: loadSettings,
+              view: settings, draft: draft, busy: busy, status: settingsStatus, t: t, api: api, workspace: currentCwd,
+              error: settingsError, onRetry: loadSettings, onRetrySave: retrySaveSettings,
               onChange: changeSetting, onReset: resetSettings, onBackup: backupNow,
               onToast: function (text, kind) { showToast(kind, text) },
             })),

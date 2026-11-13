@@ -3,6 +3,18 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.24.10] - 2026-11-13
+
+### 修复 Fixed（第二轮审计 P1）
+- **设置写入状态机**：保存/重置/备份共用一套可测状态（`settingsStatusNext` 纯函数：dirty/saving/savedOnce/error）。
+  - 重置开始时推进 settingsSeq，让在途自动保存/重载的旧响应失效——「恢复默认」不再可能被旧保存响应回滚。
+  - `saving` 用请求 token 管理，仅最后一次请求结束时清除：不会因 seq 被推进而永久卡在「保存中…」。
+  - 保存失败不再谎报「已保存」：保留草稿并标记脏、footer 显示「重试保存」按钮（失败原因作 title），点击即重试；成功后才回到「已保存」。
+  - footer 按 `保存中 → 失败/重试 → 未保存 → 已保存` 优先级显示；saving 时禁用「恢复默认 / 立即备份」避免与在途写入互相踩踏。
+
+### 新增 Added
+- 客户端纯函数 `settingsStatusNext` 单测（保存/失败/重试/重置/未知事件迁移）；GUI 验收新增 4 项（离线保存失败显示重试、重试成功回到已保存、重置不被在途保存回滚、重置后不卡保存中），GUI 35→39 项。
+
 ## [0.24.9] - 2026-11-13
 
 ### 修复 Fixed

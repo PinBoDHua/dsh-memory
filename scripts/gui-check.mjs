@@ -497,6 +497,7 @@ async function main() {
     await evaluate(`(() => { const tab = document.querySelector('#dm-tab-settings'); if (tab) tab.click(); return Boolean(tab) })()`)
     await sleep(1000)
     check('设置页已打开', await evaluate(`document.querySelector('#dm-panel-settings') !== null && document.querySelectorAll('.dm_numinput').length > 0`))
+    check('设置页已打开', await evaluate(`document.querySelector('#dm-panel-settings') !== null && document.querySelectorAll('.dm_numinput').length > 0`))
     const setRetention = async (value) => evaluate(`(() => {
       const input = document.querySelectorAll('.dm_numinput')[0]
       if (!input) return false
@@ -525,6 +526,48 @@ async function main() {
     await sleep(1800)
     const restoredSettings = await apiJson('/settings')
     check('备份保留份数已还原', Number(restoredSettings?.effective?.backupRetention) === originalRetention, String(restoredSettings?.effective?.backupRetention))
+
+    // 8c) 保存失败 → footer 显示重试 → 点击重试成功（设置写入状态机 0.24.10）
+    await send('Network.emulateNetworkConditions', { offline: true, latency: 0, downloadThroughput: -1, uploadThroughput: -1 })
+    const failTarget = Math.min(30, originalRetention + 1)
+    await setRetention(failTarget)
+    await sleep(1600)
+    const failState = await evaluate(`(() => ({
+      footer: (document.querySelector('.dm_savestate') || {}).innerText || '',
+      retry: document.querySelector('.dm_linkbtn') !== null,
+      value: (document.querySelectorAll('.dm_numinput')[0] || {}).value || null,
+    }))()`)
+    check('保存失败显示重试而非谎报已保存', failState.retry && /重试|Retry/.test(failState.footer) && String(failState.value) === String(failTarget), JSON.stringify(failState))
+    await send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 })
+    await sleep(400)
+    await evaluate(`(() => { const b = document.querySelector('.dm_linkbtn'); if (b) b.click(); return Boolean(b) })()`)
+    await sleep(1700)
+    const retryState = await evaluate(`(() => ({
+      footer: (document.querySelector('.dm_savestate') || {}).innerText || '',
+      value: (document.querySelectorAll('.dm_numinput')[0] || {}).value || null,
+    }))()`)
+    const retryDoc = await apiJson('/settings')
+    check('失败后重试保存成功且状态回到已保存', /已保存|Saved/.test(retryState.footer) && Number(retryDoc?.effective?.backupRetention) === failTarget, JSON.stringify(retryState))
+    await setRetention(originalRetention)
+    await sleep(1600)
+
+    // 8d) 重置与在途保存互斥：改值后立刻点「恢复默认」→ 默认值生效、不被旧保存响应回滚
+    const defaultsRetention = Number(settingsBefore?.defaults?.backupRetention)
+    await setRetention(Math.min(30, originalRetention + 2))
+    await evaluate(`(() => { const b = [...document.querySelectorAll('.dm_settings button')].find(x => /恢复默认|Reset to defaults/.test((x.textContent || '').trim())); if (b) b.click(); return Boolean(b) })()`)
+    await sleep(2300)
+    const afterReset = await apiJson('/settings')
+    const resetState = await evaluate(`(() => {
+      const footer = (document.querySelector('.dm_savestate') || {}).innerText || ''
+      return {
+        footer,
+        saving: /保存中|Saving/.test(footer),
+        value: (document.querySelectorAll('.dm_numinput')[0] || {}).value || null,
+      }
+    })()`)
+    check('重置后在途保存不回滚默认值', Number(afterReset?.effective?.backupRetention) === defaultsRetention && String(resetState.value) === String(defaultsRetention), JSON.stringify({ ...resetState, effective: afterReset?.effective?.backupRetention }))
+    check('重置后不卡在保存中', resetState.saving === false && /已保存|Saved/.test(resetState.footer), JSON.stringify(resetState))
+
     await evaluate(`(() => { const tab = document.querySelector('#dm-tab-memories'); if (tab) tab.click(); return Boolean(tab) })()`)
     await sleep(800)
 
@@ -542,6 +585,7 @@ async function main() {
     try { rmSync(USER_DATA, { recursive: true, force: true }) } catch { /* ignore */ }
   }
   console.log(`\n结果：${report.checks.filter((c) => c.ok).length} 通过，${report.checks.filter((c) => !c.ok).length} 失败`)
+  if (!report.ok && consoleLines.length > 0) console.log('CONSOLE ' + JSON.stringify(consoleLines.slice(0, 20), null, 2))
   if (failed !== null) process.exit(1)
   process.exit(report.ok ? 0 : 1)
 }
