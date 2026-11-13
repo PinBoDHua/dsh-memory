@@ -331,6 +331,27 @@ test('move: superseded duplicate in target scope does not block the move', () =>
   assert.throws(() => store.moveEntry(root, activeDup.id, 'workspace', CWD_A), (err) => err.code === 'duplicate')
 })
 
+test('move: failure to remove the source file rolls back the new copy (no dual-scope duplicate)', () => {
+  const root = tmpRoot()
+  const { entry } = store.saveEntry(root, { content: '回滚移动测试', scope: 'global' })
+  const oldFile = path.join(root, 'global', `${entry.id}.md`)
+  const realRm = fs.rmSync
+  fs.rmSync = function (target, opts) {
+    if (String(target) === oldFile) throw Object.assign(new Error('EBUSY: file in use'), { code: 'EBUSY' })
+    return realRm.call(fs, target, opts)
+  }
+  try {
+    assert.throws(() => store.moveEntry(root, entry.id, 'workspace', CWD_A), (err) => err.code === 'io')
+  } finally {
+    fs.rmSync = realRm
+  }
+  assert.ok(fs.existsSync(oldFile), 'source file must remain intact')
+  assert.ok(!fs.existsSync(path.join(root, 'workspaces', store.workspaceKey(CWD_A), `${entry.id}.md`)), 'new copy must be rolled back')
+  const found = store.findEntry(root, entry.id, CWD_A)
+  assert.equal(found.scope, 'global')
+  assert.equal(store.listScope(root, 'workspace', CWD_A).length, 0)
+})
+
 test('writeEntryBatch reports progress ticks for large batches (lock heartbeat)', () => {
   const root = tmpRoot()
   const now = new Date().toISOString()

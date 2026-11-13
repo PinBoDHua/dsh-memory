@@ -321,6 +321,24 @@ test('POST /forget accepts an ids array and returns per-id result', async () => 
   assert.equal(service.list({ scope: 'global' }).length, 0)
 })
 
+test('busy errors map to 503 with a generic message (no lock path leak)', async () => {
+  const { service, handlers } = setup()
+  service.updateSettings = () => { throw Object.assign(new Error('lock timeout: C:\\secret\\.lock-settings'), { code: 'busy' }) }
+  service.resetSettings = () => { throw Object.assign(new Error('lock timeout: C:\\secret\\.lock-settings'), { code: 'busy' }) }
+  const post = (handler) => {
+    const res = fakeRes()
+    return handler(fakeReq({ method: 'POST', headers: { 'x-rpc-key': TOKEN }, body: { autoInject: true } }), res).then(() => res)
+  }
+  const settingsRes = await post(handlers.settings)
+  assert.equal(settingsRes.statusCode, 503)
+  const body = settingsRes.json()
+  assert.equal(body.code, 'busy')
+  assert.ok(!body.error.includes('lock timeout') && !body.error.includes('.lock'), body.error)
+  const resetRes = await post(handlers['settings/reset'])
+  assert.equal(resetRes.statusCode, 503)
+  assert.equal(resetRes.json().code, 'busy')
+})
+
 test('unknown filesystem errors are sanitized to 500 code=internal (no absolute paths leak)', async () => {
   const { service, handlers, root } = setup()
   // 让 global 目录无法创建：用同名文件占位 → save 内部 mkdir/写文件抛 EEXIST。

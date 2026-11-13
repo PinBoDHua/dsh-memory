@@ -72,6 +72,22 @@ test('effective precedence: defaults < profile base < overlay', () => {
   assert.equal(eff.pageSize, 20)
 })
 
+test('overlay lock contention surfaces as code=busy for write and reset', () => {
+  const root = tmpRoot()
+  const lockPath = path.join(root, '.lock-settings')
+  fs.mkdirSync(lockPath, { recursive: true })
+  try {
+    assert.throws(() => settings.writeOverlay(root, { pageSize: 20 }), (err) => err.code === 'busy')
+    assert.throws(() => settings.resetOverlay(root), (err) => err.code === 'busy')
+  } finally {
+    fs.rmSync(lockPath, { recursive: true, force: true })
+  }
+  // 锁释放后恢复正常（pageSize 必须是允许枚举 20/50/100）。
+  assert.equal(settings.writeOverlay(root, { pageSize: 20 }).pageSize, 20)
+  assert.equal(settings.resetOverlay(root), undefined)
+  assert.deepEqual(settings.readOverlay(root), {})
+})
+
 test('writeOverlay merges and persists; resetOverlay removes the file', () => {
   const root = tmpRoot()
   settings.writeOverlay(root, { autoInject: false })

@@ -773,10 +773,57 @@ async function main() {
           const older = (pairDoc?.entries || []).find((e) => e.id === bigIds[299])
           check('分片导入保留跨片取代链（旧条目仍隐藏）', Boolean(older) && older.superseded_by === bigIds[300], JSON.stringify(older && { id: older.id, superseded_by: older.superseded_by }))
         } finally {
+          await send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 })
           await forgetIds(bigEntries.map((e) => e.id))
           bigIds.length = 0
           const left = await apiJson(`/entries?query=${encodeURIComponent('GUI 分片导入')}&scope=global&limit=10`)
           check('分片导入测试条目已批量清理', (left?.entries || []).length === 0, String((left?.entries || []).length))
+        }
+
+        // 0.24.34：导入过程可停止——busy 时取消/Esc 被禁，弹窗提供唯一可点的「停止」入口。
+        const stopEntries = Array.from({ length: 620 }, (_, i) => ({ id: `m-gui-stop-${String(i).padStart(4, '0')}`, content: `GUI 停止导入 ${i}`, scope: 'global', category: 'fact' }))
+        const stopIds = stopEntries.map((e) => e.id)
+        registerCleanup(async () => { await forgetIds(stopIds); stopIds.length = 0 })
+        const stopFile = path.join(dir, 'stop-export.json')
+        writeFileSync(stopFile, JSON.stringify({ format: 'dsh-memory-export', version: 1, exportedAt: new Date().toISOString(), entries: stopEntries }), 'utf8')
+        try {
+          const { root: stopDocRoot } = await send('DOM.getDocument', { depth: -1 })
+          const { nodeId: stopNode } = await send('DOM.querySelector', { nodeId: stopDocRoot.nodeId, selector: 'input[type=file]' })
+          await send('DOM.setFileInputFiles', { files: [stopFile], nodeId: stopNode })
+          await sleep(2400)
+          await send('Network.emulateNetworkConditions', { offline: false, latency: 700, downloadThroughput: -1, uploadThroughput: -1 })
+          const stopConfirmClicked = await evaluate(`(() => {
+            const dialog = document.querySelector('.dm_dialog')
+            if (!dialog) return false
+            const btn = [...dialog.querySelectorAll('button')].find((b) => b.classList.contains('dm_btn_primary'))
+            if (btn) btn.click()
+            return Boolean(btn)
+          })()`)
+          let stopButtonShown = false
+          for (let i = 0; i < 12; i += 1) {
+            await sleep(120)
+            stopButtonShown = await evaluate(`document.querySelector('.dm_dialog .dm_linkbtn') !== null`)
+            if (stopButtonShown) break
+          }
+          const stopClicked = await evaluate(`(() => { const btn = document.querySelector('.dm_dialog .dm_linkbtn'); if (btn) btn.click(); return Boolean(btn) })()`)
+          let stopDialogClosed = false
+          for (let i = 0; i < 25; i += 1) {
+            await sleep(300)
+            stopDialogClosed = await evaluate(`document.querySelector('.dm_dialog') === null`)
+            if (stopDialogClosed) break
+          }
+          await send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 })
+          await sleep(800)
+          const stopToast = await evaluate(`(document.querySelector('.dm_toast_text') || {}).textContent || ''`)
+          const stopMatch = /(\d+)\s*\/\s*(\d+)/.exec(stopToast)
+          const writtenCount = stopMatch ? Number(stopMatch[1]) : -1
+          check('导入中提供停止入口且可停止', stopConfirmClicked && stopButtonShown && stopClicked && stopDialogClosed && /停止|Stopped/.test(stopToast) && writtenCount > 0 && writtenCount < stopEntries.length, JSON.stringify({ stopConfirmClicked, stopButtonShown, stopClicked, stopDialogClosed, stopToast }))
+          const stopList = await apiJson(`/entries?query=${encodeURIComponent('GUI 停止导入')}&scope=global&limit=1000`)
+          check('停止后已落盘片完整保留、后续片未提交', (stopList?.entries || []).length === writtenCount, `${(stopList?.entries || []).length} vs written ${writtenCount}`)
+        } finally {
+          await send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 })
+          await forgetIds(stopIds)
+          stopIds.length = 0
         }
       } finally {
         rmSync(dir, { recursive: true, force: true })
@@ -1247,11 +1294,15 @@ async function main() {
     // 7) 网络失败：离线时请求快速失败并显示可重试错误，而不是永久骨架/卡死。
     await send('Network.emulateNetworkConditions', { offline: true, latency: 0, downloadThroughput: -1, uploadThroughput: -1 })
     await evaluate(`(() => { const chips = [...document.querySelectorAll('.dm_chips .dm_chip')]; if (chips[1]) chips[1].click(); return Boolean(chips[1]) })()`)
-    await sleep(1500)
-    const offlineError = await evaluate(`(() => {
-      const el = document.querySelector('.dm_empty')
-      return el ? (el.innerText || '').replace(/\\s+/g, ' ').slice(0, 160) : ''
-    })()`)
+    let offlineError = ''
+    for (let i = 0; i < 16; i += 1) {
+      await sleep(300)
+      offlineError = await evaluate(`(() => {
+        const el = document.querySelector('.dm_empty')
+        return el ? (el.innerText || '').replace(/\\s+/g, ' ').slice(0, 160) : ''
+      })()`)
+      if (/网络异常|Network error|失败|Failed/.test(offlineError)) break
+    }
     check('网络失败显示可重试错误（不卡死）', /网络异常|Network error|失败|Failed/.test(offlineError), offlineError)
     await send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 })
     await sleep(600)

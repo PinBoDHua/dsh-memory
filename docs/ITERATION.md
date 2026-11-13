@@ -180,12 +180,13 @@ dreaming/后台 LLM 提取、向量/图检索、完整 bi-temporal 四时间戳�
 
 #### P2
 - [x] **merge 导入可产生同作用域重复内容**（0.24.30：merge 更新前查同内容去重表，命中即计 deduplicated 跳过）。
-- [ ] **moveEntry 无回滚**：新文件写成后旧文件删除失败 → 同 id 双作用域并存。方案：删旧失败则回滚新文件并抛 io。
-- [ ] **withLock 陈旧自愈 check-then-rm 双持有**：两个等待者同时判陈旧时可在 stat→rm 窗口双持有。方案：rename 原子认领（失败者重试），或 rm 前紧邻二次 stat+owner 复核。
-- [ ] **settings 锁争用映射**：POST /settings 争用 500 internal、/settings/reset 吞超时仍 200。方案：转 code=busy（503），reset 不吞错。
+- [x] **moveEntry 无回滚**（0.24.34：旧文件删除失败时回滚刚写入的新文件并抛 `code=io`，同 id 不再双作用域并存；测试 patch `fs.rmSync` 抛 EBUSY 验证零变更）。
+- [x] **withLock 陈旧自愈 check-then-rm 双持有**（0.24.34：陈旧锁改为 `rename` 到 owner nonce 认领目录（只有一个进程能成功），认领后复核 mtime 仍陈旧才删除；若误抢到新锁则 rename 放回并继续等待。锁超时错误带 `code=busy`）。
+- [x] **settings 锁争用映射**（0.24.34：`resetOverlay` 不再吞锁超时，`withLock` 超时统一 `code=busy` → 路由 503；测试断言 write/reset 争用时均抛 busy、释放后恢复）。
+- [ ] **settings 错误提示文案**：面板对 503 busy 显示「另一个进程正在写入，请稍后重试」（已有 errBusy 映射），无需额外代码，保留待验证。
 - [x] **面板归档撤销在 busy 窗口被静默丢弃**（0.24.32：撤销类动作 `quickUpdate({force:true})` 绕过 busy 守卫；GUI 用 1.5s 延迟注入「归档→toast 出现→刷新 busy 中撤销」断言最终未归档）。
 - [x] **分类 chip 计数失真**（0.24.32：`categoryChipCount` 在分类筛选时隐藏其它分类数字，仅保留「全部」与当前分类；GUI 断言筛选后只有 2 个数字）。
-- [ ] **分片导入不可取消**：busy 时 Esc/遮罩/取消全禁，单片挂起最长 180s。方案：停止按钮 + 当前片结算后跳出。
+- [x] **分片导入不可取消**（0.24.34：busy 时导出弹窗提供唯一可点的「停止导入」；当前片结算后不再发后续片，已落盘片保留并提示「已停止：已写入 d/t」；GUI 用 620 条 + 延迟注入验证只提交首片、后续片未落盘）。
 - [x] **撤销 toast 无条件抢焦点**（0.24.32：`shouldFocusToastAction` 纯函数——仅焦点已丢失/卡片动作按钮/面板容器时接管，输入框/可编辑区/有弹窗时不抢；单测覆盖 9 种描述符）。
 - [x] **空态/错误态按钮卸载后焦点掉 body**（0.24.32：`focusPage()` 用于清除筛选、列表/面板/设置重试；GUI 断言清除筛选后焦点回 `.dm_page`）。
 - [x] **dataVersion 写路径缺正向断言**（0.24.32：GUI 断言归档成功→召回预览 +1、撤销归档→再 +1；失败路径沿用「不刷新」语义）。

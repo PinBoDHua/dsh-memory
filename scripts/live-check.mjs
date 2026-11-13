@@ -332,8 +332,9 @@ async function main() {
       mkdirSync(lock, { recursive: true })
       const r = await req('POST', '/settings', { token, body: { autoInject: true } })
       const body = JSON.stringify(r.json ?? {})
-      ok('持锁设置写返回 500', r.status === 500, `got ${r.status}`)
-      ok('错误码统一 internal', r.json?.code === 'internal', body)
+      // 0.24.34：锁争用是可重试的 busy → 503，而不是伪装成未知内部错误。
+      ok('持锁设置写返回 503 busy', r.status === 503, `got ${r.status}`)
+      ok('错误码 busy', r.json?.code === 'busy', body)
       ok('错误体不回传数据根路径', !body.includes(statusRoot), body.slice(0, 200))
       ok('错误体不含锁/临时文件名', !/\.lock-|\.tmp-/.test(body), body.slice(0, 200))
     } finally {

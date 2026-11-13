@@ -668,6 +668,8 @@ function newImportRunId() {
     importAllDup: '全部条目均已存在，无需导入。',
     importingProgress: '正在导入 {d}/{t}…',
     importPartialFail: '已写入 {d}/{t} 条后中断，可重试导入（已存在条目会去重/合并）',
+    stopImport: '停止导入',
+    importStopped: '已停止导入：已写入 {d}/{t} 条',
     imported: '导入完成',
     audit: '查重',
     auditTitle: '相似记忆查重',
@@ -895,6 +897,8 @@ function newImportRunId() {
     importAllDup: 'All entries already exist; nothing to import.',
     importingProgress: 'Importing {d}/{t}…',
     importPartialFail: 'Interrupted after writing {d}/{t} entries; retry is safe (existing entries are deduplicated/merged)',
+    stopImport: 'Stop import',
+    importStopped: 'Import stopped: wrote {d}/{t} entries',
     imported: 'Import complete',
     audit: 'Audit',
     auditTitle: 'Similar memory audit',
@@ -1833,6 +1837,7 @@ function newImportRunId() {
               ? h('span', { className: 'dm_hint' }, t('importingProgress').replace('{d}', String(props.progress.done)).replace('{t}', String(props.progress.total)))
               : null,
             h('button', { className: 'dm_btn', onClick: props.onClose, disabled: props.busy }, t('cancel')),
+            props.busy && props.onStop ? h('button', { className: 'dm_linkbtn', onClick: props.onStop }, t('stopImport')) : null,
             h('button', { className: 'dm_btn dm_btn_primary', onClick: props.onConfirm, disabled: props.busy || (summary.imported === 0 && summary.updated === 0) }, h(Icon, { name: 'check', size: 14, strokeWidth: 2.2 }), t('importConfirm'))))
       }
 
@@ -2418,6 +2423,7 @@ function newImportRunId() {
         confirmRef.current = confirm
         var modalOpenRef = useRef(false)
         modalOpenRef.current = !!(editor || confirm || importPlan || audit)
+        var importStopRef = useRef(false)
         var selectedRef = useRef(selected)
         selectedRef.current = selected
         var draftRef = useRef(draft)
@@ -3040,6 +3046,7 @@ function newImportRunId() {
         function confirmImport() {
           if (busy || !importPlan) return
           setBusy(true)
+          importStopRef.current = false
           var entries = importPlan.entries
           var mode = importPlan.mode
           var chunks = chunkEntriesPreservingLinks(entries, IMPORT_CHUNK_SIZE)
@@ -3050,6 +3057,8 @@ function newImportRunId() {
           var chain = Promise.resolve()
           chunks.forEach(function (chunk, chunkIndex) {
             chain = chain.then(function () {
+              // 用户点「停止」：当前片结算后不再发送后续片，已落盘片保留。
+              if (importStopRef.current) return undefined
               return api.import({ entries: chunk, mode: mode, importId: runId, chunkIndex: chunkIndex }).then(function (payload) {
                 var r = (payload && payload.result) || {}
                 totals.imported += r.imported || 0
@@ -3063,8 +3072,15 @@ function newImportRunId() {
             })
           })
           chain.then(function () {
+            var stopped = importStopRef.current && written < entries.length
             setImportPlan(null)
             setImportProgress(null)
+            if (stopped) {
+              if (written > 0) bumpDataVersion()
+              showToast('ok', t('importStopped').replace('{d}', String(written)).replace('{t}', String(entries.length)))
+              setPage(0)
+              return refreshRef.current()
+            }
             bumpDataVersion()
             var summary = importSummary(totals)
             var repairedNote = summary.repaired > 0 ? ' · ' + t('importRepaired').replace('{n}', String(summary.repaired)) : ''
@@ -3321,7 +3337,7 @@ function newImportRunId() {
             })),
           editor ? h(EditorModal, { draft: editor, setDraft: setEditor, t: t, workspaceTarget: workspaceTarget, busy: busy, onSave: handleSave, onClose: function () { if (!busy) setEditor(null) } }) : null,
           confirm ? h(ConfirmModal, { entries: confirm.entries, t: t, busy: busy, onConfirm: handleDelete, onClose: function () { if (!busy) setConfirm(null) } }) : null,
-          importPlan ? h(ImportModal, { plan: importPlan.plan, mode: importPlan.mode, progress: importProgress, t: t, busy: busy, onConfirm: confirmImport, onModeChange: changeImportMode, onClose: function () { if (!busy) setImportPlan(null) } }) : null,
+          importPlan ? h(ImportModal, { plan: importPlan.plan, mode: importPlan.mode, progress: importProgress, t: t, busy: busy, onStop: function () { importStopRef.current = true }, onConfirm: confirmImport, onModeChange: changeImportMode, onClose: function () { if (!busy) setImportPlan(null) } }) : null,
           audit ? h(AuditModal, { pairs: audit.pairs, t: t, busy: busy, onSupersede: handleSupersedePair, onDismiss: dismissPair, onClose: function () { if (!busy) setAudit(null) } }) : null,
           toast ? h(Toast, { key: toast.id, toast: toast, t: t, raised: selected.length > 0, onClose: dismissToast, actionRef: toastActionRef, onPause: pauseToast, onResume: resumeToast }) : null)
       }

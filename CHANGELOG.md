@@ -3,6 +3,22 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.24.34] - 2026-11-14
+
+### 修复 Fixed（第五轮审计 P2/P3：移动回滚、锁自愈、设置 busy、导入可停止）
+- **`moveEntry` 失败回滚**：跨作用域移动先写新文件再删旧文件；旧文件删除失败（Windows 被编辑器/AV 占用）时回滚新文件并抛 `code=io`，不再留下同 id 双作用域副本（此前会出现两张同 id 卡片、update/forget 命中不确定）。测试用 `fs.rmSync` 抛 EBUSY 验证零变更。
+- **陈旧锁自愈改为原子认领**：此前 stat 判陈旧 → rmSync 的窗口内，两个等待者可能各自删掉对方刚建立的新锁（双持有）。现在先 `rename` 到带 owner nonce 的认领目录（只有一个进程能成功），认领后复核 mtime 仍陈旧才删除；若认领到的是新锁则放回并继续等待。锁超时错误统一带 `code=busy`。
+- **settings 锁争用映射为 503**：`resetOverlay` 不再吞锁超时，write/reset 争用均抛 `code=busy`（面板显示可重试的忙碌提示，而非 500 internal 或「重置成功但实际没重置」）。
+- **分片导入可停止**：busy 时取消/Esc 仍禁用，但导入弹窗提供唯一可点的「停止导入」；当前片结算后不再发送后续片，已落盘片保留并提示「已停止：已写入 d/t 条」。GUI 用 620 条 + 700ms 延迟验证只提交首片（300 条），后续片未落盘。
+
+### 新增测试
+- `move` 源文件删除失败回滚（EBUSY patch，断言源文件完整/目标回滚/scope 未变）。
+- `withLock` 超时 `code=busy`；陈旧锁自愈后无 `.heal-*` 认领目录残留。
+- settings overlay 锁争用：write/reset 均抛 busy，释放后恢复正常。
+
+### 验证证据
+- 单元 **326/326**；live **192/192**；真实 GUI **91/91**；数据根快照一致、零残留。
+
 ## [0.24.33] - 2026-11-13
 
 ### 性能 Performance（第五轮宿主审计 P1：30k 库全量 stat 冻结）

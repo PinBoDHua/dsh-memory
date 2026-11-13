@@ -16,6 +16,24 @@ function tmpRoot() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-memory-lock-'))
 }
 
+test('lock timeout carries code=busy (routes map to 503)', () => {
+  const root = tmpRoot()
+  const lockPath = path.join(root, '.lock-busy')
+  fs.mkdirSync(lockPath)
+  assert.throws(() => withLock(lockPath, () => {}, { timeoutMs: 30, staleMs: 60_000 }), (err) => err.code === 'busy')
+})
+
+test('stale heal leaves no claim directory behind', () => {
+  const root = tmpRoot()
+  const lockPath = path.join(root, '.lock-heal-cleanup')
+  fs.mkdirSync(lockPath)
+  const old = new Date(Date.now() - 60_000)
+  fs.utimesSync(lockPath, old, old)
+  const result = withLock(lockPath, () => 'ok', { timeoutMs: 500, staleMs: 1000 })
+  assert.equal(result, 'ok')
+  assert.deepEqual(fs.readdirSync(root).filter((name) => name.includes('.heal-')), [])
+})
+
 test('release does not delete a lock taken over by another owner (no double release)', () => {
   const root = tmpRoot()
   const lockPath = path.join(root, '.lock-owner')
