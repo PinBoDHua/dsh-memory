@@ -3,6 +3,15 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.24.20] - 2026-11-13
+
+### 修复 Fixed（第三轮审计 P3：展示口径一致性）
+- **隐藏归类与状态分布同口径**：`collectEntries` 的 hidden 计数改为按「首个生效的排除原因」归类，原因顺序与 `entryStatus` 一致（superseded → expired → archived）；archived+expired 双态条目在隐藏提示与状态 chips 中不再算成两类，`include_*` 部分放宽时按实际拦截原因归类（与列表可见性一致）。
+- **`/stats` 与列表同参数**：`service.stats` 接受 `status/include_superseded/include_expired/include_archived/category/origin/tag`，路由透传；客户端统计请求与列表请求同口径（`entriesParams`）。「全部状态/已归档」视图下统计头总数、分类分布与列表一致，不再出现列表 N 条而头部 0 条。
+
+### 新增 Added
+- 测试：archived+expired 双态 hidden/byStatus 优先级、`include_expired` 部分放宽归类、`service.stats` 过滤视图 totals、`GET /stats` status/include/category 透传；GUI 断言归档视图的统计请求同步 `status/include_archived`。
+
 ## [0.24.19] - 2026-11-13
 
 ### 修复 Fixed（第三轮审计 P2：面板体验/可访问性批次）

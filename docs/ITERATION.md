@@ -120,8 +120,8 @@ This file is the self-iteration ledger for dsh-memory: per-round increments, ver
 
 **P3**
 - [ ] 删除「损坏的后继文件」不清理前驱 `superseded_by`，旧记忆永久隐藏。
-- [ ] hidden 归类顺序（superseded→archived→expired）与 `entryStatus`（→expired→archived）不一致。
-- [ ] `/stats` 不接收 status/include_*，「全部状态」视图下头部总数与列表不一致。
+- [x] hidden 归类顺序（superseded→archived→expired）与 `entryStatus`（→expired→archived）不一致（0.24.20：统一按 entryStatus 优先级，含双态条目）。
+- [x] `/stats` 不接收 status/include_*，「全部状态」视图下头部总数与列表不一致（0.24.20：stats 与列表同参数，客户端统计请求同步 status/include/category/origin/tag）。
 - [x] 编辑/删除确认弹窗写请求期间无「进行中」反馈（0.24.19：显示保存中/删除中）。
 - [x] 搜索框清空按钮 aria-label 误用「清除筛选」；标签过滤输入框无清空入口（0.24.19：clearSearch 文案 + 标签清空按钮）。
 - [ ] live-check bundle 标记仍为字符串包含断言（版本已动态化）。

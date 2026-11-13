@@ -510,6 +510,22 @@ async function main() {
     ok('workspaces 数组', Array.isArray(ws.json?.workspaces))
   })
 
+  await check('隐藏归类与统计/列表同口径（0.24.20）', async () => {
+    const sv = await req('POST', '/save', { token, body: { content: `${RUN} 双态条目`, scope: 'global', origin: 'auto' } })
+    const id = sv.json?.result?.entry?.id ?? ''
+    if (id) created.push(id)
+    await req('POST', '/update', { token, body: { id, archived: true, expires: '2020-01-01' } })
+    const q = `query=${encodeURIComponent(`${RUN} 双态条目`)}&scope=global`
+    const det = await req('GET', `/entries?${q}`)
+    ok('双态 hidden 归入 expired（与状态优先一致）', det.json?.hidden?.expired === 1 && det.json?.hidden?.archived === 0, JSON.stringify(det.json?.hidden))
+    const stats = await req('GET', `/stats?${q}`)
+    ok('双态 byStatus 也是 expired', stats.json?.stats?.byStatus?.expired === 1, JSON.stringify(stats.json?.stats))
+    const partial = await req('GET', `/entries?${q}&include_expired=true`)
+    ok('部分放宽时按被拦截的归档归类', partial.json?.hidden?.archived === 1 && partial.json?.hidden?.expired === 0, JSON.stringify(partial.json?.hidden))
+    const filteredStats = await req('GET', `/stats?${q}&status=expired&include_expired=true&include_archived=true`)
+    ok('stats 过滤视图与列表同口径', filteredStats.json?.stats?.total === 1, JSON.stringify(filteredStats.json?.stats))
+  })
+
   await check('账本幽灵清理与悬垂取代指针修复（0.24.18）', async () => {
     // a) 手工删除文件留下的账本幽灵记录：下一次导入成功后触发惰性 prune。
     const sv = await req('POST', '/save', { token, body: { content: `${RUN} 幽灵清理`, scope: 'global', origin: 'auto' } })

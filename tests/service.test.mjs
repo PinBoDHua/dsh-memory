@@ -294,6 +294,21 @@ test('concurrent import fails fast with retryable busy instead of freezing on th
   assert.ok(elapsed < 5000, `lock wait ${elapsed}ms (expected ~3s cap)`)
 })
 
+test('stats honours status/include_* so filtered view totals match the list', () => {
+  const { service } = tmpService()
+  const archived = service.save({ content: '归档统计条目', scope: 'global' })
+  service.update({ id: archived.entry.id, archived: true })
+  service.save({ content: '活跃统计条目', scope: 'global' })
+  const active = service.stats({ scope: 'global' })
+  assert.equal(active.total, 1)
+  const archivedView = service.stats({ scope: 'global', status: 'archived', includeArchived: true })
+  assert.equal(archivedView.total, 1)
+  assert.equal(archivedView.byStatus.archived, 1)
+  assert.equal(archivedView.byStatus.active, 1)
+  const allView = service.stats({ scope: 'global', status: 'all', includeArchived: true })
+  assert.equal(allView.total, 2)
+})
+
 test('search offset paginates without overlap', () => {
   const { service } = tmpService()
   for (let i = 0; i < 5; i++) service.save({ content: `服务分页 ${i}`, scope: 'global' })

@@ -185,6 +185,7 @@ function check(name, cond, detail = '') {
   console.log(`${cond ? '  ✔' : '  ✖'} ${name}${cond || !detail ? '' : ` — ${detail}`}`)
 }
 const lastEntriesRequest = () => [...requests].reverse().find((u) => u.includes('/entries'))
+const lastStatsRequest = () => [...requests].reverse().find((u) => u.includes('/stats'))
 
 async function main() {
   if (!existsSync(EDGE)) throw new Error(`找不到 Edge：${EDGE}（可用 EDGE_PATH 指定）`)
@@ -334,6 +335,9 @@ async function main() {
     const archivedReq = lastEntriesRequest()
     check('面板状态过滤随请求上行（status=archived）', archivedClicked && archivedReq !== undefined && /[?&]status=archived(&|$)/.test(archivedReq), archivedReq)
     check('隐藏态视图放宽全部 include_*', archivedReq !== undefined && archivedReq.includes('include_superseded=true') && archivedReq.includes('include_expired=true') && archivedReq.includes('include_archived=true'), archivedReq)
+    // 0.24.20：统计请求与列表同口径（status/include_*），否则「全部状态/已归档」视图头部数字与列表矛盾。
+    const statsArchivedReq = lastStatsRequest()
+    check('统计请求同步 status/include_archived（视图一致）', statsArchivedReq !== undefined && /[?&]status=archived(&|$)/.test(statsArchivedReq) && statsArchivedReq.includes('include_archived=true'), statsArchivedReq)
     await evaluate(`(() => { const chips = [...document.querySelectorAll('.dm_chips_status .dm_chip')]; if (chips[1]) chips[1].click(); return true })()`)
     await sleep(800)
 

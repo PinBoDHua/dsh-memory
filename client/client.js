@@ -2280,7 +2280,7 @@ var IMPORT_TIMEOUT_MS = 180000
           else if (selection === 'all') { scopeParams.scope = 'all'; scopeParams.workspace = currentCwd }
           else { scopeParams.scope = 'workspace'; scopeParams.workspace = selection }
           var params = entriesParams(Object.assign({}, scopeParams, { query: query, category: categoryFilter, origin: originFilter, tag: tagFilter, status: statusFilter, limit: pageSize + 1, offset: page * pageSize }))
-          var statsParams = Object.assign({}, scopeParams, { query: query })
+          var statsParams = entriesParams(Object.assign({}, scopeParams, { query: query, category: categoryFilter, origin: originFilter, tag: tagFilter, status: statusFilter }))
           return Promise.all([api.entries(params), api.stats(statsParams)]).then(function (results) {
             if (seq !== seqRef.current) return
             var doc = results[0]

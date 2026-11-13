@@ -307,6 +307,23 @@ test('import bodies larger than the old 1MB cap are accepted (backup restore pat
   assert.equal(dry.json().result.entries.length, 1)
 })
 
+test('GET /stats honours status/include_* and category filters', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-memory-stats-'))
+  const service = createMemoryService({ root })
+  const handlers = createHandlers({ service, token: TOKEN, version: '0.24.20-test' })
+  const auth = { 'x-rpc-key': TOKEN }
+  const a = service.save({ content: '归档路由统计', scope: 'global', category: 'decision' })
+  service.update({ id: a.entry.id, archived: true })
+  service.save({ content: '活跃路由统计', scope: 'global', category: 'fact' })
+  const archivedRes = fakeRes()
+  await handlers.stats(fakeReq({ url: '/plugins/dsh-memory/stats?scope=global&status=archived&include_archived=true', headers: auth }), archivedRes)
+  assert.equal(archivedRes.statusCode, 200)
+  assert.equal(archivedRes.json().stats.total, 1)
+  const filtered = fakeRes()
+  await handlers.stats(fakeReq({ url: '/plugins/dsh-memory/stats?scope=global&category=decision', headers: auth }), filtered)
+  assert.equal(filtered.json().stats.total, 0, 'archived decision hidden by default')
+})
+
 test('import io failure maps to 500 code=io with sanitized message (no partial writes)', async () => {
   const { handlers, root } = setup()
   const auth = { 'x-rpc-key': TOKEN }

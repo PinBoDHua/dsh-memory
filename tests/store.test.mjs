@@ -365,6 +365,19 @@ test('collectEntries single pass matches legacy filterEntries visible/hidden/byS
   }
 })
 
+test('hidden classification follows entryStatus priority for archived+expired entries', () => {
+  const root = tmpRoot()
+  const { entry } = store.saveEntry(root, { content: '双态条目', scope: 'global' })
+  store.updateEntry(root, entry.id, { archived: true, expires: '2020-01-01' })
+  const def = store.collectEntries(root, { scope: 'global' })
+  assert.deepEqual(def.hidden, { superseded: 0, expired: 1, archived: 0, total: 1 })
+  assert.equal(def.byStatus.expired, 1, 'byStatus uses the same priority')
+  // 只放宽过期（仍归档）：被归档门挡住，归类为 archived——与列表可见性一致。
+  const onlyExpired = store.collectEntries(root, { scope: 'global', includeExpired: true })
+  assert.equal(onlyExpired.visible.length, 0)
+  assert.deepEqual(onlyExpired.hidden, { superseded: 0, expired: 0, archived: 1, total: 1 })
+})
+
 test('render: provided selection is reused instead of recomputed', () => {
   const entries = [
     { id: 'm-a', scope: 'global', category: 'fact', content: '条目甲', updated: '2026-01-01T00:00:00.000Z' },
