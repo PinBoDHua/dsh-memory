@@ -3,6 +3,17 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.24.17] - 2026-11-13
+
+### 性能 Performance（第三轮审计 P1/P2：大库读路径）
+- **单遍收集**：新增 `store.collectEntries`——一次列目录＋一次遍历同时产出可见集（排序后）、隐藏态计数与 `byStatus`；`service.searchDetailed` 与 `service.stats` 改用它，不再各自做两遍全量过滤（旧实现一次面板刷新 = 4 次全量遍历，同步阻塞宿主事件循环）。
+- **相似查重倒排候选**：`findSimilarPairs` 由 O(N²) 两两比较改为「共享特征倒排索引」候选（Jaccard≥阈值必然共享特征；超高频近似停用词特征不参与候选生成），并保持与暴力实现结果逐项一致。1500 条库比较阶段由秒级降到 <900ms 断言内（实测百毫秒级）；伪造相近对仍能召回。
+- 同步把 `searchEntries` 建立在新 `collectEntries` 之上，检索语义/排序/分页与原实现一致（既有 256 项测试全部通过）。
+
+### 新增 Added
+- 测试：`collectEntries` 单遍结果与旧 `filterEntries` 在可见集/隐藏计数/byStatus/status 筛选/include_* 组合上逐项一致；`stats/searchDetailed` 单次调用只 stat 每个条目一次（countSync 计数）；倒排候选与暴力 Jaccard 结果集完全一致；1500 条库耗时上界回归。
+- 实测（5000 条：1000 global＋4000 workspace，暖缓存）：面板一次刷新（entries+stats）由约 960ms 降到约 500ms（各一次全量遍历）；冷启动首次列表仍以解析 5000 文件为主（约 3.1s）。
+
 ## [0.24.16] - 2026-11-13
 
 ### 修复 Fixed（第三轮审计 P1：导入落盘原子性）

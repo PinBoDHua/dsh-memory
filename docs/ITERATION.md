@@ -102,11 +102,11 @@ This file is the self-iteration ledger for dsh-memory: per-round increments, ver
 **P1**
 - [ ] 脚本彻底隔离：默认只读/临时 `DSH_HOME` 跑破坏性用例，`--fail-at=` 失败注入，前后数据根快照 diff=0 自检。
 - [x] import 落盘非原子：中途 IO 失败＝半套恢复 + 500 原样泄漏路径（0.24.16：暂存→统一提交→失败回滚；`code=io` 脱敏、`code=busy` 503 可重试）。
-- [ ] 大库读路径：`searchDetailed`/`stats` 各两遍全量扫描（5000 条约 1s 冻结宿主）→ 单遍 `collectEntries` 同时产出 visible/hidden/byStatus。
+- [x] 大库读路径：`searchDetailed`/`stats` 各两遍全量扫描（0.24.17：单遍 `collectEntries`；5000 条暖缓存一次刷新约 960ms→500ms）。
+- [x] 相似查重 O(N²)（0.24.17：特征倒排候选，1500 条比较阶段 <900ms，与暴力实现结果一致）。
 
 **P2**
-- [ ] 相似查重 O(N²)（2000+ 条冻结数秒）→ 共享特征倒排候选 + 扫描上限/分片。
-- [ ] 大导入写放大 + 同步锁：每条 ensureMeta/读写 index.json；`touchAccess` 锁等待 5s 冻结事件循环 → 合并索引写、簿记短超时、busy 503。
+- [ ] 大导入写放大 + 同步锁：每条 ensureMeta/读写 index.json；`touchAccess` 锁等待 5s 冻结事件循环 → 合并索引写、簿记短超时、busy 503。（0.24.16 已合并 ensureMeta/索引刷新；簿记短超时仍待做）
 - [ ] `access.json` 无 GC：手工删文件后同 id 重导入继承幽灵命中；账本无界增长 → prune（list/status/backup/import 后惰性）。
 - [ ] `backups/` 按任意 `*.json` 轮转与 lastBackup：会删用户手放导出、外来未来 mtime 永久阻塞自动备份 → 只匹配 `dsh-memory-*.json`。
 - [ ] v1→v2 迁移的强制备份失败被静默吞掉；`maybeAutoBackup` 不可写抛错 → 降级 + status 暴露 migrationPending/backupError。

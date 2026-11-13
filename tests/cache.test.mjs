@@ -132,6 +132,33 @@ test('parsed-entry cache is LRU: hot entry survives eviction pressure', async ()
   }
 })
 
+test('stats/searchDetailed scan entries once (single-pass collectEntries)', () => {
+  const root = tmpRoot()
+  store.clearEntryCache()
+  const service = createMemoryService({ root })
+  for (let i = 0; i < 10; i += 1) service.save({ content: `单遍扫描 ${i}`, scope: 'global' })
+  store.clearEntryCache()
+  const original = fs.statSync
+  let stats = 0
+  fs.statSync = function (file, ...args) {
+    const p = String(file)
+    if (p.startsWith(root) && p.endsWith('.md')) stats += 1
+    return original.call(this, file, ...args)
+  }
+  try {
+    const beforeStats = stats
+    assert.equal(service.stats({ scope: 'global' }).total, 10)
+    const statsScan = stats - beforeStats
+    assert.ok(statsScan <= 12, `stats statSync=${statsScan} (single pass ~10, legacy was 2x)`)
+    const beforeDetailed = stats
+    assert.equal(service.searchDetailed({ scope: 'global' }).entries.length, 10)
+    const detailedScan = stats - beforeDetailed
+    assert.ok(detailedScan <= 12, `searchDetailed statSync=${detailedScan} (single pass ~10, legacy was 2x)`)
+  } finally {
+    fs.statSync = original
+  }
+})
+
 test('batch import reads each scope once instead of O(N×M)', () => {
   const root = tmpRoot()
   store.clearEntryCache()

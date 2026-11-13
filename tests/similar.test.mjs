@@ -139,3 +139,72 @@ test('POST /save result carries similar array', async () => {
   assert.ok(Array.isArray(doc.result.similar))
   assert.ok(doc.result.similar.some((s) => s.id === firstId && typeof s.score === 'number'))
 })
+
+// ---------- 倒排候选与暴力实现等价（0.24.17） ----------
+
+function brutePairs(entries, threshold = 0.5) {
+  const out = []
+  for (let i = 0; i < entries.length; i += 1) {
+    for (let j = i + 1; j < entries.length; j += 1) {
+      const score = store.contentSimilarity(entries[i].content, entries[j].content)
+      if (score < threshold) continue
+      const [older, newer] = String(entries[i].updated) <= String(entries[j].updated) ? [entries[i], entries[j]] : [entries[j], entries[i]]
+      out.push(`${older.id}|${newer.id}|${Math.round(score * 100) / 100}`)
+    }
+  }
+  return out.sort()
+}
+
+test('findSimilarPairs inverted candidate index matches brute force exactly', () => {
+  const root = tmpRoot()
+  const base = ['用户要求所有回复一律使用简体中文', '项目使用 pnpm 而不是 npm 管理依赖', '所有测试必须先红后绿', '回答尽量简洁并给出证据']
+  const variants = [
+    '用户要求所有回复都使用简体中文',
+    '用户要求全部回复一律使用简体中文',
+    '项目使用 pnpm 管理依赖而不是 npm',
+    '所有测试必须先写失败用例再实现',
+    '回答尽量简洁，同时给出证据',
+    '完全无关的另一条记忆：明天下午三点开会',
+    'Git push 需要显式走代理端口',
+  ]
+  const all = [...base, ...variants]
+  const entries = all.map((content, i) => store.writeEntry(root, {
+    id: `m-sim-${i}`,
+    category: 'fact',
+    scope: 'global',
+    tags: [],
+    created: `2026-01-0${(i % 9) + 1}T00:00:00.000Z`,
+    updated: `2026-01-0${(i % 9) + 1}T00:00:00.000Z`,
+    source: '',
+    content,
+  }))
+  const fast = store.findSimilarPairs(root, { scope: 'global', limit: 1000 }).map((p) => `${p.older.id}|${p.newer.id}|${p.score}`).sort()
+  const slow = brutePairs(entries)
+  assert.deepEqual(fast, slow)
+})
+
+test('findSimilarPairs stays fast on a 1500-entry library (inverted candidates)', () => {
+  const root = tmpRoot()
+  const now = new Date().toISOString()
+  for (let i = 0; i < 1500; i += 1) {
+    store.writeEntry(root, {
+      id: `m-big-${i}`,
+      category: 'fact',
+      scope: 'global',
+      tags: [],
+      created: now,
+      updated: now,
+      source: '',
+      content: `编号${i} 的独立测试记录`,
+    })
+  }
+  // 伪造一对真正相近的条目，确认优化后仍能召回。
+  store.writeEntry(root, { id: 'm-big-near-a', category: 'fact', scope: 'global', tags: [], created: now, updated: now, source: '', content: '所有测试必须先写失败用例再实现，最后重构' })
+  store.writeEntry(root, { id: 'm-big-near-b', category: 'fact', scope: 'global', tags: [], created: now, updated: now, source: '', content: '所有测试必须先写失败用例，再实现并重构' })
+  store.listScope(root, 'global', undefined) // 预热解析缓存，只测比较成本
+  const started = Date.now()
+  const pairs = store.findSimilarPairs(root, { scope: 'global' })
+  const elapsed = Date.now() - started
+  assert.ok(pairs.some((p) => p.older.id === 'm-big-near-a' && p.newer.id === 'm-big-near-b'), 'near pair still found')
+  assert.ok(elapsed < 900, `1500-entry similar scan took ${elapsed}ms (was O(N^2) seconds)`)
+})

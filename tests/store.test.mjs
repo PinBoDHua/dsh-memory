@@ -331,6 +331,40 @@ test('move: superseded duplicate in target scope does not block the move', () =>
   assert.throws(() => store.moveEntry(root, activeDup.id, 'workspace', CWD_A), (err) => err.code === 'duplicate')
 })
 
+test('collectEntries single pass matches legacy filterEntries visible/hidden/byStatus', () => {
+  const root = tmpRoot()
+  const { entry: pinned } = store.saveEntry(root, { content: '检索关键词甲', scope: 'global', pinned: true })
+  const { entry: superseded } = store.saveEntry(root, { content: '检索关键词乙', scope: 'global' })
+  const { entry: successor } = store.saveEntry(root, { content: '检索关键词丙', scope: 'global' })
+  store.updateEntry(root, successor.id, { supersedes: superseded.id })
+  const { entry: archived } = store.saveEntry(root, { content: '检索关键词丁', scope: 'global' })
+  store.updateEntry(root, archived.id, { archived: true })
+  store.saveEntry(root, { content: '检索关键词戊', scope: 'global', expires: '2020-01-01' })
+  assert.ok(pinned.id && superseded.id)
+
+  const opts = { scope: 'global', query: '检索关键词' }
+  const collected = store.collectEntries(root, opts)
+  assert.deepEqual(collected.visible.map((e) => e.id), store.filterEntries(root, opts).map((e) => e.id))
+  assert.deepEqual(collected.hidden, { superseded: 1, archived: 1, expired: 1, total: 3 })
+
+  const full = store.filterEntries(root, { ...opts, includeSuperseded: true, includeExpired: true, includeArchived: true })
+  const byStatus = { active: 0, superseded: 0, expired: 0, archived: 0, pinned: 0 }
+  for (const e of full) {
+    byStatus[store.entryStatus(e)] += 1
+    if (e.pinned) byStatus.pinned += 1
+  }
+  assert.deepEqual(collected.byStatus, byStatus)
+
+  // status 筛选与 include_* 放宽与旧实现逐项一致。
+  for (const extra of [{ status: 'pinned' }, { status: 'active' }, { includeSuperseded: true }, { includeArchived: true }, { includeExpired: true }]) {
+    assert.deepEqual(
+      store.collectEntries(root, { ...opts, ...extra }).visible.map((e) => e.id),
+      store.filterEntries(root, { ...opts, ...extra }).map((e) => e.id),
+      JSON.stringify(extra),
+    )
+  }
+})
+
 test('render: provided selection is reused instead of recomputed', () => {
   const entries = [
     { id: 'm-a', scope: 'global', category: 'fact', content: '条目甲', updated: '2026-01-01T00:00:00.000Z' },
