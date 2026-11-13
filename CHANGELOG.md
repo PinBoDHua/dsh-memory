@@ -3,6 +3,14 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.22.0] - 2026-11-13
+
+### 变更 Changed
+- **面板来源/标签改服务端过滤**：origin 过滤由客户端逐页过滤改为服务端（`GET /entries?origin=`），修复来源过滤下分页条数波动/hasMore 失准；标签过滤 likewise 走服务端 `tag`。统计条保持分布概览口径。
+
+### 新增 Added
+- 工具栏标签过滤输入框（精确匹配、大小写不敏感、300ms 防抖；中英 i18n＋主题化样式）；「清除全部过滤」一并重置标签。
+
 ## [0.21.0] - 2026-11-13
 
 ### 新增 Added
@@ -242,6 +250,7 @@ All notable changes to this project are documented here. Format follows Keep a C
 - 系统提示注入：指引＋字符预算内召回（`interpolate: false` 保护用户内容）。
 - 隐私护栏：密码/密钥/token 规则检测硬拒写。
 
+[0.22.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.18.0...v0.19.0

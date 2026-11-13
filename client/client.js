@@ -231,6 +231,8 @@
     title: '记忆管理',
     subtitle: '跨会话长期记忆 · 全局与工作区',
     searchPlaceholder: '搜索记忆…',
+    tagFilterPlaceholder: '标签过滤',
+    tagFilterHint: '按标签精确过滤（大小写不敏感）',
     searchHint: '按 / 快速搜索',
     newMemory: '新建记忆',
     scopeGlobal: '全局',
@@ -428,6 +430,8 @@
     title: 'Memory manager',
     subtitle: 'Cross-session long-term memory · global & workspace',
     searchPlaceholder: 'Search memories…',
+    tagFilterPlaceholder: 'Filter by tag',
+    tagFilterHint: 'Filter by exact tag (case-insensitive)',
     searchHint: 'Press / to search',
     newMemory: 'New memory',
     scopeGlobal: 'Global',
@@ -683,6 +687,8 @@
     '.dm_search{width:100%;height:36px;box-sizing:border-box;border:1px solid var(--dm-line2);border-radius:10px;background:var(--dm-surface);color:var(--dm-ink);padding:0 32px 0 34px;font:inherit;font-size:12.5px;transition:border-color .15s,box-shadow .15s;}',
     '.dm_search::placeholder{color:var(--dm-ink3);}',
     '.dm_search:focus{outline:none;border-color:var(--dm-primary);box-shadow:var(--dm-ring);}',
+    '.dm_taginput{height:38px;width:140px;padding:0 12px;border:1px solid var(--dm-line2);border-radius:12px;background:var(--dm-bg);color:var(--dm-ink);font:inherit;font-size:13px;}',
+    '.dm_taginput:focus{outline:none;border-color:var(--dm-primary);box-shadow:var(--dm-ring);}',
     '.dm_search_clear{position:absolute;right:6px;top:50%;transform:translateY(-50%);width:24px;height:24px;border:none;border-radius:50%;background:transparent;color:var(--dm-ink3);cursor:pointer;display:flex;align-items:center;justify-content:center;corner-shape:round;}',
     '.dm_search_clear:hover{background:var(--dm-line);color:var(--dm-ink);}',
     '.dm_toolbtn{height:36px;}',
@@ -1827,6 +1833,8 @@
         var categoryFilter = categoryState[0]; var setCategoryFilter = categoryState[1]
         var originState = useState('')
         var originFilter = originState[0]; var setOriginFilter = originState[1]
+        var tagState = useState('')
+        var tagFilter = tagState[0]; var setTagFilter = tagState[1]
         var statusState = useState('active')
         var statusFilter = statusState[0]; var setStatusFilter = statusState[1]
         var pageState = useState(0)
@@ -1890,7 +1898,7 @@
           if (selection === 'global') scopeParams.scope = 'global'
           else if (selection === 'all') { scopeParams.scope = 'all'; scopeParams.workspace = currentCwd }
           else { scopeParams.scope = 'workspace'; scopeParams.workspace = selection }
-          var params = Object.assign({}, scopeParams, { query: query, category: categoryFilter, limit: pageSize + 1, offset: page * pageSize }, statusQueryFlags(statusFilter))
+          var params = Object.assign({}, scopeParams, { query: query, category: categoryFilter, origin: originFilter, tag: tagFilter, limit: pageSize + 1, offset: page * pageSize }, statusQueryFlags(statusFilter))
           var statsParams = Object.assign({}, scopeParams, { query: query })
           return Promise.all([api.entries(params), api.stats(statsParams), api.recallPreview(currentCwd).catch(function () { return null })]).then(function (results) {
             if (seq !== seqRef.current) return
@@ -1902,15 +1910,15 @@
             var sliced = pageSlice(doc.entries, pageSize)
             // 当前页被删空（如删掉末页最后一条）→ 自动回退一页，避免误导性空态。
             if (sliced.items.length === 0 && page > 0) { setPage(page - 1); return }
-            // 来源/状态筛选在客户端过滤当前页（服务端仅按 include_* 放宽隐藏态）。
-            setEntries(sliced.items.filter(function (e) { return matchesFilters(e, { status: statusFilter, origin: originFilter }) }))
+            // 状态筛选在客户端过滤当前页；来源/标签已服务端过滤（分页口径一致）。
+            setEntries(sliced.items.filter(function (e) { return matchesFilters(e, { status: statusFilter }) }))
             setHasMore(sliced.hasMore)
             setListError('')
           }).catch(function (err) {
             if (seq !== seqRef.current) return
             setListError(errorText(err, t))
           })
-        }, [api, query, categoryFilter, originFilter, statusFilter, page, pageSize, selection, currentCwd, t])
+        }, [api, query, categoryFilter, originFilter, tagFilter, statusFilter, page, pageSize, selection, currentCwd, t])
 
         // 写入完成回调可能捕获旧的 refreshEntries（busy 期间过滤条件可变）；
         // 一律经 ref 调用最新版本，避免陈旧过滤结果覆盖列表。
@@ -2024,9 +2032,9 @@
         // 选择/查询/分类/页码变化 → 刷新列表（查询防抖 300ms）
         useEffect(function () {
           if (phase !== 'ready') return undefined
-          var timer = setTimeout(function () { refreshEntries() }, query ? 300 : 0)
+          var timer = setTimeout(function () { refreshEntries() }, (query || tagFilter) ? 300 : 0)
           return function () { clearTimeout(timer) }
-        }, [phase, query, categoryFilter, originFilter, statusFilter, page, selection, currentCwd, refreshEntries])
+        }, [phase, query, categoryFilter, originFilter, tagFilter, statusFilter, page, selection, currentCwd, refreshEntries])
 
         // toast 自动消失（时长按 toast 自带 duration）
         useEffect(function () {
@@ -2060,8 +2068,9 @@
         function changeSelection(value) { setSelection(value); setPage(0); setSelected([]) }
         function changeCategory(value) { setCategoryFilter(value); setPage(0); setSelected([]) }
         function changeOrigin(value) { setOriginFilter(value); setPage(0); setSelected([]) }
+        function changeTag(value) { setTagFilter(value); setPage(0); setSelected([]) }
         function changeStatus(value) { setStatusFilter(value); setPage(0); setSelected([]) }
-        function clearAllFilters() { setQuery(''); setCategoryFilter(''); setOriginFilter(''); setStatusFilter('active'); setPage(0); setSelected([]) }
+        function clearAllFilters() { setQuery(''); setCategoryFilter(''); setOriginFilter(''); setTagFilter(''); setStatusFilter('active'); setPage(0); setSelected([]) }
         // 被取代条目的「查看后继」：按 id 搜索（host query 匹配 id），回到活跃视图。
         function jumpToEntry(id) { setStatusFilter('all'); setOriginFilter(''); setCategoryFilter(''); setPage(0); setSelected([]); setQuery(String(id || '')) }
         function changePage(value) { setPage(value); setSelected([]) }
@@ -2365,7 +2374,7 @@
               h('button', { className: 'dm_btn', style: { marginTop: 12 }, onClick: function () { refreshEntries() } }, h(Icon, { name: 'undo', size: 13 }), t('retry')))
           }
           if (entries.length === 0) {
-            var filtered = !!(query || categoryFilter || originFilter || statusFilter !== 'active')
+            var filtered = !!(query || categoryFilter || originFilter || tagFilter || statusFilter !== 'active')
             return h('div', null, hiddenHint,
               h('div', { className: 'dm_empty' },
                 h(ConstellationArt, { small: filtered }),
@@ -2446,6 +2455,10 @@
                       { value: 'auto', label: t('originAuto'), icon: 'zap' },
                       { value: 'manual', label: t('originManual'), icon: 'edit' },
                     ],
+                  }),
+                  h('input', {
+                    className: 'dm_taginput', type: 'text', 'aria-label': t('tagFilterPlaceholder'), placeholder: t('tagFilterPlaceholder'), title: t('tagFilterHint'),
+                    value: tagFilter, onChange: function (e) { changeTag(e.target.value) },
                   }),
                   h('div', { className: 'dm_searchwrap' },
                     h('span', { className: 'dm_search_icon' }, h(Icon, { name: 'search', size: 15 })),
