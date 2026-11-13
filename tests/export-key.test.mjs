@@ -111,6 +111,17 @@ test('import accepts workspaceKey without cwd (no more no-workspace rejection)',
   assert.equal(store.listWorkspaceKey(b.root, key)[0].id, 'm-keyonly-1')
 })
 
+test('export all+workspace matches the panel view (global + that workspace only)', () => {
+  const { service } = tmpService()
+  seed(service)
+  const doc = service.export({ scope: 'all', workspace: WS_A })
+  assert.equal(doc.entries.length, 2, JSON.stringify(doc.entries.map((e) => e.content)))
+  assert.ok(doc.entries.some((e) => e.scope === 'global'))
+  assert.ok(doc.entries.every((e) => e.content !== 'beta 记忆'), 'other workspaces excluded')
+  const alpha = doc.entries.find((e) => e.scope === 'workspace')
+  assert.equal(alpha.workspaceKey, store.workspaceKey(WS_A))
+})
+
 test('merge mode merges by workspaceKey when cwd is unknown', () => {
   const a = tmpService()
   seed(a.service)

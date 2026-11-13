@@ -475,6 +475,113 @@ async function main() {
       await sleep(600)
     }
 
+    // 6b) P2 面板正确性（0.24.11）：标签点击精确过滤 / revived 提示 / busy 禁用卡片操作
+    const marker2 = `__gui_p2_${Date.now().toString(36)}__`
+    let p2ids = []
+    try {
+      const status = await apiJson('/status')
+      const token = status?.key
+      const saveOne = async (body) => (await apiJson('/save', { method: 'POST', token, body }))?.result?.entry
+      const tagA = await saveOne({ content: `${marker2} 标签A`, scope: 'global', origin: 'auto', tags: ['gui-p2-x'] })
+      const tagB = await saveOne({ content: `${marker2} gui-p2-x 只在正文`, scope: 'global', origin: 'auto', tags: ['gui-p2-y'] })
+      const reviveBase = await saveOne({ content: `${marker2} 复活条目`, scope: 'global', origin: 'auto' })
+      p2ids = [tagA?.id, tagB?.id, reviveBase?.id].filter(Boolean)
+      await apiJson('/update', { method: 'POST', token, body: { id: reviveBase.id, archived: true } })
+      const setInput = async (selector, value) => evaluate(`(() => {
+        const el = document.querySelector(${JSON.stringify(selector)})
+        if (!el) return false
+        const proto = el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype
+        Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, ${JSON.stringify(value)})
+        el.dispatchEvent(new Event('input', { bubbles: true }))
+        return true
+      })()`)
+      const searchInput = await evaluate(`(() => {
+        const el = document.querySelector('input.dm_search')
+        return el ? el.outerHTML.slice(0, 80) : 'missing'
+      })()`)
+      await setInput('input.dm_search', marker2)
+      await sleep(1400)
+      // 1. 卡片标签点击 = 精确 tag= 过滤（不再把标签塞进全文 query）
+      const tagClicked = await evaluate(`(() => {
+        const btn = [...document.querySelectorAll('.dm_tag')].find(el => (el.textContent || '').trim() === '#gui-p2-x')
+        if (!btn) return false
+        btn.click()
+        return true
+      })()`)
+      await sleep(1300)
+      const tagReq2 = lastEntriesRequest()
+      const idsShown = await evaluate(`[...document.querySelectorAll('.dm_id')].map(el => (el.textContent || '').trim())`)
+      check('标签点击走精确 tag= 过滤', tagClicked && tagReq2 !== undefined && /[?&]tag=gui-p2-x(&|$)/.test(tagReq2) && !/[?&]query=/.test(tagReq2), tagReq2 ?? searchInput)
+      check('标签过滤只显示该标签条目', idsShown.includes(tagA.id) && !idsShown.includes(tagB.id), JSON.stringify(idsShown))
+      // 清空标签过滤，恢复搜索。
+      await setInput('input[aria-label*="标签"]', '')
+      await sleep(400)
+      await setInput('input.dm_search', marker2)
+      await sleep(1300)
+      // 2. revived：归档条目以相同内容再次保存 → 提示「已恢复为活跃」，而不是「未重复写入」
+      await evaluate(`(() => { const b = [...document.querySelectorAll('button')].find(el => /新建记忆|New memory/.test((el.textContent || '').trim())); if (b) b.click(); return Boolean(b) })()`)
+      await sleep(800)
+      await setInput('.dm_dialog textarea', `${marker2} 复活条目`)
+      const scopeSelected = await evaluate(`(() => {
+        const trigger = [...document.querySelectorAll('.dm_dialog .dm_select_trigger')].find(el => /作用域|Scope/.test((el.getAttribute('aria-label') || '') + (el.innerText || '')))
+        if (!trigger) return false
+        trigger.click()
+        return true
+      })()`)
+      await sleep(500)
+      const globalPicked = await evaluate(`(() => {
+        const opt = [...document.querySelectorAll('[role="option"], .dm_select_opt')].find(el => /全局|Global/.test((el.textContent || '').trim()))
+        if (!opt) return false
+        opt.click()
+        return true
+      })()`)
+      await sleep(400)
+      await evaluate(`(() => {
+        const btn = [...document.querySelectorAll('.dm_dialog button')].find(el => /保存|Save/.test((el.textContent || '').trim()) && !/取消|Cancel/.test((el.textContent || '').trim()))
+        if (btn) btn.click()
+        return Boolean(btn)
+      })()`)
+      await sleep(1800)
+      const reviveToast = await evaluate(`(document.querySelector('.dm_toast_text') || {}).textContent || ''`)
+      const revivedList = await apiJson(`/entries?query=${encodeURIComponent(`${marker2} 复活条目`)}&scope=global&include_superseded=true&include_expired=true&include_archived=true`)
+      const revivedEntry = (revivedList?.entries || []).find((e) => e.id === reviveBase.id)
+      check('再次保存同内容显示「已恢复为活跃」', scopeSelected && globalPicked && /恢复|Restored/.test(reviveToast), reviveToast)
+      check('复活后条目回到活跃且 id 不变', Boolean(revivedEntry) && !revivedEntry.archived, JSON.stringify(revivedEntry && { id: revivedEntry.id, archived: revivedEntry.archived }))
+      // 3. busy 期间卡片操作按钮禁用 + 列表 aria-busy
+      await setInput('input.dm_search', marker2)
+      await sleep(1200)
+      await send('Network.emulateNetworkConditions', { offline: false, latency: 1800, downloadThroughput: -1, uploadThroughput: -1 })
+      await evaluate(`(() => {
+        const card = document.querySelector('.dm_card')
+        if (!card) return false
+        const btn = [...card.querySelectorAll('.dm_card_actions button')].find(el => /钉选|Pin/.test((el.textContent || '').trim()))
+        if (btn) btn.click()
+        return Boolean(btn)
+      })()`)
+      await sleep(200)
+      const busyState = await evaluate(`(() => ({
+        allDisabled: [...document.querySelectorAll('.dm_card_actions button')].every(b => b.disabled),
+        listBusy: document.querySelector('[aria-busy="true"]') !== null,
+      }))()`)
+      check('busy 期间卡片操作按钮禁用且列表 aria-busy', busyState.allDisabled && busyState.listBusy, JSON.stringify(busyState))
+      await sleep(3500)
+      await send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 })
+      await sleep(800)
+    } finally {
+      try {
+        const status = await apiJson('/status')
+        for (const id of p2ids) await apiJson('/forget', { method: 'POST', token: status?.key, body: { id } })
+      } catch { /* ignore */ }
+      await evaluate(`(() => {
+        const el = document.querySelector('input.dm_search')
+        if (!el) return false
+        Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(el, '')
+        el.dispatchEvent(new Event('input', { bubbles: true }))
+        return true
+      })()`).catch(() => {})
+      await sleep(600)
+    }
+
     // 7) 网络失败：离线时请求快速失败并显示可重试错误，而不是永久骨架/卡死。
     await send('Network.emulateNetworkConditions', { offline: true, latency: 0, downloadThroughput: -1, uploadThroughput: -1 })
     await evaluate(`(() => { const chips = [...document.querySelectorAll('.dm_chips .dm_chip')]; if (chips[1]) chips[1].click(); return Boolean(chips[1]) })()`)
@@ -496,7 +603,6 @@ async function main() {
     check('读取原始备份保留份数', Number.isInteger(originalRetention), String(originalRetention))
     await evaluate(`(() => { const tab = document.querySelector('#dm-tab-settings'); if (tab) tab.click(); return Boolean(tab) })()`)
     await sleep(1000)
-    check('设置页已打开', await evaluate(`document.querySelector('#dm-panel-settings') !== null && document.querySelectorAll('.dm_numinput').length > 0`))
     check('设置页已打开', await evaluate(`document.querySelector('#dm-panel-settings') !== null && document.querySelectorAll('.dm_numinput').length > 0`))
     const setRetention = async (value) => evaluate(`(() => {
       const input = document.querySelectorAll('.dm_numinput')[0]

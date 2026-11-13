@@ -3,6 +3,18 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.24.11] - 2026-11-13
+
+### 修复 Fixed（第二轮审计 P2：面板正确性批次）
+- **复活提示**：以相同内容重新保存一条「已归档/已过期」记忆时，服务端实际把它恢复为活跃；面板此前仍提示「已有相同记忆，未重复写入」。现在按 `revived` 优先提示「已恢复为活跃（原为归档/过期）」（`savedToastKey` 纯函数）。
+- **导出范围与视图一致**：视图为「全局＋当前工作区」时，导出不再静默包含**所有**工作区——新增 `export({scope:'all', workspace})` 语义（全局＋指定工作区），面板 `exportParams` 按实际所见传参；cwd 未知时回退仅全局；全量备份仍走「立即备份」。
+- **空工作区空态**：切到无记忆的工作区时显示「该工作区暂无记忆」而非「记忆库还是空的」（并保留新建入口）。
+- **卡片标签点击 = 精确标签过滤**：此前把标签塞进全文查询（正文命中也会混入）；现在走服务端 `tag=` 精确匹配、清空查询词，tooltip 同步改为「按此标签过滤」。
+- **busy 期间卡片操作禁用**：钉选/归档/编辑/删除按钮在写请求期间 `disabled`，列表容器带 `aria-busy`，不再是「可聚焦可点击但静默无响应」的死控件。
+
+### 新增 Added
+- 客户端纯函数 `savedToastKey` / `exportParams` 单测；`service.export` 的 all+workspace 语义单测（只含全局＋该工作区）；GUI 验收新增 5 项（标签精确过滤请求与结果、「已恢复为活跃」提示、复活后回到活跃且 id 不变、busy 禁用与 aria-busy），GUI 40→44 项。
+
 ## [0.24.10] - 2026-11-13
 
 ### 修复 Fixed（第二轮审计 P1）

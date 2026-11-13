@@ -7,7 +7,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import helpers from '../client/client.js'
 
-const { validateDraft, groupEntries, nextToken, entriesParams, buildEntriesQuery, workspaceOptions, errorKeyFor, shouldQueueToast, partitionSettled, parseTags, unwrapResult, settingsStatusNext, validateImportDoc, importSummary, pageSlice, entryDetailRows, relativeTime, formatBytes, isExpired, statusOf, originOf, statusQueryFlags } = helpers
+const { validateDraft, groupEntries, nextToken, entriesParams, buildEntriesQuery, workspaceOptions, errorKeyFor, shouldQueueToast, partitionSettled, parseTags, unwrapResult, settingsStatusNext, savedToastKey, exportParams, validateImportDoc, importSummary, pageSlice, entryDetailRows, relativeTime, formatBytes, isExpired, statusOf, originOf, statusQueryFlags } = helpers
 
 test('validateDraft accepts a complete draft and rejects bad ones', () => {
   assert.deepEqual(validateDraft({ content: '一条事实', category: 'fact' }), { ok: true })
@@ -190,6 +190,25 @@ test('unwrapResult unwraps write-route {result} envelopes (settings views)', () 
   assert.equal(unwrapResult(null), null)
   assert.equal(unwrapResult({ result: null }), null)
   assert.deepEqual(unwrapResult({ other: 1 }), { other: 1 })
+})
+
+test('savedToastKey prioritizes revived over dedup and similar', () => {
+  assert.equal(savedToastKey(null), 'saved')
+  assert.equal(savedToastKey({}), 'saved')
+  assert.equal(savedToastKey({ revived: true }), 'revivedSaved')
+  assert.equal(savedToastKey({ deduplicated: true }), 'deduplicated')
+  assert.equal(savedToastKey({ deduplicated: true, similar: [{ id: 'm-1' }] }), 'deduplicated')
+  // 复活是真实状态变化，优先于去重提示。
+  assert.equal(savedToastKey({ revived: true, deduplicated: true }), 'revivedSaved')
+  assert.equal(savedToastKey({ similar: [{ id: 'm-1' }, { id: 'm-2' }] }), 'similarSaved')
+  assert.equal(savedToastKey({ deduplicated: false, similar: [] }), 'saved')
+})
+
+test('exportParams keeps export scope equal to the visible view', () => {
+  assert.deepEqual(exportParams('global', 'D:\\proj'), { scope: 'global' })
+  assert.deepEqual(exportParams('all', 'D:\\proj'), { scope: 'all', workspace: 'D:\\proj' })
+  assert.deepEqual(exportParams('all', undefined), { scope: 'global' })
+  assert.deepEqual(exportParams('D:\\proj', 'D:\\proj'), { scope: 'workspace', workspace: 'D:\\proj' })
 })
 
 test('settingsStatusNext: coherent save/reset/failure/retry transitions', () => {

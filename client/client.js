@@ -229,6 +229,26 @@ function settingsStatusNext(status, event) {
   return next
 }
 
+  // 保存结果提示键（纯函数）：复活优先于去重，其次相似提示，最后普通保存。
+  function savedToastKey(result) {
+    var r = result || {}
+    if (r.revived) return 'revivedSaved'
+    if (r.deduplicated) return 'deduplicated'
+    var similar = r.similar || []
+    if (similar.length > 0) return 'similarSaved'
+    return 'saved'
+  }
+
+  // 导出参数（纯函数）：按当前视图导出——「全局＋当前工作区」不再静默导出全部工作区；
+  // 当前工作目录未知时回退仅全局（与列表实际可见范围一致）。
+  function exportParams(selection, currentCwd) {
+    if (selection === 'global') return { scope: 'global' }
+    if (selection === 'all' || selection === undefined || selection === null) {
+      return currentCwd ? { scope: 'all', workspace: currentCwd } : { scope: 'global' }
+    }
+    return { scope: 'workspace', workspace: selection }
+  }
+
   function validateImportDoc(doc) {
     if (!doc || typeof doc !== 'object') return { ok: false, error: 'bad-doc' }
     if (doc.format !== 'dsh-memory-export' || doc.version !== 1) return { ok: false, error: 'bad-doc' }
@@ -294,7 +314,7 @@ function settingsStatusNext(status, event) {
     return (mb < 10 ? mb.toFixed(1) : Math.round(mb)) + ' MB'
   }
 
-  var helpers = { validateDraft: validateDraft, groupEntries: groupEntries, nextToken: nextToken, entriesParams: entriesParams, buildEntriesQuery: buildEntriesQuery, workspaceOptions: workspaceOptions, errorKeyFor: errorKeyFor, shouldQueueToast: shouldQueueToast, partitionSettled: partitionSettled, parseTags: parseTags, unwrapResult: unwrapResult, settingsStatusNext: settingsStatusNext, validateImportDoc: validateImportDoc, importSummary: importSummary, pageSlice: pageSlice, entryDetailRows: entryDetailRows, relativeTime: relativeTime, formatBytes: formatBytes, isExpired: isExpired, statusOf: statusOf, originOf: originOf, statusQueryFlags: statusQueryFlags }
+  var helpers = { validateDraft: validateDraft, groupEntries: groupEntries, nextToken: nextToken, entriesParams: entriesParams, buildEntriesQuery: buildEntriesQuery, workspaceOptions: workspaceOptions, errorKeyFor: errorKeyFor, shouldQueueToast: shouldQueueToast, partitionSettled: partitionSettled, parseTags: parseTags, unwrapResult: unwrapResult, settingsStatusNext: settingsStatusNext, savedToastKey: savedToastKey, exportParams: exportParams, validateImportDoc: validateImportDoc, importSummary: importSummary, pageSlice: pageSlice, entryDetailRows: entryDetailRows, relativeTime: relativeTime, formatBytes: formatBytes, isExpired: isExpired, statusOf: statusOf, originOf: originOf, statusQueryFlags: statusQueryFlags }
 
   // ===== node 测试导出（CJS） =====
   if (typeof module !== 'undefined' && module.exports) {
@@ -331,6 +351,8 @@ function settingsStatusNext(status, event) {
     empty: '暂无记忆',
     emptyTitle: '记忆库还是空的',
     emptyHint: '对话中说「记住…」，或点这里写下第一条。',
+    emptyScopeTitle: '该工作区暂无记忆',
+    emptyScopeHint: '可以在这里新建，或切换到其他作用域查看。',
     noResults: '没有匹配的记忆',
     noResultsHint: '试试其他关键词，或清除筛选条件。',
     clearFilters: '清除筛选',
@@ -355,6 +377,8 @@ function settingsStatusNext(status, event) {
     bulkDeleteTitle: '删除这 {n} 条记忆？',
     deleteHint: '删除后 6 秒内可在底部提示中撤销。',
     saved: '已保存',
+    saved: '已保存',
+    revivedSaved: '已恢复为活跃（原为归档/过期）',
     deduplicated: '已有相同记忆，未重复写入',
     similarSaved: '已保存；检测到 {n} 条相似记忆（{id}），建议核对是否重复',
     deleted: '已删除',
@@ -439,7 +463,7 @@ function settingsStatusNext(status, event) {
     autoExtractHintDesc: '会话数轮未写入记忆时，提醒 agent 沉淀值得长期保留的内容（零额外模型调用）',
     decayEnabledLabel: '软衰减排序',
     decayEnabledDesc: '长期未命中的记忆降低排序权重（永不过滤、不删除，钉选豁免）',
-    tagSearch: '按此标签搜索',
+    tagSearch: '按此标签过滤',
     workspaceUnknown: '未知工作区',
     unknownWorkspaceHint: '有工作区路径未知（索引损坏），无法在面板中浏览；可用「导出」查看全部记忆，或手工修复数据目录下的 workspaces/index.json。',
     entriesUnit: '条',
@@ -540,6 +564,8 @@ function settingsStatusNext(status, event) {
     empty: 'No memories yet',
     emptyTitle: 'Your memory vault is empty',
     emptyHint: 'Say “remember…” in chat, or write the first one here.',
+    emptyScopeTitle: 'No memories in this workspace',
+    emptyScopeHint: 'Create one here, or switch to another scope.',
     noResults: 'No matching memories',
     noResultsHint: 'Try different keywords, or clear the filters.',
     clearFilters: 'Clear filters',
@@ -564,6 +590,8 @@ function settingsStatusNext(status, event) {
     bulkDeleteTitle: 'Delete these {n} memories?',
     deleteHint: 'You can undo from the toast within 6 seconds.',
     saved: 'Saved',
+    saved: 'Saved',
+    revivedSaved: 'Restored to active (was archived/expired)',
     deduplicated: 'Identical memory exists; nothing added',
     similarSaved: 'Saved; {n} similar memory found ({id}) — review for duplicates',
     deleted: 'Deleted',
@@ -648,7 +676,7 @@ function settingsStatusNext(status, event) {
     autoExtractHintDesc: 'After several turns without a memory write, remind the agent to save durable facts (no extra model calls)',
     decayEnabledLabel: 'Soft decay ranking',
     decayEnabledDesc: 'Long-unused memories rank lower (never filtered or deleted; pinned exempt)',
-    tagSearch: 'Search by this tag',
+    tagSearch: 'Filter by this tag',
     workspaceUnknown: 'Unknown workspace',
     unknownWorkspaceHint: 'Some workspace paths are unknown (corrupt index) and cannot be browsed here. Use Export to see all memories, or repair workspaces/index.json in the data directory by hand.',
     entriesUnit: 'entries',
@@ -1350,12 +1378,13 @@ function settingsStatusNext(status, event) {
           h('div', { className: 'dm_card_actions' },
             h('button', {
               className: 'dm_btn' + (entry.pinned ? ' dm_btn_pinned' : ''), 'aria-pressed': !!entry.pinned,
+              disabled: !!props.busy,
               onClick: function () { props.onTogglePin(entry) },
             }, h(Icon, { name: 'pin', size: 13, style: entry.pinned ? { fill: 'currentColor' } : null }), entry.pinned ? t('unpin') : t('pin')),
-            h('button', { className: 'dm_btn', onClick: function () { props.onToggleArchive(entry) } },
+            h('button', { className: 'dm_btn', disabled: !!props.busy, onClick: function () { props.onToggleArchive(entry) } },
               h(Icon, { name: 'archive', size: 13 }), entry.archived ? t('restore') : t('archive')),
-            h('button', { className: 'dm_btn', onClick: function () { props.onEdit(entry) } }, h(Icon, { name: 'edit', size: 13 }), t('edit')),
-            h('button', { className: 'dm_btn dm_btn_danger', onClick: function () { props.onDelete(entry) } }, h(Icon, { name: 'trash', size: 13 }), t('del'))))
+            h('button', { className: 'dm_btn', disabled: !!props.busy, onClick: function () { props.onEdit(entry) } }, h(Icon, { name: 'edit', size: 13 }), t('edit')),
+            h('button', { className: 'dm_btn dm_btn_danger', disabled: !!props.busy, onClick: function () { props.onDelete(entry) } }, h(Icon, { name: 'trash', size: 13 }), t('del'))))
       }
 
       // 焦点陷阱 + 焦点归还；busy 时禁止 Escape/遮罩关闭；回调经 ref 稳定。
@@ -2343,6 +2372,13 @@ function settingsStatusNext(status, event) {
         function changeCategory(value) { setCategoryFilter(value); setPage(0); setSelected([]) }
         function changeOrigin(value) { setOriginFilter(value); setPage(0); setSelected([]) }
         function changeTag(value) { setTagFilter(value); setPage(0); setSelected([]) }
+        // 卡片标签点击 = 精确标签过滤（与服务端 tag= 语义一致），而不是把标签塞进全文查询。
+        function filterByTag(tag) {
+          setTagFilter(String(tag || ''))
+          setQuery('')
+          setPage(0)
+          setSelected([])
+        }
         function changeStatus(value) { setStatusFilter(value); setPage(0); setSelected([]) }
         function clearAllFilters() { setQuery(''); setCategoryFilter(''); setOriginFilter(''); setTagFilter(''); setStatusFilter('active'); setPage(0); setSelected([]) }
         // 被取代条目的「查看后继」：按 id 搜索（host query 匹配 id），回到活跃视图。
@@ -2436,10 +2472,11 @@ function settingsStatusNext(status, event) {
           }
           promise.then(function (payload) {
             if (editorRef.current === started) setEditor(null)
-            var dedup = payload && payload.result && payload.result.deduplicated
-            var sim = (payload && payload.result && payload.result.similar) || []
-            if (!dedup && sim.length > 0) showToast('ok', t('similarSaved').replace('{n}', String(sim.length)).replace('{id}', sim[0].id))
-            else showToast('ok', dedup ? t('deduplicated') : t('saved'))
+            var result = (payload && payload.result) || {}
+            var key = savedToastKey(result)
+            var sim = result.similar || []
+            if (key === 'similarSaved') showToast('ok', t('similarSaved').replace('{n}', String(sim.length)).replace('{id}', sim[0].id))
+            else showToast('ok', t(key))
             // 新建条目按更新时间排在最前：回到第一页让它可见。
             if (started.mode === 'create') setPage(0)
             return refreshRef.current()
@@ -2510,7 +2547,7 @@ function settingsStatusNext(status, event) {
         function handleExport() {
           if (busy) return
           setBusy(true)
-          var scopeParams = selection === 'global' ? { scope: 'global' } : selection === 'all' ? { scope: 'all' } : { scope: 'workspace', workspace: selection }
+          var scopeParams = exportParams(selection, currentCwd)
           api.export(scopeParams).then(function (doc) {
             var blob = new Blob([JSON.stringify(doc, null, 2)], { type: 'application/json' })
             var url = URL.createObjectURL(blob)
@@ -2668,11 +2705,15 @@ function settingsStatusNext(status, event) {
           }
           if (entries.length === 0) {
             var filtered = !!(query || categoryFilter || originFilter || tagFilter || statusFilter !== 'active')
+            // 空态区分「筛选无结果 / 某工作区为空 / 整库为空」，避免切到空工作区误报「记忆库还是空的」。
+            var scopedEmpty = selection !== 'all' && selection !== 'global'
+            var emptyTitle = filtered ? t('noResults') : scopedEmpty ? t('emptyScopeTitle') : t('emptyTitle')
+            var emptyHint = filtered ? t('noResultsHint') : scopedEmpty ? t('emptyScopeHint') : t('emptyHint')
             return h('div', null, hiddenHint,
               h('div', { className: 'dm_empty' },
                 h(ConstellationArt, { small: filtered }),
-                h('div', { className: 'dm_empty_title' }, filtered ? t('noResults') : t('emptyTitle')),
-                h('div', { className: 'dm_empty_hint' }, filtered ? t('noResultsHint') : t('emptyHint')),
+                h('div', { className: 'dm_empty_title' }, emptyTitle),
+                h('div', { className: 'dm_empty_hint' }, emptyHint),
                 filtered
                   ? h('button', { className: 'dm_btn', style: { marginTop: 14 }, onClick: clearAllFilters }, h(Icon, { name: 'x', size: 13 }), t('clearFilters'))
                   : page === 0 ? h('button', { className: 'dm_btn dm_btn_primary', style: { marginTop: 14 }, onClick: openCreate }, h(Icon, { name: 'plus', size: 14, strokeWidth: 2.2 }), t('newMemory')) : null),
@@ -2688,14 +2729,15 @@ function settingsStatusNext(status, event) {
                 onToggleSelect: toggleSelect,
                 onEdit: openEdit, onDelete: openDelete,
                 onTogglePin: togglePin, onToggleArchive: toggleArchive, onJumpTo: jumpToEntry,
-                onTagClick: changeQuery,
+                onTagClick: filterByTag,
+                busy: busy,
                 onToast: function (text, kind) { showToast(kind, text) },
               })
             })
           }
-          if (selection !== 'all') return h('div', null, hiddenHint, rows(entries, 0), pager)
+          if (selection !== 'all') return h('div', { 'aria-busy': busy ? 'true' : 'false' }, hiddenHint, rows(entries, 0), pager)
           var groups = groupEntries(entries)
-          return h('div', null, hiddenHint,
+          return h('div', { 'aria-busy': busy ? 'true' : 'false' }, hiddenHint,
             groups.global.length ? h('div', { className: 'dm_section_title' }, h(Icon, { name: 'globe', size: 13 }), t('scopeGlobal'), h('span', { className: 'dm_section_n' }, groups.global.length + ' ' + t('entriesUnit'))) : null,
             rows(groups.global, 0),
             groups.workspace.length ? h('div', { className: 'dm_section_title' }, h(Icon, { name: 'folder', size: 13 }), t('scopeWorkspace'), h('span', { className: 'dm_section_n' }, groups.workspace.length + ' ' + t('entriesUnit'))) : null,
