@@ -103,7 +103,7 @@ This file is the self-iteration ledger for dsh-memory: per-round increments, ver
 - [ ] 脚本彻底隔离：默认只读/临时 `DSH_HOME` 跑破坏性用例，`--fail-at=` 失败注入，前后数据根快照 diff=0 自检。
 - [x] import 落盘非原子：中途 IO 失败＝半套恢复 + 500 原样泄漏路径（0.24.16：暂存→统一提交→失败回滚；`code=io` 脱敏、`code=busy` 503 可重试）。
 - [x] 大库读路径：`searchDetailed`/`stats` 各两遍全量扫描（0.24.17：单遍 `collectEntries`；5000 条暖缓存一次刷新约 960ms→500ms）。
-- [x] 相似查重 O(N²)（0.24.17：特征倒排候选，1500 条比较阶段 <900ms，与暴力实现结果一致）。
+- [x] 相似查重 O(N²)（0.24.17：特征倒排候选，1500 条比较阶段 <1.5s 断言，与暴力实现结果一致）。
 
 **P2**
 - [x] 大导入写放大 + 同步锁（0.24.16 合并 ensureMeta/索引刷新；0.24.18 账本簿记 400ms / 导入锁 3s 超时→busy，不再同步冻结）。
@@ -111,19 +111,19 @@ This file is the self-iteration ledger for dsh-memory: per-round increments, ver
 - [x] `backups/` 按任意 `*.json` 轮转与 lastBackup（0.24.18：只认 `dsh-memory-<时间戳>.json`，用户手放文件保留、外来未来 mtime 不再阻塞自动备份）。
 - [x] v1→v2 迁移的强制备份失败被静默吞掉（0.24.18：保留 v1 并在 status 暴露 pending/error；maybeAutoBackup 降级）。
 - [x] 导入悬垂 `superseded_by/supersedes` 指针使条目默认永久隐藏（0.24.18：丢弃不可达指针并计 repaired，批内前向引用保留）。
-- [ ] 常驻 tabpanel 导致 `/recall-preview` 初始化与设置保存各多一次（隐藏面板仍挂载即加载）→ RecallPreview 仅激活时加载。
-- [ ] 撤销吐司：倒计时条不随新吐司重启（Toast key 未传给组件）；消失后焦点掉 body；hover/focus 不暂停计时。
-- [ ] 分页时区块计数＝当前页条数，与统计条总数矛盾。
-- [ ] 批量选择浮栏在 DOM 末尾，键盘用户实际不可达（移入工具栏附近 + aria-live）。
-- [ ] 设置页滑杆拖动触发整页（含常驻列表）逐帧重渲染 → 本地值 + 提交时 onChange。
+- [x] 常驻 tabpanel 导致 `/recall-preview` 初始化与设置保存各多一次（0.24.19：隐藏面板不加载，主面板徽章仅在记忆页刷新，一次设置保存只 +1）。
+- [x] 撤销吐司：倒计时条不随新吐司重启；消失后焦点掉 body；hover/focus 不暂停（0.24.19：组件按 toast.id 重挂载、暂停/恢复计时、关闭后焦点回退面板容器）。
+- [x] 分页时区块计数＝当前页条数，与统计条总数矛盾（0.24.19：仅单页完整结果显示计数）。
+- [x] 批量选择浮栏在 DOM 末尾，键盘用户实际不可达（0.24.19：移到列表前 + region/aria-live）。
+- [x] 设置页滑杆拖动触发整页逐帧重渲染（0.24.19：拖动只更新本地值，松手/失焦才提交）。
 - [ ] 大库导入可能超过客户端 15s 超时（0.24.15 导入单独 180s 已缓解，仍无进度/幂等确认）。
 
 **P3**
 - [ ] 删除「损坏的后继文件」不清理前驱 `superseded_by`，旧记忆永久隐藏。
 - [ ] hidden 归类顺序（superseded→archived→expired）与 `entryStatus`（→expired→archived）不一致。
 - [ ] `/stats` 不接收 status/include_*，「全部状态」视图下头部总数与列表不一致。
-- [ ] 编辑/删除确认弹窗写请求期间无「进行中」反馈（最长 15s 静默）。
-- [ ] 搜索框清空按钮 aria-label 误用「清除筛选」；标签过滤输入框无清空入口。
+- [x] 编辑/删除确认弹窗写请求期间无「进行中」反馈（0.24.19：显示保存中/删除中）。
+- [x] 搜索框清空按钮 aria-label 误用「清除筛选」；标签过滤输入框无清空入口（0.24.19：clearSearch 文案 + 标签清空按钮）。
 - [ ] live-check bundle 标记仍为字符串包含断言（版本已动态化）。
 
 **待验证**

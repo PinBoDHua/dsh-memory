@@ -538,6 +538,26 @@ async function main() {
       const cards = await evaluate(`[...document.querySelectorAll('.dm_card')].map(el => (el.innerText || '').replace(/\\s+/g, ' '))`)
       check('临时记忆出现在面板列表', cards.filter((text) => text.includes(marker)).length === 2, JSON.stringify(cards.length))
 
+      // 0.24.19：批量浮栏在列表之前（键盘 Tab 可近达）+ region 语义。
+      const selState = await evaluate(`(() => {
+        const boxes = [...document.querySelectorAll('.dm_card .dm_check input')]
+        if (boxes.length < 2) return null
+        boxes[0].click()
+        boxes[1].click()
+        const bar = document.querySelector('.dm_selbar')
+        const card = document.querySelector('.dm_card')
+        if (!bar || !card) return null
+        return {
+          before: Boolean(bar.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING),
+          role: bar.getAttribute('role'),
+          label: bar.getAttribute('aria-label'),
+          buttons: [...bar.querySelectorAll('button')].length,
+        }
+      })()`)
+      check('批量浮栏在列表之前且可聚焦（键盘可达）', selState !== null && selState.before && selState.role === 'region' && selState.buttons >= 2, JSON.stringify(selState))
+      await evaluate(`(() => { const b = [...document.querySelectorAll('.dm_selbar button')].find((el) => /取消选择|Clear selection/.test((el.textContent || '').trim())); if (b) b.click(); return Boolean(b) })()`)
+      await sleep(300)
+
       // 删除 A（卡片内「删除」→ 确认弹窗危险按钮）。
       await evaluate(`(() => {
         const card = [...document.querySelectorAll('.dm_card')].find(el => (el.innerText || '').includes(${JSON.stringify(`${marker} A`)}))
@@ -547,8 +567,18 @@ async function main() {
         return Boolean(btn)
       })()`)
       await sleep(500)
+      // 0.24.19：删除确认弹窗在请求期间显示「删除中…」而不是整框静默变灰。
+      await send('Network.emulateNetworkConditions', { offline: false, latency: 1500, downloadThroughput: -1, uploadThroughput: -1 })
       await evaluate(`(() => { const btn = document.querySelector('.dm_btn_danger_solid'); if (btn) btn.click(); return Boolean(btn) })()`)
-      await sleep(1000)
+      await sleep(400)
+      const deleteBusy = await evaluate(`(() => {
+        const dialog = document.querySelector('.dm_dialog')
+        return { text: dialog ? (dialog.innerText || '').replace(/\\s+/g, ' ') : '', disabled: [...document.querySelectorAll('.dm_dialog button')].every((b) => b.disabled) }
+      })()`)
+      check('删除请求期间确认弹窗显示进行中', /删除中|Deleting/.test(deleteBusy.text) && deleteBusy.disabled, JSON.stringify(deleteBusy).slice(0, 160))
+      await sleep(2300)
+      await send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 })
+      await sleep(400)
       const afterDelete = await evaluate(`(() => ({ text: (document.querySelector('.dm_toast_text') || {}).textContent || '', hasAction: document.querySelector('.dm_toast_action') !== null }))()`)
       check('删除后出现带撤销的吐司', afterDelete.hasAction && /删除|Delete/.test(afterDelete.text), JSON.stringify(afterDelete))
       const undoFocus = await evaluate(`document.activeElement ? (document.activeElement.className || '') : ''`)
@@ -556,6 +586,12 @@ async function main() {
       const toastCloseLabel = await evaluate(`(() => { const el = document.querySelector('.dm_toast_close'); return el ? el.getAttribute('aria-label') : null })()`)
       check('吐司关闭按钮 aria-label 为「关闭提示」', /关闭|Dismiss/.test(String(toastCloseLabel || '')), String(toastCloseLabel))
 
+      // 0.24.19：聚焦/悬停时倒计时暂停——撤销入口不会在用户操作途中消失。
+      await sleep(7000)
+      const pauseState = await evaluate(`(() => ({ hasAction: document.querySelector('.dm_toast_action') !== null, focused: document.activeElement ? document.activeElement.className || '' : '' }))()`)
+      check('撤销吐司聚焦时暂停倒计时（7s 后仍在）', pauseState.hasAction && /dm_toast_action/.test(pauseState.focused), JSON.stringify(pauseState))
+
+      // 批量浮栏在列表之前（键盘 Tab 可近达）+ region 语义。
       // 立即触发另一条普通提示（对 B 钉选）：撤销吐司不应被覆盖，普通提示排队。
       await evaluate(`(() => {
         const card = [...document.querySelectorAll('.dm_card')].find(el => (el.innerText || '').includes(${JSON.stringify(`${marker} B`)}))
@@ -569,12 +605,28 @@ async function main() {
       check('后续普通提示不覆盖撤销吐司', afterPin.hasAction && afterPin.text === afterDelete.text, JSON.stringify(afterPin))
 
       // 点撤销 → A 通过 import 原样恢复（id/时间戳不变）。
-      await evaluate(`(() => { const btn = document.querySelector('.dm_toast_action'); if (btn) btn.click(); return Boolean(btn) })()`)
+      await evaluate(`(() => { const old = document.querySelector('.dm_toast'); if (old) old.dataset.marker = 'old-node'; const btn = document.querySelector('.dm_toast_action'); if (btn) btn.click(); return Boolean(btn) })()`)
+      await sleep(250)
+      const queuedPreview = await evaluate(`(() => ({
+        text: (document.querySelector('.dm_toast_text') || {}).textContent || '',
+        marker: (document.querySelector('.dm_toast') || {}).dataset ? (document.querySelector('.dm_toast').dataset.marker || '') : 'none',
+      }))()`)
+      check('排队的普通提示随后展示', /钉选|Pin|已恢复|Restored/.test(queuedPreview.text), JSON.stringify(queuedPreview))
       await sleep(1400)
+      const afterUndoToast = await evaluate(`(() => {
+        const el = document.querySelector('.dm_toast')
+        return { exists: el !== null, marker: el ? el.dataset.marker || '' : 'none', text: (document.querySelector('.dm_toast_text') || {}).textContent || '' }
+      })()`)
+      // 0.24.19：吐司切换使用新 DOM 节点（倒计时条从头开始，而不是停在旧进度）。
+      check('吐司切换使用新节点（倒计时重启）', queuedPreview.marker !== 'old-node' && (!afterUndoToast.exists || afterUndoToast.marker !== 'old-node'), JSON.stringify({ queuedPreview, afterUndoToast }))
       const listAfterUndo = await apiJson(`/entries?query=${encodeURIComponent(marker)}&scope=global&include_superseded=true&include_expired=true&include_archived=true`)
       check('撤销后记忆恢复且 id 不变', (listAfterUndo?.entries || []).some((e) => e.id === idA), JSON.stringify((listAfterUndo?.entries || []).map((e) => e.id)))
-      const queuedText = await evaluate(`(document.querySelector('.dm_toast_text') || {}).textContent || ''`)
-      check('排队的普通提示随后展示', /钉选|Pin/.test(queuedText) || queuedText.length > 0, queuedText)
+      // 关闭当前吐司 → 若焦点在吐司内应回退到面板容器（不掉到 body）。
+      const focusBeforeClose = await evaluate(`document.activeElement ? (document.activeElement.className || '') : ''`)
+      await evaluate(`(() => { const close = document.querySelector('.dm_toast_close'); if (close) close.focus(); if (close) close.click(); return Boolean(close) })()`)
+      await sleep(300)
+      const focusAfterClose = await evaluate(`(document.activeElement ? (document.activeElement.className || '') : '').includes('dm_page')`)
+      check('吐司关闭后焦点回退到面板容器', focusAfterClose, `${focusBeforeClose} -> page=${focusAfterClose}`)
     } finally {
       // 清理验收临时记忆（失败路径也要清）。
       try {
@@ -745,12 +797,39 @@ async function main() {
         return Boolean(b)
       })()`)
       const readRetentionInput = () => evaluate(`(() => { const input = document.querySelectorAll('.dm_numinput')[0]; return input ? input.value : null })()`)
+      // 0.24.19：滑杆拖动期间只更新本地值（不逐帧 setDraft/整页重渲染），松手/失焦才提交保存。
+      const settingsReqCount = () => requests.filter((u) => /dsh-memory\/settings$/.test(u)).length
+      const sliderBefore = settingsReqCount()
+      const sliderDragged = await evaluate(`(() => {
+        const el = document.querySelector('input.dm_range')
+        if (!el) return null
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+        const base = Number(el.value)
+        for (let i = 1; i <= 5; i += 1) {
+          setter.call(el, String(base + (i % 2 === 0 ? -60 : 60)))
+          el.dispatchEvent(new Event('input', { bubbles: true }))
+        }
+        return { shown: Number(el.value), base }
+      })()`)
+      await sleep(500)
+      const sliderMid = settingsReqCount()
+      check('滑杆拖动期间不触发设置保存', sliderDragged !== null && sliderMid === sliderBefore, `${sliderBefore} -> ${sliderMid}`)
+      await evaluate(`(() => {
+        const el = document.querySelector('input.dm_range')
+        if (!el) return false
+        el.dispatchEvent(new Event('pointerup', { bubbles: true }))
+        el.blur()
+        return true
+      })()`)
+      await sleep(1700)
+      const sliderAfter = settingsReqCount()
+      check('滑杆松手后提交一次设置保存', sliderAfter > sliderMid, `${sliderMid} -> ${sliderAfter}`)
       // 8a) 输入 0：服务端夹取为 1，草稿应回收为 effective（界面值=实际值）。
       const recallBeforeSettingsSave = requests.filter((u) => u.includes('/recall-preview')).length
       const setZero = await setRetention(0)
       await sleep(1800)
       if (setZero !== true) console.log('  · 设置页保留份数输入框未就绪')
-      check('设置保存后召回预览随之刷新', requests.filter((u) => u.includes('/recall-preview')).length > recallBeforeSettingsSave, `${recallBeforeSettingsSave} -> ${requests.filter((u) => u.includes('/recall-preview')).length}`)
+      check('设置保存后召回预览随之刷新（且只 +1，隐藏面板不重复请求）', requests.filter((u) => u.includes('/recall-preview')).length === recallBeforeSettingsSave + 1, `${recallBeforeSettingsSave} -> ${requests.filter((u) => u.includes('/recall-preview')).length}`)
       const clampedValue = await readRetentionInput()
       const clampedDoc = await apiJson('/settings')
       check('保留份数 0 被夹取为 1 且界面同步', String(clampedValue) === '1' && Number(clampedDoc?.effective?.backupRetention) === 1, `${clampedValue} / ${clampedDoc?.effective?.backupRetention}`)

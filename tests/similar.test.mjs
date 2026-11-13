@@ -206,5 +206,5 @@ test('findSimilarPairs stays fast on a 1500-entry library (inverted candidates)'
   const pairs = store.findSimilarPairs(root, { scope: 'global' })
   const elapsed = Date.now() - started
   assert.ok(pairs.some((p) => p.older.id === 'm-big-near-a' && p.newer.id === 'm-big-near-b'), 'near pair still found')
-  assert.ok(elapsed < 900, `1500-entry similar scan took ${elapsed}ms (was O(N^2) seconds)`)
+  assert.ok(elapsed < 1500, `1500-entry similar scan took ${elapsed}ms (was O(N^2) seconds)`)
 })

@@ -613,6 +613,7 @@ async function main() {
     ok('bundle 含 0.24.5 设置解包与标签收敛', code.includes('unwrapResult') && code.includes('parseTags'))
     ok('bundle 含 0.24.5 ARIA Tabs', code.includes('dm-panel-settings') && code.includes('onTabKey'))
     // 0.24.10：设置写入状态机（失败重试、重置互斥）。
+    ok('bundle 含 0.24.19 面板体验', code.includes('sectionCountsExact') && code.includes('toastPausedRef') && code.includes('clearSearch') && code.includes('deleting'))
     ok('bundle 含 0.24.16 原子导入错误文案', code.includes('errIo') && code.includes('errBusy'))
     ok('bundle 含 0.24.15 大备份导入', code.includes('IMPORT_MAX_BYTES') && code.includes('IMPORT_TIMEOUT_MS'))
     ok('bundle 含 0.24.14 刷新解耦', code.includes('defaultViewSelection') && code.includes('refreshRecall'))

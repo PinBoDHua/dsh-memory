@@ -7,7 +7,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import helpers from '../client/client.js'
 
-const { validateDraft, groupEntries, nextToken, entriesParams, buildEntriesQuery, workspaceOptions, errorKeyFor, shouldQueueToast, partitionSettled, parseTags, unwrapResult, settingsStatusNext, savedToastKey, exportParams, defaultViewSelection, parseImportText, validateImportDoc, importSummary, pageSlice, entryDetailRows, relativeTime, formatBytes, isExpired, statusOf, originOf, statusQueryFlags } = helpers
+const { validateDraft, groupEntries, nextToken, entriesParams, buildEntriesQuery, workspaceOptions, errorKeyFor, shouldQueueToast, partitionSettled, parseTags, unwrapResult, settingsStatusNext, savedToastKey, exportParams, defaultViewSelection, sectionCountsExact, parseImportText, validateImportDoc, importSummary, pageSlice, entryDetailRows, relativeTime, formatBytes, isExpired, statusOf, originOf, statusQueryFlags } = helpers
 
 test('validateDraft accepts a complete draft and rejects bad ones', () => {
   assert.deepEqual(validateDraft({ content: '一条事实', category: 'fact' }), { ok: true })
@@ -202,6 +202,13 @@ test('savedToastKey prioritizes revived over dedup and similar', () => {
   assert.equal(savedToastKey({ revived: true, deduplicated: true }), 'revivedSaved')
   assert.equal(savedToastKey({ similar: [{ id: 'm-1' }, { id: 'm-2' }] }), 'similarSaved')
   assert.equal(savedToastKey({ deduplicated: false, similar: [] }), 'saved')
+})
+
+test('sectionCountsExact only trusts group counts on a single full page', () => {
+  assert.equal(sectionCountsExact(0, false, false), true)
+  assert.equal(sectionCountsExact(1, false, false), false, 'later page is a slice')
+  assert.equal(sectionCountsExact(0, true, false), false, 'more pages exist => totals differ')
+  assert.equal(sectionCountsExact(0, false, true), false, 'filtered subset != full library')
 })
 
 test('defaultViewSelection waits for cwd instead of locking the default in', () => {

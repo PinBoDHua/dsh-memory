@@ -241,6 +241,12 @@ function settingsStatusNext(status, event) {
     return 'saved'
   }
 
+  // 区块计数是否可信（纯函数）：只有「单页完整结果」时，页内分组条数才等于全量总数；
+// 分页或筛选状态下列表只是子集，显示条数会与统计条数字矛盾。
+  function sectionCountsExact(page, hasMore, filtered) {
+    return Number(page) === 0 && !hasMore && !filtered
+  }
+
   // 默认视图选择（纯函数）：「当前工作区」默认视图必须等 cwd 解析完成后再应用——
 // 过早标记 initialized 会让晚到的 cwd 永久失效。resolved=false 表示还需等待。
   function defaultViewSelection(settings, currentCwd) {
@@ -338,7 +344,7 @@ function settingsStatusNext(status, event) {
     return (mb < 10 ? mb.toFixed(1) : Math.round(mb)) + ' MB'
   }
 
-  var helpers = { validateDraft: validateDraft, groupEntries: groupEntries, nextToken: nextToken, entriesParams: entriesParams, buildEntriesQuery: buildEntriesQuery, workspaceOptions: workspaceOptions, errorKeyFor: errorKeyFor, shouldQueueToast: shouldQueueToast, partitionSettled: partitionSettled, parseTags: parseTags, unwrapResult: unwrapResult, settingsStatusNext: settingsStatusNext, savedToastKey: savedToastKey, exportParams: exportParams, defaultViewSelection: defaultViewSelection, parseImportText: parseImportText, validateImportDoc: validateImportDoc, importSummary: importSummary, pageSlice: pageSlice, entryDetailRows: entryDetailRows, relativeTime: relativeTime, formatBytes: formatBytes, isExpired: isExpired, statusOf: statusOf, originOf: originOf, statusQueryFlags: statusQueryFlags }
+  var helpers = { validateDraft: validateDraft, groupEntries: groupEntries, nextToken: nextToken, entriesParams: entriesParams, buildEntriesQuery: buildEntriesQuery, workspaceOptions: workspaceOptions, errorKeyFor: errorKeyFor, shouldQueueToast: shouldQueueToast, partitionSettled: partitionSettled, parseTags: parseTags, unwrapResult: unwrapResult, settingsStatusNext: settingsStatusNext, savedToastKey: savedToastKey, exportParams: exportParams, defaultViewSelection: defaultViewSelection, sectionCountsExact: sectionCountsExact, parseImportText: parseImportText, validateImportDoc: validateImportDoc, importSummary: importSummary, pageSlice: pageSlice, entryDetailRows: entryDetailRows, relativeTime: relativeTime, formatBytes: formatBytes, isExpired: isExpired, statusOf: statusOf, originOf: originOf, statusQueryFlags: statusQueryFlags }
 
   // ===== node 测试导出（CJS） =====
   if (typeof module !== 'undefined' && module.exports) {
@@ -384,6 +390,8 @@ var IMPORT_TIMEOUT_MS = 180000
     noResults: '没有匹配的记忆',
     noResultsHint: '试试其他关键词，或清除筛选条件。',
     clearFilters: '清除筛选',
+    clearSearch: '清空搜索',
+    deleting: '删除中…',
     edit: '编辑',
     del: '删除',
     save: '保存',
@@ -602,6 +610,8 @@ var IMPORT_TIMEOUT_MS = 180000
     noResults: 'No matching memories',
     noResultsHint: 'Try different keywords, or clear the filters.',
     clearFilters: 'Clear filters',
+    clearSearch: 'Clear search',
+    deleting: 'Deleting…',
     edit: 'Edit',
     del: 'Delete',
     save: 'Save',
@@ -862,6 +872,10 @@ var IMPORT_TIMEOUT_MS = 180000
     '.dm_search:focus{outline:none;border-color:var(--dm-primary);box-shadow:var(--dm-ring);}',
     '.dm_taginput{height:38px;width:140px;padding:0 12px;border:1px solid var(--dm-line2);border-radius:12px;background:var(--dm-bg);color:var(--dm-ink);font:inherit;font-size:13px;}',
     '.dm_taginput:focus{outline:none;border-color:var(--dm-primary);box-shadow:var(--dm-ring);}',
+    '.dm_tagwrap{position:relative;display:inline-flex;align-items:center;}',
+    '.dm_tagwrap .dm_taginput{padding-right:30px;}',
+    '.dm_tagclear{position:absolute;right:6px;width:22px;height:22px;border:none;border-radius:50%;background:transparent;color:var(--dm-ink3);cursor:pointer;display:flex;align-items:center;justify-content:center;}',
+    '.dm_tagclear:hover{background:var(--dm-line);color:var(--dm-ink);}',
     '.dm_search_clear{position:absolute;right:6px;top:50%;transform:translateY(-50%);width:24px;height:24px;border:none;border-radius:50%;background:transparent;color:var(--dm-ink3);cursor:pointer;display:flex;align-items:center;justify-content:center;corner-shape:round;}',
     '.dm_search_clear:hover{background:var(--dm-line);color:var(--dm-ink);}',
     '.dm_toolbtn{height:36px;}',
@@ -1584,7 +1598,7 @@ var IMPORT_TIMEOUT_MS = 180000
               h('span', { className: 'dm_hint' }, t('pinnedHint')),
               h(Toggle, { checked: !!draft.pinned, onChange: function (v) { field('pinned', v) }, label: t('pinnedLabel'), disabled: props.busy }))),
           h('div', { className: 'dm_dialog_footer' },
-            h('span', { className: 'dm_hint' }, t('editorHint')),
+            h('span', { className: 'dm_hint' }, props.busy ? t('saving') : t('editorHint')),
             h('button', { className: 'dm_btn', onClick: props.onClose, disabled: props.busy }, t('cancel')),
             h('button', { className: 'dm_btn dm_btn_primary', onClick: props.onSave, disabled: props.busy }, h(Icon, { name: 'check', size: 14, strokeWidth: 2.2 }), t('save'))))
       }
@@ -1605,6 +1619,7 @@ var IMPORT_TIMEOUT_MS = 180000
             entries.length > 3 ? h('div', { className: 'dm_hint', style: { marginTop: 8 } }, '… +' + (entries.length - 3)) : null),
           h('div', { className: 'dm_hint' }, t('deleteHint')),
           h('div', { className: 'dm_dialog_footer' },
+            h('span', { className: 'dm_hint', style: { marginRight: 'auto' } }, props.busy ? t('deleting') : ''),
             h('button', { className: 'dm_btn', onClick: props.onClose, disabled: props.busy }, t('cancel')),
             h('button', { className: 'dm_btn dm_btn_danger_solid', onClick: props.onConfirm, disabled: props.busy }, h(Icon, { name: 'trash', size: 14 }), t('del'))))
       }
@@ -1681,6 +1696,13 @@ var IMPORT_TIMEOUT_MS = 180000
           key: toast.id,
           className: 'dm_toast dm_toast_' + (toast.kind === 'error' ? 'error' : 'ok') + (props.raised ? ' dm_toast_raised' : ''),
           role: toast.kind === 'error' ? 'alert' : 'status',
+          // 悬停/聚焦时暂停倒计时：用户正要撤销时入口不会突然消失。
+          onMouseEnter: props.onPause,
+          onMouseLeave: props.onResume,
+          onFocusCapture: props.onPause,
+          onBlurCapture: function (e) {
+            if (!e.currentTarget.contains(e.relatedTarget)) props.onResume()
+          },
         },
           h('span', { className: 'dm_toast_icon' }, h(Icon, { name: toast.kind === 'error' ? 'alert' : 'check', size: 14, strokeWidth: 2.2 })),
           h('span', { className: 'dm_toast_text' }, toast.text),
@@ -1698,13 +1720,25 @@ var IMPORT_TIMEOUT_MS = 180000
       }
 
       function Slider(props) {
+        // 拖动期只更新本地值，松手/失焦/按键抬起才提交：避免 600ms 防抖期间每帧
+        // setDraft 触发整页（含常驻记忆列表）重渲染。
+        var localState = useState(null)
+        var local = localState[0]; var setLocal = localState[1]
+        var shown = local === null ? props.value : local
+        function commit(value) {
+          setLocal(null)
+          if (value !== props.value) props.onChange(value)
+        }
         return h('div', { className: 'dm_slider_row' },
           h('input', {
             type: 'range', className: 'dm_range', min: props.min, max: props.max, step: props.step || 1,
-            value: props.value, 'aria-label': props.label, disabled: props.disabled,
-            onChange: function (e) { props.onChange(Number(e.target.value)) },
+            value: shown, 'aria-label': props.label, disabled: props.disabled,
+            onChange: function (e) { setLocal(Number(e.target.value)) },
+            onPointerUp: function (e) { commit(Number(e.target.value)) },
+            onKeyUp: function (e) { commit(Number(e.target.value)) },
+            onBlur: function (e) { commit(Number(e.target.value)) },
           }),
-          h('span', { className: 'dm_slider_val' }, props.value))
+          h('span', { className: 'dm_slider_val' }, shown))
       }
 
       function SettingRow(props) {
@@ -1748,7 +1782,12 @@ var IMPORT_TIMEOUT_MS = 180000
             if (seq === seqRef.current) setBusy(false)
           })
         }
-        useEffect(function () { load() }, [workspace, props.refreshKey])
+        // 常驻 tabpanel：隐藏时零请求；切到设置页或设置变化时才拉取召回预览，
+// 避免面板初始化/每次保存设置都多一次全量扫描（与主面板注入徽章去重）。
+        useEffect(function () {
+          if (props.active === false) return
+          load()
+        }, [workspace, props.refreshKey, props.active])
         var summary = data
           ? t('recallSummary').replace('{injected}', String(data.injected)).replace('{omitted}', String(data.omitted)).replace('{used}', String(data.usedChars)).replace('{budget}', String(data.budgetChars))
           : ''
@@ -1803,7 +1842,7 @@ var IMPORT_TIMEOUT_MS = 180000
               h(Toggle, { checked: draft.decayEnabled !== false, onChange: set('decayEnabled'), label: t('decayEnabledLabel'), disabled: props.busy })),
             h(SettingRow, { label: t('budgetLabel'), desc: t('budgetDesc') },
               h(Slider, { min: 0, max: bounds.budgetMax, step: 100, value: draft.injectionBudgetChars, onChange: set('injectionBudgetChars'), label: t('budgetLabel'), disabled: props.busy })),
-            h(RecallPreview, { t: t, api: props.api, workspace: props.workspace, refreshKey: props.view && props.view.effective }),
+            h(RecallPreview, { t: t, api: props.api, workspace: props.workspace, refreshKey: props.view && props.view.effective, active: props.active }),
             h('div', { className: 'dm_setnote' }, h(Icon, { name: 'info', size: 14, style: { flexShrink: 0, marginTop: 1 } }), t('priorityNote')),
             h('div', { className: 'dm_setnote' }, h(Icon, { name: 'info', size: 14, style: { flexShrink: 0, marginTop: 1 } }), t('enabledNote'))),
           h(SettingsGroup, { icon: 'lock', title: t('groupPrivacy'), style: { color: 'var(--dm-success)', background: 'var(--dm-success-soft)' } },
@@ -2130,6 +2169,11 @@ var IMPORT_TIMEOUT_MS = 180000
         var toastRef = useRef(null)
         var toastQueueRef = useRef([])
         var toastActionRef = useRef(null)
+        var toastTimerRef = useRef(null)
+        var toastRemainingRef = useRef(0)
+        var toastStartedRef = useRef(0)
+        var toastPausedRef = useRef(false)
+        var pageRef = useRef(null)
         var busyState = useState(false)
         var busy = busyState[0]; var setBusy = busyState[1]
         var errorState = useState('')
@@ -2193,7 +2237,13 @@ var IMPORT_TIMEOUT_MS = 180000
         }, [toast])
 
         function dismissToast() {
+          // 吐司内元素（撤销按钮）即将卸载：焦点回退到面板容器，避免掉到 body。
+          var active = typeof document !== 'undefined' ? document.activeElement : null
+          if (active && active.closest && active.closest('.dm_toast') && pageRef.current) {
+            try { pageRef.current.focus() } catch { /* ignore */ }
+          }
           var queued = toastQueueRef.current.shift()
+          toastPausedRef.current = false
           if (queued) {
             toastRef.current = Object.assign({}, queued, { until: Date.now() + (queued.duration || 2600) })
             setToast(toastRef.current)
@@ -2211,7 +2261,7 @@ var IMPORT_TIMEOUT_MS = 180000
             until: Date.now() + duration,
             action: action ? { label: action.label, run: function () { dismissToast(); action.run() } } : undefined,
           }
-          if (shouldQueueToast(toastRef.current, next, Date.now())) {
+          if (shouldQueueToast(toastRef.current, next, Date.now()) || (toastRef.current && toastRef.current.action && toastPausedRef.current)) {
             // 撤销吐司优先：普通提示排队稍后展示（只保留最近几条，避免堆积）。
             toastQueueRef.current.push(next)
             while (toastQueueRef.current.length > TOAST_QUEUE_MAX) toastQueueRef.current.shift()
@@ -2416,9 +2466,9 @@ var IMPORT_TIMEOUT_MS = 180000
         }, [api, currentCwd])
 
         useEffect(function () {
-          if (phase !== 'ready' || busy) return
+          if (phase !== 'ready' || busy || tab !== 'memories') return
           refreshRecall()
-        }, [phase, busy, settings, currentCwd, refreshRecall])
+        }, [phase, busy, settings, currentCwd, tab, refreshRecall])
 
         // 选择/查询/分类/页码变化 → 刷新列表（查询防抖 300ms）
         useEffect(function () {
@@ -2427,12 +2477,41 @@ var IMPORT_TIMEOUT_MS = 180000
           return function () { clearTimeout(timer) }
         }, [phase, query, categoryFilter, originFilter, tagFilter, statusFilter, page, selection, currentCwd, refreshEntries])
 
-        // toast 自动消失（时长按 toast 自带 duration）；撤销吐司到期后继续展示排队提示。
+        // toast 自动消失（可被悬停/聚焦暂停）；撤销吐司到期后继续展示排队提示。
         useEffect(function () {
           if (!toast) return undefined
-          var timer = setTimeout(dismissToast, toast.duration || 2600)
-          return function () { clearTimeout(timer) }
+          var duration = toast.duration || 2600
+          var active = typeof document !== 'undefined' ? document.activeElement : null
+          var focusedInside = !!(active && active.closest && active.closest('.dm_toast'))
+          toastRemainingRef.current = duration
+          toastStartedRef.current = Date.now()
+          toastPausedRef.current = focusedInside
+          // 吐司出现即被聚焦（删除撤销按钮）：保持暂停，等失焦后 resumeToast 再启动计时。
+          if (focusedInside) {
+            toast.until = Date.now() + duration
+            return undefined
+          }
+          toastTimerRef.current = setTimeout(dismissToast, duration)
+          return function () { clearTimeout(toastTimerRef.current) }
         }, [toast])
+
+        function pauseToast() {
+          if (!toast) return
+          clearTimeout(toastTimerRef.current)
+          var elapsed = Date.now() - toastStartedRef.current
+          toastRemainingRef.current = Math.max(300, toastRemainingRef.current - elapsed)
+          toastPausedRef.current = true
+          // 同步延长撤销保护窗口：暂停期间其它普通提示不得替换撤销吐司。
+          toast.until = Date.now() + toastRemainingRef.current
+        }
+
+        function resumeToast() {
+          if (!toast) return
+          toastPausedRef.current = false
+          toast.until = Date.now() + toastRemainingRef.current
+          toastStartedRef.current = Date.now()
+          toastTimerRef.current = setTimeout(dismissToast, toastRemainingRef.current)
+        }
 
         // 快捷键：/ 聚焦搜索（无输入焦点、无弹窗时）；Esc 清除批量选择。
         useEffect(function () {
@@ -2777,6 +2856,10 @@ var IMPORT_TIMEOUT_MS = 180000
         }
 
         function renderList() {
+          var filtered = !!(query || categoryFilter || originFilter || tagFilter || statusFilter !== 'active')
+          // 只有「单页完整结果」时区块计数才等于真实总数；分页或筛选状态下不显示，
+          // 避免与统计条的全量数字互相矛盾。
+          var exactCounts = sectionCountsExact(page, hasMore, filtered)
           var pager = (page > 0 || hasMore) ? h('div', { className: 'dm_pager' },
             h('button', { className: 'dm_btn', disabled: page === 0 || busy, onClick: function () { changePage(page - 1) } }, h(Icon, { name: 'chevL', size: 14 }), t('pagePrev')),
             h('span', { className: 'dm_pageinfo' }, t('pageInfo').replace('{page}', String(page + 1))),
@@ -2794,7 +2877,6 @@ var IMPORT_TIMEOUT_MS = 180000
               h('button', { className: 'dm_btn', style: { marginTop: 12 }, onClick: function () { refreshEntries() } }, h(Icon, { name: 'undo', size: 13 }), t('retry')))
           }
           if (entries.length === 0) {
-            var filtered = !!(query || categoryFilter || originFilter || tagFilter || statusFilter !== 'active')
             // 空态区分「筛选无结果 / 某工作区为空 / 整库为空」，避免切到空工作区误报「记忆库还是空的」。
             var scopedEmpty = selection !== 'all' && selection !== 'global'
             var emptyTitle = filtered ? t('noResults') : scopedEmpty ? t('emptyScopeTitle') : t('emptyTitle')
@@ -2828,9 +2910,9 @@ var IMPORT_TIMEOUT_MS = 180000
           if (selection !== 'all') return h('div', { 'aria-busy': busy ? 'true' : 'false' }, hiddenHint, rows(entries, 0), pager)
           var groups = groupEntries(entries)
           return h('div', { 'aria-busy': busy ? 'true' : 'false' }, hiddenHint,
-            groups.global.length ? h('div', { className: 'dm_section_title' }, h(Icon, { name: 'globe', size: 13 }), t('scopeGlobal'), h('span', { className: 'dm_section_n' }, groups.global.length + ' ' + t('entriesUnit'))) : null,
+            groups.global.length ? h('div', { className: 'dm_section_title' }, h(Icon, { name: 'globe', size: 13 }), t('scopeGlobal'), exactCounts ? h('span', { className: 'dm_section_n' }, groups.global.length + ' ' + t('entriesUnit')) : null) : null,
             rows(groups.global, 0),
-            groups.workspace.length ? h('div', { className: 'dm_section_title' }, h(Icon, { name: 'folder', size: 13 }), t('scopeWorkspace'), h('span', { className: 'dm_section_n' }, groups.workspace.length + ' ' + t('entriesUnit'))) : null,
+            groups.workspace.length ? h('div', { className: 'dm_section_title' }, h(Icon, { name: 'folder', size: 13 }), t('scopeWorkspace'), exactCounts ? h('span', { className: 'dm_section_n' }, groups.workspace.length + ' ' + t('entriesUnit')) : null) : null,
             rows(groups.workspace, groups.global.length),
             pager)
         }
@@ -2838,7 +2920,7 @@ var IMPORT_TIMEOUT_MS = 180000
         var fileInputRef = useRef(null)
 
         var noAnim = settings && !settings.effective.animations
-        return h('div', { className: 'dm_page' + (selected.length > 0 ? ' dm_selecting' : '') + (noAnim ? ' dm_no_anim' : '') },
+        return h('div', { ref: pageRef, tabIndex: -1, className: 'dm_page' + (selected.length > 0 ? ' dm_selecting' : '') + (noAnim ? ' dm_no_anim' : '') },
           h('div', { className: 'dm_header' },
             h('div', { className: 'dm_brand' },
               h('div', { className: 'dm_brand_medal' }, h(NavIcon, { size: 24 })),
@@ -2888,10 +2970,12 @@ var IMPORT_TIMEOUT_MS = 180000
                       { value: 'manual', label: t('originManual'), icon: 'edit' },
                     ],
                   }),
-                  h('input', {
-                    className: 'dm_taginput', type: 'text', 'aria-label': t('tagFilterPlaceholder'), placeholder: t('tagFilterPlaceholder'), title: t('tagFilterHint'),
-                    value: tagFilter, onChange: function (e) { changeTag(e.target.value) },
-                  }),
+                  h('div', { className: 'dm_tagwrap' },
+                    h('input', {
+                      className: 'dm_taginput', type: 'text', 'aria-label': t('tagFilterPlaceholder'), placeholder: t('tagFilterPlaceholder'), title: t('tagFilterHint'),
+                      value: tagFilter, onChange: function (e) { changeTag(e.target.value) },
+                    }),
+                    tagFilter ? h('button', { className: 'dm_tagclear', 'aria-label': t('clearSearch'), title: t('clearSearch'), onClick: function () { changeTag('') } }, h(Icon, { name: 'x', size: 12, strokeWidth: 2.2 })) : null),
                   h('div', { className: 'dm_searchwrap' },
                     h('span', { className: 'dm_search_icon' }, h(Icon, { name: 'search', size: 15 })),
                     h('input', {
@@ -2899,27 +2983,29 @@ var IMPORT_TIMEOUT_MS = 180000
                       'aria-label': t('searchPlaceholder'), placeholder: t('searchPlaceholder'), title: t('searchHint'),
                       value: query, onChange: function (e) { changeQuery(e.target.value) },
                     }),
-                    query ? h('button', { className: 'dm_search_clear', 'aria-label': t('clearFilters'), onClick: function () { changeQuery('') } }, h(Icon, { name: 'x', size: 12, strokeWidth: 2.2 })) : null),
+                    query ? h('button', { className: 'dm_search_clear', 'aria-label': t('clearSearch'), title: t('clearSearch'), onClick: function () { changeQuery('') } }, h(Icon, { name: 'x', size: 12, strokeWidth: 2.2 })) : null),
                   h('button', { className: 'dm_btn dm_toolbtn', onClick: handleExport, disabled: busy || phase !== 'ready' }, h(Icon, { name: 'export', size: 15 }), t('export')),
                   h('button', { className: 'dm_btn dm_toolbtn', onClick: function () { if (fileInputRef.current) fileInputRef.current.click() }, disabled: busy || phase !== 'ready' }, h(Icon, { name: 'import', size: 15 }), t('import')),
                   h('button', { className: 'dm_btn dm_toolbtn', onClick: handleAudit, disabled: busy || phase !== 'ready' }, h(Icon, { name: 'copy', size: 15 }), t('audit')),
                   h('input', { ref: fileInputRef, type: 'file', accept: '.json,application/json', style: { display: 'none' }, onChange: handleImportFile }))),
               unknownWorkspaces.length > 0 ? h('div', { className: 'dm_hint', style: { margin: '8px 0 0' } }, t('unknownWorkspaceHint')) : null,
+              // 批量选择浮栏放在列表之前（视觉仍是 fixed 底部）：键盘 Tab 顺序靠近工具栏，
+              // 不必先穿过上百张卡片才能到达「删除所选」。
+              selected.length > 0
+                ? h('div', { className: 'dm_selbar', role: 'region', 'aria-label': t('bulkSelected').replace('{n}', String(selected.length)) },
+                  h('span', { className: 'dm_selbar_n', 'aria-live': 'polite' }, t('bulkSelected').replace('{n}', String(selected.length))),
+                  h('button', { className: 'dm_btn dm_btn_danger_solid', onClick: openBulkDelete, disabled: busy }, h(Icon, { name: 'trash', size: 14 }), t('bulkDelete')),
+                  h('button', { className: 'dm_btn', onClick: function () { setSelected([]) }, disabled: busy }, t('clearSelection')))
+                : null,
               phase === 'loading' ? h(Skeletons)
                 : phase === 'error' ? h('div', { className: 'dm_empty' },
                   h(Icon, { name: 'alert', size: 28, style: { color: 'var(--dm-danger)', marginBottom: 10 } }),
                   h('div', null, t('loadError') + ': ' + errorTextState),
                   h('button', { className: 'dm_btn', style: { marginTop: 12 }, onClick: function () { loadInitial() } }, h(Icon, { name: 'undo', size: 13 }), t('retry')))
-                  : renderList(),
-              selected.length > 0
-                ? h('div', { className: 'dm_selbar' },
-                  h('span', { className: 'dm_selbar_n' }, t('bulkSelected').replace('{n}', String(selected.length))),
-                  h('button', { className: 'dm_btn dm_btn_danger_solid', onClick: openBulkDelete, disabled: busy }, h(Icon, { name: 'trash', size: 14 }), t('bulkDelete')),
-                  h('button', { className: 'dm_btn', onClick: function () { setSelected([]) }, disabled: busy }, t('clearSelection')))
-                : null),
+                  : renderList()),
           h('div', { id: 'dm-panel-settings', role: 'tabpanel', 'aria-labelledby': 'dm-tab-settings', hidden: tab !== 'settings' },
             h(SettingsPage, {
-              view: settings, draft: draft, busy: busy, status: settingsStatus, t: t, api: api, workspace: currentCwd,
+              view: settings, draft: draft, busy: busy, status: settingsStatus, t: t, api: api, workspace: currentCwd, active: tab === 'settings',
               error: settingsError, onRetry: loadSettings, onRetrySave: retrySaveSettings,
               onChange: changeSetting, onReset: resetSettings, onBackup: backupNow,
               onToast: function (text, kind) { showToast(kind, text) },
@@ -2928,7 +3014,7 @@ var IMPORT_TIMEOUT_MS = 180000
           confirm ? h(ConfirmModal, { entries: confirm.entries, t: t, busy: busy, onConfirm: handleDelete, onClose: function () { if (!busy) setConfirm(null) } }) : null,
           importPlan ? h(ImportModal, { plan: importPlan.plan, mode: importPlan.mode, t: t, busy: busy, onConfirm: confirmImport, onModeChange: changeImportMode, onClose: function () { if (!busy) setImportPlan(null) } }) : null,
           audit ? h(AuditModal, { pairs: audit.pairs, t: t, busy: busy, onSupersede: handleSupersedePair, onDismiss: dismissPair, onClose: function () { if (!busy) setAudit(null) } }) : null,
-          toast ? h(Toast, { toast: toast, t: t, raised: selected.length > 0, onClose: dismissToast, actionRef: toastActionRef }) : null)
+          toast ? h(Toast, { key: toast.id, toast: toast, t: t, raised: selected.length > 0, onClose: dismissToast, actionRef: toastActionRef, onPause: pauseToast, onResume: resumeToast }) : null)
       }
 
       return {
