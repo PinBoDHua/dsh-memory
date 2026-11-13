@@ -3,6 +3,16 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.24.3] - 2026-11-13
+
+### 变更 Changed
+- **读盘性能：解析缓存**。条目解析结果按「路径＋mtime/ctime/size」签名缓存：热路径（系统提示装配、`memory_search`、面板列表/统计/召回预览）只做 `statSync`，命中即零文件读、零重复解析；原子写（临时文件改名）会更新 ctime、手工编辑会更新 mtime，因此「改完立即生效」契约不受影响；删除文件同步清缓存、命中簿记写回后同步缓存，缓存上限 4096 条按插入顺序淘汰。
+- **批量导入去重去二次方**：每个作用域只全量读一次建 `normalizeContent → id` 映射，替换逐条 `listScope().find()`（旧实现导入 N 条到已有 N 条约 N×N 次文件读）；批内新增与 merge 合并同步更新映射，去重语义不变。
+
+### 新增 Added
+- `tests/cache.test.mjs`：冷读一次/热读零 IO、外部编辑与删除按签名失效、`stats`/`searchDetailed` 共享缓存（读次数断言）、单/双作用域导入读次数线性断言（≤150/≤200，旧实现约 3600/6400）、批内去重语义回归。
+- live-check 增加「手工编辑文件后缓存立即失效」端到端检查。
+
 ## [0.24.2] - 2026-11-13
 
 ### 修复 Fixed

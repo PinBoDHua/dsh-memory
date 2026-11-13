@@ -43,8 +43,8 @@ This file is the self-iteration ledger for dsh-memory: per-round increments, ver
 
 ### P2 性能
 
-- [ ] **批量导入 O(N×M) 读放大**：每条仍 `listScope` 全量重读做内容去重（id 占用已改为一次扫描）；预读一次建 `normalizeContent → id` Map。
-- [ ] **热路径重复全量读盘**：`searchDetailed`/`stats` 各读两遍、每次系统提示装配全量读；按 `路径+mtime+size` 缓存解析结果（保留手工编辑即时生效），面板两个查询各读一遍。
+- [x] **批量导入 O(N×M) 读放大**（0.24.3）：每个作用域一次预读建 `normalizeContent → id` 映射，批内新增/合并同步更新。
+- [x] **热路径重复全量读盘**（0.24.3）：新增解析缓存（路径＋mtime/ctime/size 签名，热路径只 stat），`searchDetailed`/`stats`/系统提示装配不再整盘重复读；手工编辑与其它进程写入自动失效。
 
 ### P3 客户端健壮性
 

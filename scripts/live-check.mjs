@@ -10,7 +10,8 @@
  * 仅打回环地址 127.0.0.1（与任务目标一致，不使用任何代理）。
  */
 import { createHash } from 'node:crypto'
-import { statSync } from 'node:fs'
+import { readFileSync, statSync, writeFileSync } from 'node:fs'
+import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const argv = process.argv.slice(2)
@@ -54,20 +55,22 @@ function clientRev() {
 }
 
 const created = []
+let statusRoot = ''
 
 async function main() {
   console.log(`dsh-memory live-check @ ${BASE}\n`)
 
   // 1. status：版本与 schema
   let token = ''
-  await check('status 报告 version=0.24.2 / schemaVersion=2 并下发 token', async () => {
+  await check('status 报告 version=0.24.3 / schemaVersion=2 并下发 token', async () => {
     const { status, json } = await req('GET', '/status')
     ok('status HTTP 200', status === 200, `got ${status}`)
     ok('status.ok', json?.ok === true)
-    ok('version === 0.24.2', json?.version === '0.24.2', `got ${json?.version}`)
+    ok('version === 0.24.3', json?.version === '0.24.3', `got ${json?.version}`)
     ok('schemaVersion === 2', json?.schemaVersion === 2, `got ${json?.schemaVersion}`)
     ok('token 非空', typeof json?.key === 'string' && json.key.length > 0)
     token = json?.key ?? ''
+    statusRoot = json?.root ?? ''
   })
   if (!token) { console.log('\n无法取得 token，终止。'); finish(); return }
 
@@ -162,6 +165,22 @@ async function main() {
     const ids = (im.json?.result?.entries ?? []).map((e) => e.id)
     ok('两条计划均生成', ids.length === 2, JSON.stringify(im.json))
     ok('同 id 输入被分配为不同 id', ids.length === 2 && ids[0] !== ids[1], JSON.stringify(ids))
+  })
+
+  await check('解析缓存不破坏手工编辑即时生效（0.24.3）', async () => {
+    const sv = await req('POST', '/save', { token, body: { content: `${RUN} 手工编辑正文`, scope: 'global', origin: 'auto' } })
+    const id = sv.json?.result?.entry?.id ?? ''
+    if (id) created.push(id)
+    ok('save 手改条目', id.startsWith('m-'))
+    // 先读一次让解析缓存预热（stat 签名缓存该文件）。
+    const before = await req('GET', `/entries?query=${encodeURIComponent(`${RUN} 手工编辑正文`)}`)
+    ok('缓存预热后命中', (before.json?.entries ?? []).some((e) => e.id === id))
+    // 直接改写磁盘文件（模拟手工编辑/其它进程），签名变化应让缓存失效。
+    const file = path.join(statusRoot, 'global', `${id}.md`)
+    const text = readFileSync(file, 'utf8')
+    writeFileSync(file, text.replace('手工编辑正文', '手工编辑正文已改'), 'utf8')
+    const after = await req('GET', `/entries?query=${encodeURIComponent(`${RUN} 手工编辑正文已改`)}`)
+    ok('外部改写后立即可见', (after.json?.entries ?? []).some((e) => e.id === id), JSON.stringify((after.json?.entries ?? []).map((e) => e.content)))
   })
 
   await check('update origin 修正往返（0.10.0）', async () => {
