@@ -3,6 +3,17 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.11.0] - 2026-11-13
+
+### 新增 Added
+- **写入时相似记忆提示**：`memory_save` 写入后若同作用域存在近似内容（Jaccard 相似度 ≥0.5，特征＝拉丁/数字词＋CJK bigram），返回 `similar`（最多 3 条，含 id/content/score，按分数倒序）；会话渲染附提示「若为信息更新请取代/更新旧条目，避免并存矛盾」。advisory 不阻断写入；排除被取代/已归档/已过期条目与显式取代目标；过短内容（特征 <3）不参与，避免巧合噪音。补上取代链的最后一环：写入时即告知旧条目 id，无需先检索。
+- 面板新建成功后若检测到相似记忆，吐司提示条数与首条 id、建议核对是否重复（zh/en）。
+- `store.contentSimilarity(a, b)` 纯函数（Jaccard，可独立单测）。
+
+### 变更 Changed
+- `memory_save` 输出 schema 新增可选 `similar` 数组；工具描述补充相似提示说明。
+- 去重判定不变（仍为完全相同内容）；相似度仅用于提示，不影响去重与检索过滤。
+
 ## [0.10.0] - 2026-11-13
 
 ### 变更 Changed
@@ -147,6 +158,7 @@ All notable changes to this project are documented here. Format follows Keep a C
 - 系统提示注入：指引＋字符预算内召回（`interpolate: false` 保护用户内容）。
 - 隐私护栏：密码/密钥/token 规则检测硬拒写。
 
+[0.11.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.8.1...v0.9.0
 [0.8.1]: https://github.com/PinBoDHua/dsh-memory/compare/v0.8.0...v0.8.1

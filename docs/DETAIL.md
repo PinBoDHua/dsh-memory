@@ -35,7 +35,7 @@ Cross-session long-term memory for DeepSeek Harness: durable user preferences, p
 
 | 工具 | 作用 |
 |---|---|
-| `memory_save` | 写入一条记忆（content 必填；category=preference/fact/decision；scope=global/workspace，默认 workspace；tags 可选；origin 必填 manual/auto；supersedes=旧id 取代；expires=YYYY-MM-DD；pinned）。同作用域完全相同的内容自动去重（仅针对未取代条目）。 |
+| `memory_save` | 写入一条记忆（content 必填；category=preference/fact/decision；scope=global/workspace，默认 workspace；tags 可选；origin 必填 manual/auto；supersedes=旧id 取代；expires=YYYY-MM-DD；pinned）。同作用域完全相同的内容自动去重（仅针对未取代条目）。写入后返回相似记忆提示 `similar`（Jaccard≥0.5、最多 3 条、advisory 不阻断），便于取代/更新旧条目、避免并存矛盾。 |
 | `memory_search` | 关键词检索（大小写不敏感、多词 AND、CJK bigram 模糊），非空查询按相关度×衰减排序；空查询＝按更新时间列出；可按 scope/category 过滤，limit 默认 20；include_superseded/include_expired/include_archived 找回隐藏态（默认 false）。 |
 | `memory_update` | 按 id 新覆旧（content/category/tags 可选更新）；可选 `scope` 在 global ↔ 当前工作区之间移动；supersedes 取代另一条、expires 设过期日（空串清除）、pinned 钉选、archived 归档/恢复、origin 修正来源标记。 |
 | `memory_forget` | 按 id 永久删除。 |

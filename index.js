@@ -104,7 +104,7 @@ export function apply(ctx, rawConfig) {
 
   const saveTool = {
     name: 'memory_save',
-    description: '把一条值得长期记住的事实写入跨会话记忆（一事一条）。用户偏好→scope=global，项目事实/决策→scope=workspace。origin 必填：manual=用户显式要求，auto=你主动沉淀（便于用户审阅撤销）；信息变化可 supersedes=旧id 取代（保留历史）。密码/密钥/token 会被拒绝。Save one durable fact to cross-session memory; origin is required (manual=user-requested, auto=agent-initiated); credentials are rejected.',
+    description: '把一条值得长期记住的事实写入跨会话记忆（一事一条）。用户偏好→scope=global，项目事实/决策→scope=workspace。origin 必填：manual=用户显式要求，auto=你主动沉淀（便于用户审阅撤销）；信息变化可 supersedes=旧id 取代（保留历史）。写入时若检测到相似记忆会一并提示，便于取代/更新旧条目、避免并存矛盾。密码/密钥/token 会被拒绝。Save one durable fact to cross-session memory; origin is required (manual=user-requested, auto=agent-initiated); similar memories are reported on save (prefer supersede/update); credentials are rejected.',
     parameters: {
       type: 'object',
       properties: {
@@ -129,20 +129,31 @@ export function apply(ctx, rawConfig) {
           category: { type: 'string' },
           origin: { type: 'string' },
           deduplicated: { type: 'boolean' },
+          similar: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: { id: { type: 'string' }, content: { type: 'string' }, score: { type: 'number' } },
+              required: ['id'],
+            },
+          },
         },
         required: ['id', 'scope', 'category', 'deduplicated'],
       },
-      render: (_args, value) => [{
-        type: 'text',
-        text: value.deduplicated
+      render: (_args, value) => {
+        const base = value.deduplicated
           ? `已有相同记忆，未重复写入：${value.id} (duplicate; existing memory kept)`
-          : `已记录记忆 ${value.id} [${value.category}/${value.scope}/${value.origin}] (memory saved)`,
-      }],
+          : `已记录记忆 ${value.id} [${value.category}/${value.scope}/${value.origin}] (memory saved)`
+        const similar = value.similar ?? []
+        if (similar.length === 0) return [{ type: 'text', text: base }]
+        const list = similar.map((s) => `${s.id}「${s.content.length > 40 ? `${s.content.slice(0, 40)}…` : s.content}」(${s.score})`).join('；')
+        return [{ type: 'text', text: `${base}\n检测到 ${similar.length} 条相似记忆：${list}。若为信息更新，请取代（supersedes）或更新旧条目，避免并存矛盾 (similar memories detected; prefer supersede/update over duplicating)` }]
+      },
     },
     isConcurrencySafe: () => false,
     execute(args, exec) {
       const session = sessionOf(exec)
-      const { entry, deduplicated } = service.save({
+      const { entry, deduplicated, similar } = service.save({
         content: args.content,
         category: args.category ?? 'fact',
         scope: args.scope ?? 'workspace',
@@ -155,7 +166,7 @@ export function apply(ctx, rawConfig) {
         source: session?.id,
       })
       if (!deduplicated) noteWrite(session)
-      return { id: entry.id, scope: entry.scope, category: entry.category, origin: entry.origin, deduplicated }
+      return { id: entry.id, scope: entry.scope, category: entry.category, origin: entry.origin, deduplicated, similar: similar ?? [] }
     },
   }
 

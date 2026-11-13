@@ -60,11 +60,11 @@ async function main() {
 
   // 1. status：版本与 schema
   let token = ''
-  await check('status 报告 version=0.10.0 / schemaVersion=2 并下发 token', async () => {
+  await check('status 报告 version=0.11.0 / schemaVersion=2 并下发 token', async () => {
     const { status, json } = await req('GET', '/status')
     ok('status HTTP 200', status === 200, `got ${status}`)
     ok('status.ok', json?.ok === true)
-    ok('version === 0.10.0', json?.version === '0.10.0', `got ${json?.version}`)
+    ok('version === 0.11.0', json?.version === '0.11.0', `got ${json?.version}`)
     ok('schemaVersion === 2', json?.schemaVersion === 2, `got ${json?.schemaVersion}`)
     ok('token 非空', typeof json?.key === 'string' && json.key.length > 0)
     token = json?.key ?? ''
@@ -82,6 +82,14 @@ async function main() {
     if (idA) created.push(idA)
     const q = await req('GET', `/entries?query=${encodeURIComponent(RUN)}`)
     ok('entries 检索命中', (q.json?.entries ?? []).some((e) => e.id === idA))
+  })
+
+  await check('save 相似记忆提示（0.11.0）', async () => {
+    const near = await req('POST', '/save', { token, body: { content: `${RUN} 甲事实乙`, scope: 'global', origin: 'auto' } })
+    const idN = near.json?.result?.entry?.id ?? ''
+    if (idN) created.push(idN)
+    ok('save 返回 similar 数组', Array.isArray(near.json?.result?.similar), JSON.stringify(near.json))
+    ok('similar 命中既有甲（score≥0.5）', (near.json?.result?.similar ?? []).some((s) => s.id === idA && s.score >= 0.5))
   })
 
   await check('update origin 修正往返（0.10.0）', async () => {
@@ -176,6 +184,7 @@ async function main() {
     ok('bundle HTTP 200', b.status === 200, `got ${b.status} rev=${rev}`)
     ok('bundle 含 0.9.0 代码标记 autoExtractHint', code.includes('autoExtractHint'))
     ok('bundle 含 0.10.0 新文案 显式要求/Requested', code.includes('显式要求') && code.includes('Requested'))
+    ok('bundle 含 0.11.0 新文案 similarSaved', code.includes('similarSaved'))
   })
 
   // 7. 清理测试条目

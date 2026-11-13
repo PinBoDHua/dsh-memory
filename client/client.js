@@ -263,6 +263,7 @@
     deleteHint: '删除后 6 秒内可在底部提示中撤销。',
     saved: '已保存',
     deduplicated: '已有相同记忆，未重复写入',
+    similarSaved: '已保存；检测到 {n} 条相似记忆（{id}），建议核对是否重复',
     deleted: '已删除',
     deletedN: '已删除 {n} 条',
     undo: '撤销',
@@ -434,6 +435,7 @@
     deleteHint: 'You can undo from the toast within 6 seconds.',
     saved: 'Saved',
     deduplicated: 'Identical memory exists; nothing added',
+    similarSaved: 'Saved; {n} similar memory found ({id}) — review for duplicates',
     deleted: 'Deleted',
     deletedN: 'Deleted {n}',
     undo: 'Undo',
@@ -1983,7 +1985,9 @@
           promise.then(function (payload) {
             if (editorRef.current === started) setEditor(null)
             var dedup = payload && payload.result && payload.result.deduplicated
-            showToast('ok', dedup ? t('deduplicated') : t('saved'))
+            var sim = (payload && payload.result && payload.result.similar) || []
+            if (!dedup && sim.length > 0) showToast('ok', t('similarSaved').replace('{n}', String(sim.length)).replace('{id}', sim[0].id))
+            else showToast('ok', dedup ? t('deduplicated') : t('saved'))
             // 新建条目按更新时间排在最前：回到第一页让它可见。
             if (started.mode === 'create') setPage(0)
             return refreshRef.current()
