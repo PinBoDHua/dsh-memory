@@ -64,11 +64,11 @@ This file is the self-iteration ledger for dsh-memory: per-round increments, ver
 - [x] **`workingDirectory` 在 `apply` 时一次性捕获**（0.24.6）：改为每次 `ctx.get`，晚就绪/跟随 cd 均生效，并有 fake-ctx 集成回归。
 - [x] **命中语义口径对齐**（0.24.6）：明确检索命中写 `last_access`/`hit_count`，注入不写盘；DETAIL 已修正。
 - [x] **机密检查只查正文**（0.24.6）：正文＋标签统一硬拒。
-- [ ] **命中簿记迁移到独立 `access.json` 账本**（`withLock` 保护），彻底消除单条文件读-改-写窗口与写放大；届时可评估是否让注入命中以每小时节流方式入账。
+- [x] **命中簿记迁移到独立 `access.json` 账本**（0.24.7）：`withLock` 保护＋原子写＋签名缓存；不再改写条目 Markdown（消除读-改-写窗口与写放大）；检索与系统提示注入均入账（节流 ≤1 次/小时）；旧文件命中字段兼容、坏账本自愈。
 
-### 新审计（可选）
+### 新审计（下一轮）
 
-P1–P4 清空后做一次新的双端只读审计（宿主 `index.js`＋`lib/*`、客户端 `client/client.js`、DSH 宿主契约）补充 backlog；每轮一个可验证增量。
+P1–P4 已全部清空。下一轮开始新一轮双端只读审计（宿主 `index.js`＋`lib/*`、客户端 `client/client.js`、DSH 宿主契约、真实数据/并发场景），把新发现按 P1–P4 记入本节，再恢复「每轮一个可验证增量」。
 
 ### 明确不做
 

@@ -22,7 +22,7 @@ import { readFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { GUIDANCE, renderSection } from './lib/render.js'
+import { GUIDANCE, renderSection, selectInjection } from './lib/render.js'
 import { attachRoutes } from './lib/routes.js'
 import { createMemoryService } from './lib/service.js'
 
@@ -398,6 +398,13 @@ export function apply(ctx, rawConfig) {
       const cwd = cwdOf(assembly?.agent?.session)
       const entries = service.list({ scope: 'all', workspace: cwd })
       const recall = service.recallConfig()
+      // 注入命中入账：记录实际被注入系统提示的条目（access.json 账本节流 ≤1 次/小时/条目）。
+      if (recall.autoInject) {
+        try {
+          const { selected } = selectInjection(entries, { budgetChars: recall.injectionBudgetChars, decayEnabled: recall.decayEnabled })
+          service.recordHits(selected)
+        } catch { /* best-effort：簿记失败不影响装配 */ }
+      }
       return renderSection(entries, {
         autoInject: recall.autoInject,
         budgetChars: recall.injectionBudgetChars,

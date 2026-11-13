@@ -13,7 +13,7 @@ Cross-session long-term memory for DeepSeek Harness: durable user preferences, p
 - **可选过期日（expires）**：`YYYY-MM-DD`（UTC、当日含），到期默认隐藏不删除、可恢复（`include_expired`）；坏日期 fail-open。
 - **钉选常驻（pinned）**：钉选条目在预算内最先注入、免衰减。
 - **归档（archived）**：归档条目默认隐藏、可恢复（`include_archived`）；不自动物理删除。
-- **软衰减＋命中反馈**：检索命中簿记 `last_access`/`hit_count`（节流 ≤1 次/小时；注入不写盘，避免每次系统提示装配写文件）；衰减乘子 `clamp(1.5−0.15×闲置周数, 0.3, 1.5)`，永不过滤、pinned 豁免、`decayEnabled` 可关回退现状。
+- **软衰减＋命中反馈**：检索/注入命中簿记 `last_access`/`hit_count`（节流 ≤1 次/小时），写入独立 `access.json` 账本、不改写条目 Markdown；衰减乘子 `clamp(1.5−0.15×闲置周数, 0.3, 1.5)`，永不过滤、pinned 豁免、`decayEnabled` 可关回退现状。
 - **Web 管理面板**：侧边栏「记忆」入口打开「记忆星丛」视觉面板，统计分布/浏览/搜索/分类过滤/状态过滤/分页/新建/编辑/删除撤销/批量选择/移动/钉选/归档/导出/导入，全局与工作区切换；与 agent 工具共用同一服务层。删除撤销吐司具有优先级（6 秒内不会被其它提示挤掉，普通提示排队展示）；批量删除逐项结算，部分失败时成功项仍可撤销并汇报失败原因；请求 15 秒超时，网络/超时失败显示可重试错误而不是永久转圈。
 - **跨作用域移动**：`memory_update` 带 `scope` 或面板编辑弹窗切换作用域，即可在 global ↔ 当前工作区之间移动条目；目标已有相同内容时拒绝（409/duplicate），不产生重复。
 - **导出/导入**：面板一键导出记忆为带版本的 JSON（`dsh-memory-export` v1，作用域感知：全部/仅全局/指定工作区，默认全量；含作用域与工作区路径与 v2 可选字段，按工作区目录读取、不受索引陈旧影响）；导入先 dry-run 预览（新增/更新/重复跳过/拒绝计数），确认后落盘；可选「按 id 合并」模式原地更新已存在条目（保留 created）。逐条校验、机密硬拒、同内容去重（含批内）、保留原 id 与时间戳；**id 跨作用域全局唯一**：任一作用域已占用则自动新分配（merge 模式也不跨作用域合并）。
@@ -47,6 +47,7 @@ Cross-session long-term memory for DeepSeek Harness: durable user preferences, p
 ```
 .dsh-memory/
 ├── meta.json                 # 存储元数据：schemaVersion/createdAt（首次写入时创建）
+├── access.json               # 命中账本：id → { at, count }（检索/注入命中，节流 ≤1 次/小时；可选）
 ├── settings.json             # 设置覆盖层（可选；缺失＝用默认/profile 基线）
 ├── backups/                  # 自动/手动备份的全量导出 JSON（按保留份数裁剪）
 ├── global/<id>.md
@@ -75,9 +76,9 @@ pinned: true
 
 v2 可选字段（`origin`/`supersedes`/`superseded_by`/`superseded_at`/`expires`/`pinned`/`archived`/`last_access`/`hit_count`）**稀疏存储**：仅在显式设置时写入文件，旧文件无需改写、读取时懒缺省（缺 origin 视为 manual、缺 pinned/archived 视为 false）；origin 可经 `memory_update` 或面板编辑弹窗显式修正（0.10.0 起 save 工具必填 origin，面板文案「显式要求/主动沉淀」）。
 
-写入为「临时文件＋改名」的原子写；每次操作实时重读磁盘，因此 DSH 运行中手工编辑文件也会立即生效。损坏的文件会被跳过而不是报错。条目解析结果带进程内缓存（签名＝路径＋mtime/ctime/size）：热路径只 `statSync`、不重复读文件与解析；手工编辑、其它进程原子写、删除都会改变签名并自动失效，缓存上限 4096 条按插入顺序淘汰。命中簿记（`last_access`/`hit_count`）在写前重读文件、只合并这两个字段后落盘，不用检索时的旧快照整文件回写，避免覆盖其它进程并发写入的正文；写回后同步更新解析缓存。
+写入为「临时文件＋改名」的原子写；每次操作实时重读磁盘，因此 DSH 运行中手工编辑文件也会立即生效。损坏的文件会被跳过而不是报错。条目解析结果带进程内缓存（签名＝路径＋mtime/ctime/size）：热路径只 `statSync`、不重复读文件与解析；手工编辑、其它进程原子写、删除都会改变签名并自动失效，缓存上限 4096 条按插入顺序淘汰。命中簿记（`last_access`/`hit_count`）写入独立 `access.json` 账本（原子写＋跨进程锁、读取带签名缓存），**不再改写条目 Markdown**——没有单文件读-改-写窗口，也不会覆盖并发写入的正文；账本损坏按空处理并在下次命中时自愈。
 
-并发与版本化：记忆按 home 共享，多个 DSH 进程可能同时写入。`index.json` 的读-改-写与批量导入的落盘阶段由跨进程写锁保护（原子 mkdir 互斥；持锁进程崩溃留下的陈旧锁按 mtime 自愈；获取超时抛错）。单条保存/更新本身是原子文件写，id 唯一，不需要锁。`meta.json` 记录 `schemaVersion`（当前 2）；加载时若检测到旧 v1 数据，先强制备份一次（即使自动备份关闭）再升级 meta 锚点，新字段懒缺省、不逐文件改写，旧记忆零丢失。缺失或损坏时自动重建，不影响读写。
+并发与版本化：记忆按 home 共享，多个 DSH 进程可能同时写入。`index.json` 的读-改-写、`access.json` 命中账本与批量导入的落盘阶段由跨进程写锁保护（原子 mkdir 互斥；持锁进程崩溃留下的陈旧锁按 mtime 自愈；获取超时抛错）。单条保存/更新本身是原子文件写，id 唯一，不需要锁。`meta.json` 记录 `schemaVersion`（当前 2）；加载时若检测到旧 v1 数据，先强制备份一次（即使自动备份关闭）再升级 meta 锚点，新字段懒缺省、不逐文件改写，旧记忆零丢失。缺失或损坏时自动重建，不影响读写。
 
 导出文档格式（面板「导出」生成，「导入」接受）：
 

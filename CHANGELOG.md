@@ -3,6 +3,16 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.24.7] - 2026-11-13
+
+### 变更 Changed
+- **命中簿记迁移到独立 `access.json` 账本**：检索命中与系统提示注入命中不再改写条目 Markdown（此前每次检索都要重读+整文件回写，既有写放大，也有读-改-写窗口在并发时覆盖正文的风险）。账本由 `withLock` 保护、原子写、签名缓存读取；节流仍为「每条目 ≤1 次/小时」；账本损坏按空处理并在下次命中时自愈；旧条目文件里的 `last_access`/`hit_count` 继续兼容（首次入库时从旧计数续写）。
+- **注入命中恢复入账**：系统提示装配时对「实际被注入」的条目记账（仅一次 selectInjection 计算＋每小时一次账本写），DETAIL 恢复「检索/注入命中簿记」口径。
+
+### 新增 Added
+- `tests/access-ledger.test.mjs`（6 条）：命中不改写条目文件、节流、损坏账本自愈、旧文件字段兼容、双进程并发不丢计数、系统提示注入入账；`tests/fixtures/access-worker.mjs` 并发 worker。
+- live-check 增加「账本写入且条目 Markdown 未被改写」「再次检索叠加命中计数」端到端检查；清理阶段同时清理测试条目的账本记录。
+
 ## [0.24.6] - 2026-11-13
 
 ### 修复 Fixed

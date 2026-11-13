@@ -62,11 +62,11 @@ async function main() {
 
   // 1. status：版本与 schema
   let token = ''
-  await check('status 报告 version=0.24.6 / schemaVersion=2 并下发 token', async () => {
+  await check('status 报告 version=0.24.7 / schemaVersion=2 并下发 token', async () => {
     const { status, json } = await req('GET', '/status')
     ok('status HTTP 200', status === 200, `got ${status}`)
     ok('status.ok', json?.ok === true)
-    ok('version === 0.24.6', json?.version === '0.24.6', `got ${json?.version}`)
+    ok('version === 0.24.7', json?.version === '0.24.7', `got ${json?.version}`)
     ok('schemaVersion === 2', json?.schemaVersion === 2, `got ${json?.schemaVersion}`)
     ok('token 非空', typeof json?.key === 'string' && json.key.length > 0)
     token = json?.key ?? ''
@@ -215,6 +215,25 @@ async function main() {
     } finally {
       await req('POST', '/forget', { token, body: { id, workspace: wsCwd } })
     }
+  })
+
+  await check('命中簿记写独立账本且不改写条目文件（0.24.7）', async () => {
+    const sv = await req('POST', '/save', { token, body: { content: `${RUN} 账本命中`, scope: 'global', origin: 'auto' } })
+    const id = sv.json?.result?.entry?.id ?? ''
+    if (id) created.push(id)
+    const file = path.join(statusRoot, 'global', `${id}.md`)
+    const beforeText = readFileSync(file, 'utf8')
+    const beforeMtime = statSync(file).mtimeMs
+    const first = await req('GET', `/entries?query=${encodeURIComponent(`${RUN} 账本命中`)}`)
+    ok('账本条目检索命中', (first.json?.entries ?? []).some((e) => e.id === id))
+    const accessFile = path.join(statusRoot, 'access.json')
+    let ledger = {}
+    try { ledger = JSON.parse(readFileSync(accessFile, 'utf8')) } catch { /* 首次 */ }
+    ok('access.json 记录命中次数', Boolean(ledger[id]) && ledger[id].count >= 1, JSON.stringify(ledger[id]))
+    ok('条目 Markdown 未被命中簿记改写', readFileSync(file, 'utf8') === beforeText && statSync(file).mtimeMs === beforeMtime)
+    const second = await req('GET', `/entries?query=${encodeURIComponent(`${RUN} 账本命中`)}`)
+    const hitEntry = (second.json?.entries ?? []).find((e) => e.id === id)
+    ok('再次检索可见命中计数（账本叠加）', Boolean(hitEntry) && hitEntry.hit_count >= 1, JSON.stringify(hitEntry))
   })
 
   await check('update origin 修正往返（0.10.0）', async () => {
@@ -373,6 +392,17 @@ async function main() {
     for (const id of created) await req('POST', '/forget', { token, body: { id } })
     const left = await req('GET', `/entries?query=${encodeURIComponent(RUN)}&include_superseded=true&include_archived=true&include_expired=true`)
     ok('测试条目已全部清理', (left.json?.entries ?? []).length === 0, `残留 ${(left.json?.entries ?? []).length}`)
+    // 账本里也清掉本次测试条目，避免长期积累（best-effort）。
+    try {
+      const accessFile = path.join(statusRoot, 'access.json')
+      const ledger = JSON.parse(readFileSync(accessFile, 'utf8'))
+      let changed = false
+      for (const id of created) {
+        if (ledger[id]) { delete ledger[id]; changed = true }
+      }
+      if (changed) writeFileSync(accessFile, `${JSON.stringify(ledger, null, 2)}\n`, 'utf8')
+      ok('账本测试条目已清理', true)
+    } catch { ok('账本测试条目已清理', true) }
   })
 
   finish()
