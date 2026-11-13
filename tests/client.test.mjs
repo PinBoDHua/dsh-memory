@@ -102,7 +102,12 @@ test('relativeTime renders zh/en buckets and falls back to a date', () => {
   assert.equal(relativeTime(at(2 * 86_400_000), now, 'zh'), '2 天前')
   assert.equal(relativeTime(at(2 * 86_400_000), now, 'en'), '2 d ago')
   assert.equal(relativeTime(at(20 * 86_400_000), now, 'zh'), '10 月 24 日')
+  // 跨年日期带年份（此前超过 7 天一律不带年份，老记忆年代不可辨）。
+  assert.match(relativeTime(at(400 * 86_400_000), now, 'zh'), /^2025 年 \d+ 月 \d+ 日$/)
+  assert.match(relativeTime(at(400 * 86_400_000), now, 'en'), /2025/)
   assert.equal(relativeTime(at(-60_000), now, 'zh'), '刚刚')
+  // 未来时间（时钟偏差/手改）不再夹成「刚刚」，直接显示日期。
+  assert.match(relativeTime(at(-120_000), now, 'zh'), /11 月 13 日/)
   assert.equal(relativeTime('not-a-date', now, 'zh'), 'not-a-date')
   assert.equal(relativeTime('', now, 'en'), '')
 })

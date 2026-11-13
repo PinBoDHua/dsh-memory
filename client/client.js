@@ -459,7 +459,17 @@ function pageSlice(entries, size) {
     var then = new Date(iso).getTime()
     if (isNaN(then)) return String(iso || '')
     var zh = lang === 'zh'
-    var diff = Math.max(0, now - then)
+    var nowMs = Number(now)
+    if (!Number.isFinite(nowMs)) nowMs = Date.now()
+    function dateLabel(ms) {
+      var d = new Date(ms)
+      var sameYear = d.getFullYear() === new Date(nowMs).getFullYear()
+      if (zh) return (sameYear ? '' : d.getFullYear() + ' 年 ') + (d.getMonth() + 1) + ' 月 ' + d.getDate() + ' 日'
+      return d.toLocaleDateString('en-US', sameYear ? { month: 'short', day: 'numeric' } : { year: 'numeric', month: 'short', day: 'numeric' })
+    }
+    // 未来时间（时钟偏差/手工改时间）不做「刚刚」夹取，直接显示日期，避免误导。
+    if (then > nowMs + 60_000) return dateLabel(then)
+    var diff = Math.max(0, nowMs - then)
     var sec = Math.floor(diff / 1000)
     var min = Math.floor(sec / 60)
     var hr = Math.floor(min / 60)
@@ -468,8 +478,7 @@ function pageSlice(entries, size) {
     if (min < 60) return zh ? min + ' 分钟前' : min + ' min ago'
     if (hr < 24) return zh ? hr + ' 小时前' : hr + ' h ago'
     if (day < 7) return zh ? day + ' 天前' : day + ' d ago'
-    var d = new Date(then)
-    return zh ? (d.getMonth() + 1) + ' 月 ' + d.getDate() + ' 日' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+    return dateLabel(then)
   }
 
   function formatBytes(n) {

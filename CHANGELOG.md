@@ -3,6 +3,17 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.24.35] - 2026-11-14
+
+### 修复 Fixed（第五轮审计 P3 收尾）
+- **Windows 大小写不敏感 id 冲突**：导入按小写归一核对 id 占用——同批 `m-X`/`m-x` 第二条自动分配新 id（不再「报 2 条、实存 1 条」静默丢记忆）；merge 模式遇到大小写变体用磁盘实际 id 原地更新同一文件。新增两条回归测试。
+- **跨作用域取代关系物化回归**：补充「工作区后继取代全局前驱（部分视图导出→导入）」测试，断言前驱被正确隐藏、链双向完整（第五轮宿主审计 P1 场景）。
+- **相对时间**：超过 7 天且跨年时显示年份（此前所有老记忆都没有年份）；未来时间（时钟偏差/手改）不再夹成「刚刚」，直接显示日期。
+- **README 安装前置**：写明 Node ≥22.6 / DSH ≥0.2.0-rc.2（含 0.2.x 预发布）及 `engines.dsh` 预发布语义说明。
+
+### 验证证据
+- 单元 **329/329**；live **192/192**；真实 GUI **91/91**；数据根快照一致、零残留。
+
 ## [0.24.34] - 2026-11-14
 
 ### 修复 Fixed（第五轮审计 P2/P3：移动回滚、锁自愈、设置 busy、导入可停止）

@@ -152,6 +152,45 @@ test('import sanitizes newline-bearing frontmatter fields (no field injection)',
   assert.equal(service.search({ scope: 'global' }).some((e) => e.id === 'm-inject-src'), true, 'entry remains visible')
 })
 
+test('import materializes cross-scope chains (workspace successor hides global predecessor)', () => {
+  const { root, service } = tmpService()
+  const cwd = 'D:\\proj\\alpha'
+  const p = service.save({ content: '全局旧结论', scope: 'global' })
+  // 部分视图导出：工作区条目 S 声称取代全局 P；导入时 P 已在盘上、且未声明反向。
+  const res = service.import({ entries: [{ id: 'm-cross-s', content: '工作区新结论', scope: 'workspace', workspace: cwd, supersedes: p.entry.id }] })
+  assert.equal(res.repaired, 0)
+  const diskP = service.search({ scope: 'global', includeSuperseded: true, limit: 10 }).find((e) => e.id === p.entry.id)
+  assert.equal(diskP.superseded_by, 'm-cross-s')
+  assert.ok(!service.search({ scope: 'all', workspace: cwd, limit: 50 }).some((e) => e.id === p.entry.id), 'global predecessor hidden after workspace import')
+})
+
+test('import treats case-variant ids as the same file (Windows case-insensitive FS)', () => {
+  const { root, service } = tmpService()
+  const res = service.import({ entries: [
+    { id: 'm-case-AAAAAA', content: '大小写甲', scope: 'global' },
+    { id: 'm-case-aaaaaa', content: '大小写乙', scope: 'global' },
+  ] })
+  assert.equal(res.imported, 2, 'both entries imported')
+  const files = fs.readdirSync(path.join(root, 'global')).filter((n) => n.endsWith('.md'))
+  assert.equal(files.length, 2, 'two distinct files (no silent overwrite)')
+  assert.equal(new Set(files.map((n) => n.toLowerCase())).size, 2)
+  const contents = service.list({ scope: 'global' }).map((e) => e.content).sort()
+  assert.deepEqual(contents, ['大小写乙', '大小写甲'])
+})
+
+test('merge import with a case-variant id updates the on-disk file instead of duplicating', () => {
+  const { root, service } = tmpService()
+  const saved = service.save({ content: '大小写合并初版', scope: 'global' })
+  const variantId = saved.entry.id.toUpperCase()
+  const res = service.import({ mode: 'merge', entries: [{ id: variantId, content: '大小写合并新版', scope: 'global' }] })
+  assert.equal(res.updated, 1)
+  const files = fs.readdirSync(path.join(root, 'global')).filter((n) => n.endsWith('.md'))
+  assert.equal(files.length, 1, 'no duplicate file for case-variant id')
+  const entries = service.list({ scope: 'global' }).filter((e) => e.id.toLowerCase() === saved.entry.id.toLowerCase())
+  assert.equal(entries.length, 1)
+  assert.equal(entries[0].content, '大小写合并新版')
+})
+
 test('import enforces per-request entry cap (1000)', () => {
   const { service } = tmpService()
   const entries = Array.from({ length: 1001 }, (_, i) => ({ id: `m-cap-${i}`, content: `上限 ${i}`, scope: 'global' }))

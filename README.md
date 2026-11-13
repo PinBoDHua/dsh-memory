@@ -5,6 +5,9 @@ Cross-session long-term memory plugin for DeepSeek Harness. See [docs/DETAIL.md]
 
 ## 安装 Install
 
+前置要求 Prerequisites：Node.js ≥ 22.6；DSH ≥ 0.2.0-rc.2（含 0.2.x 预发布版本；`engines.dsh` 的预发布语义取决于宿主校验是否启用 includePrerelease，本地 `link:` 安装已在 0.2.2-alpha.3 验证可用）。
+Requires Node.js ≥ 22.6 and DSH ≥ 0.2.0-rc.2 (including 0.2.x prereleases; prerelease range semantics depend on whether the host enables semver includePrerelease — verified working with 0.2.2-alpha.3 via a local `link:` install).
+
 在装有 DSH 的会话中让 Agent 执行 `plugin_manager install_bundle`（target 为本目录的绝对路径），或在 **Plugins > Add plugin** 里选择本目录。
 Install via `plugin_manager install_bundle` with this directory's absolute path, or pick this directory in **Plugins > Add plugin**.
 

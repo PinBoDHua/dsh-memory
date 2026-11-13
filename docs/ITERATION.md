@@ -197,8 +197,9 @@ dreaming/后台 LLM 提取、向量/图检索、完整 bi-temporal 四时间戳�
 - [ ] **分片导入失败/重试路径无自动化覆盖**。方案：mock fetch 第 2 片 500 → 提示已写入 d/t、重试不重复、最终全落盘。
 
 #### P3
-- [ ] **Windows 大小写不敏感 id 冲突**：同批 m-X/m-x 报 2 条实存 1 条。方案：占用集合按 toLowerCase 建键。
+- [x] **Windows 大小写不敏感 id 冲突**（0.24.35：导入按小写归一核对占用；同批 `m-X`/`m-x` 第二条自动分配新 id、merge 模式用磁盘实际大小写更新同一文件；测试覆盖两文件/合并更新）。
+- [x] **相对时间超 7 天不带年份、未来时间夹成「刚刚」**（0.24.35：跨年显示年份、未来时间直接显示日期）。
 - [x] **i18n 错误拼接写死中文「：」、服务端 rejected.reason 双语直出**（0.24.32：`errJoin` 中英键替代硬编码冒号；导入拒绝项 `importRejectText` 已知 code 走本地化、未知才回退服务端 reason）。
 - [ ] **导出/备份沿用 15s 超时**（大库可能误报超时且备份已成功）。方案：export/backup 独立 timeout（如 120s）+ 进行中文案。
-- [ ] **engines.dsh 严格 semver 不满足预发布宿主**（0.2.2-alpha.3）。方案：改 `>=0.2.0-0` 或 README 注明 includePrerelease 语义。
+- [x] **engines.dsh 严格 semver 不满足预发布宿主**（0.24.35：README 安装节写明 Node ≥22.6 / DSH ≥0.2.0-rc.2 与预发布语义；`engines.dsh` 保持 `>=0.2.0-rc.2`，link 安装在 0.2.2-alpha.3 实测可用。若宿主启用硬校验且不做 includePrerelease 再按宿主语义调整）。
 - [ ] **设置重载与在途保存**：reset 不等待 in-flight save（窄窗口），可持 in-flight promise 串行化。
