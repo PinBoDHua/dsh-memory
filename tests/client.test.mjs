@@ -166,9 +166,10 @@ test('validateImportDoc accepts only dsh-memory export v1 documents', () => {
 })
 
 test('importSummary condenses a plan into display counts', () => {
-  assert.deepEqual(importSummary({ imported: 3, deduplicated: 1, rejected: [{ index: 0, code: 'secret', reason: 'x' }] }), { imported: 3, deduplicated: 1, rejected: 1 })
-  assert.deepEqual(importSummary({}), { imported: 0, deduplicated: 0, rejected: 0 })
-  assert.deepEqual(importSummary(null), { imported: 0, deduplicated: 0, rejected: 0 })
+  assert.deepEqual(importSummary({ imported: 3, deduplicated: 1, rejected: [{ index: 0, code: 'secret', reason: 'x' }] }), { imported: 3, updated: 0, deduplicated: 1, rejected: 1 })
+  assert.deepEqual(importSummary({}), { imported: 0, updated: 0, deduplicated: 0, rejected: 0 })
+  assert.deepEqual(importSummary(null), { imported: 0, updated: 0, deduplicated: 0, rejected: 0 })
+  assert.deepEqual(importSummary({ imported: 1, updated: 2, deduplicated: 0, rejected: [] }), { imported: 1, updated: 2, deduplicated: 0, rejected: 0 })
 })
 
 test('isExpired compares UTC dates inclusively and fails open on bad input', () => {

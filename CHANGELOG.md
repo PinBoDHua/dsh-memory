@@ -3,6 +3,15 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.20.0] - 2026-11-13
+
+### 新增 Added
+- **导入合并模式**：`service.import({mode:'merge'})` 与 `POST /import` 支持按 id 原地更新已存在条目（保留 created 时间，应用导入的内容/分类/标签/v2 字段），计入新增 `updated` 计数；修复「导出→修改→导入」备份恢复因 id 占用而分配新 id 产生平行重复的问题。默认 `mode='skip'` 完全向后兼容（内容去重＋id 占用新分配）。
+- 面板导入弹窗新增「按 id 合并」开关（切换即重算 dry-run 预览），预览瓦片增「更新」计数（新增/更新/重复跳过/拒绝四瓦片），确认按钮在新增与更新均为 0 时禁用。
+
+### 变更 Changed
+- 导入返回与 `importSummary` 增 `updated` 字段（additive）；导入完成吐司含更新计数。
+
 ## [0.19.0] - 2026-11-13
 
 ### 新增 Added
@@ -228,6 +237,7 @@ All notable changes to this project are documented here. Format follows Keep a C
 - 系统提示注入：指引＋字符预算内召回（`interpolate: false` 保护用户内容）。
 - 隐私护栏：密码/密钥/token 规则检测硬拒写。
 
+[0.20.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.16.0...v0.17.0

@@ -60,11 +60,11 @@ async function main() {
 
   // 1. status：版本与 schema
   let token = ''
-  await check('status 报告 version=0.19.0 / schemaVersion=2 并下发 token', async () => {
+  await check('status 报告 version=0.20.0 / schemaVersion=2 并下发 token', async () => {
     const { status, json } = await req('GET', '/status')
     ok('status HTTP 200', status === 200, `got ${status}`)
     ok('status.ok', json?.ok === true)
-    ok('version === 0.19.0', json?.version === '0.19.0', `got ${json?.version}`)
+    ok('version === 0.20.0', json?.version === '0.20.0', `got ${json?.version}`)
     ok('schemaVersion === 2', json?.schemaVersion === 2, `got ${json?.schemaVersion}`)
     ok('token 非空', typeof json?.key === 'string' && json.key.length > 0)
     token = json?.key ?? ''
@@ -105,6 +105,11 @@ async function main() {
     const pairs = sim.json?.pairs ?? []
     ok('similar 返回 pairs 数组', Array.isArray(pairs))
     ok('similar 含甲↔甲乙对', pairs.some((p) => (p.older.id === idA && p.newer.id === idN) || (p.older.id === idN && p.newer.id === idA)))
+  })
+
+  await check('POST /import 合并模式 dry-run（0.20.0）', async () => {
+    const mg = await req('POST', '/import', { token, body: { mode: 'merge', dryRun: true, entries: [{ id: idA, content: `${RUN} 甲事实合并改`, scope: 'global' }] } })
+    ok('merge dry-run updated=1/imported=0', mg.json?.result?.updated === 1 && mg.json?.result?.imported === 0, JSON.stringify(mg.json))
   })
 
   await check('update origin 修正往返（0.10.0）', async () => {
@@ -228,6 +233,7 @@ async function main() {
     ok('bundle 含 0.17.0 新文案 已导出 {n} 条记忆', code.includes('已导出 {n} 条记忆'))
     ok('bundle 含 0.18.0 新文案 hiddenHint', code.includes('hiddenHint'))
     ok('bundle 含 0.19.0 新文案 injectedLabel', code.includes('injectedLabel'))
+    ok('bundle 含 0.20.0 新文案 importMergeLabel', code.includes('importMergeLabel'))
   })
 
   // 7. 清理测试条目

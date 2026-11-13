@@ -156,6 +156,7 @@
     var p = plan || {}
     return {
       imported: Number(p.imported) || 0,
+      updated: Number(p.updated) || 0,
       deduplicated: Number(p.deduplicated) || 0,
       rejected: Array.isArray(p.rejected) ? p.rejected.length : 0,
     }
@@ -353,6 +354,8 @@
     importNew: '新增',
     importDup: '重复跳过',
     importRej: '拒绝',
+    importUpdated: '更新',
+    importMergeLabel: '按 id 合并已存在条目（更新内容，保留创建时间）',
     importRejHint: '被拒绝的条目（机密/无效/缺工作区）不会写入。',
     importConfirm: '确认导入',
     importAllDup: '全部条目均已存在，无需导入。',
@@ -548,6 +551,8 @@
     importNew: 'New',
     importDup: 'Duplicates skipped',
     importRej: 'Rejected',
+    importUpdated: 'Updated',
+    importMergeLabel: 'Merge existing by id (update content, keep created time)',
     importRejHint: 'Rejected entries (credentials/invalid/no workspace) are not written.',
     importConfirm: 'Import',
     importAllDup: 'All entries already exist; nothing to import.',
@@ -760,7 +765,8 @@
     '.dm_dialog_footer .dm_hint{margin-right:auto;}',
     '.dm_delete_preview{border:1px solid var(--dm-line);border-radius:12px;padding:12px;margin:10px 0;white-space:pre-wrap;word-break:break-word;background:var(--dm-bg);max-height:36vh;overflow-y:auto;font-size:13px;line-height:1.6;}',
     '.dm_hint{color:var(--dm-ink3);font-size:11.5px;}',
-    '.dm_import_tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:6px 0 10px;}',
+    '.dm_import_tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:6px 0 10px;}',
+    '.dm_import_merge{display:flex;align-items:center;gap:8px;margin:0 0 10px;font-size:12.5px;color:var(--dm-ink);cursor:pointer;}',
     '.dm_audit_list{display:flex;flex-direction:column;gap:12px;}',
     '.dm_audit_pair{border:1px solid var(--dm-line2);border-radius:12px;padding:12px;background:var(--dm-bg);}',
     '.dm_audit_score{font-size:12px;font-weight:700;color:var(--dm-primary);margin-bottom:8px;}',
@@ -904,7 +910,7 @@
     'body[data-ds-dark-theme] .dm_dateinput{color-scheme:dark;}',
     '.dm_pinrow{display:flex;align-items:center;justify-content:space-between;gap:12px;}',
     // ---- 响应式与动效偏好 ----
-    '@media (max-width:720px){.dm_header{flex-direction:column;}.dm_cta{width:100%;justify-content:center;}.dm_stats{gap:12px;padding:12px 14px;}.dm_stats_div{display:none;}.dm_card_actions{flex-direction:row;}.dm_card{flex-wrap:wrap;}.dm_import_tiles{grid-template-columns:repeat(3,1fr);}}',
+    '@media (max-width:720px){.dm_header{flex-direction:column;}.dm_cta{width:100%;justify-content:center;}.dm_stats{gap:12px;padding:12px 14px;}.dm_stats_div{display:none;}.dm_card_actions{flex-direction:row;}.dm_card{flex-wrap:wrap;}.dm_import_tiles{grid-template-columns:repeat(2,1fr);}}',
     '@media (prefers-reduced-motion:reduce){.dm_page *,.dm_page *::before,.dm_page *::after,.dm_toast,.dm_selbar,.dm_overlay,.dm_dialog,.dm_select_pop{animation:none !important;transition:none !important;}}',
     'body.dm-no-anim .dm_select_pop{animation:none !important;}',
   ].join('\n')
@@ -1374,12 +1380,17 @@
         var t = props.t
         var summary = importSummary(props.plan)
         var rejected = (props.plan && props.plan.rejected) || []
+        var merge = props.mode === 'merge'
         return h(Modal, { title: t('importTitle'), onClose: props.onClose, busy: props.busy },
           h('div', { className: 'dm_dialog_head' },
             h('div', { className: 'dm_dialog_medal dm_dialog_medal_primary' }, h(Icon, { name: 'import', size: 17, strokeWidth: 2 })),
             h('h2', { className: 'dm_dialog_title' }, t('importTitle'))),
+          h('label', { className: 'dm_import_merge' },
+            h('input', { type: 'checkbox', checked: merge, disabled: props.busy, onChange: function (e) { props.onModeChange(e.target.checked ? 'merge' : 'skip') } }),
+            h('span', null, t('importMergeLabel'))),
           h('div', { className: 'dm_import_tiles' },
             h('div', { className: 'dm_tile' }, h('div', { className: 'dm_tile_num', style: { color: 'var(--dm-primary)' } }, summary.imported), h('div', { className: 'dm_tile_label' }, t('importNew'))),
+            h('div', { className: 'dm_tile' }, h('div', { className: 'dm_tile_num', style: { color: 'var(--dm-success)' } }, summary.updated), h('div', { className: 'dm_tile_label' }, t('importUpdated'))),
             h('div', { className: 'dm_tile' }, h('div', { className: 'dm_tile_num', style: { color: 'var(--dm-ink3)' } }, summary.deduplicated), h('div', { className: 'dm_tile_label' }, t('importDup'))),
             h('div', { className: 'dm_tile' }, h('div', { className: 'dm_tile_num', style: { color: 'var(--dm-danger)' } }, summary.rejected), h('div', { className: 'dm_tile_label' }, t('importRej')))),
           rejected.length > 0
@@ -1391,12 +1402,12 @@
                 }),
                 rejected.length > 5 ? h('li', { key: 'more' }, '… +' + (rejected.length - 5)) : null))
             : null,
-          summary.imported === 0 && summary.deduplicated > 0
+          summary.imported === 0 && summary.updated === 0 && summary.deduplicated > 0
             ? h('div', { className: 'dm_hint', style: { marginTop: 8 } }, t('importAllDup'))
             : null,
           h('div', { className: 'dm_dialog_footer' },
             h('button', { className: 'dm_btn', onClick: props.onClose, disabled: props.busy }, t('cancel')),
-            h('button', { className: 'dm_btn dm_btn_primary', onClick: props.onConfirm, disabled: props.busy || summary.imported === 0 }, h(Icon, { name: 'check', size: 14, strokeWidth: 2.2 }), t('importConfirm'))))
+            h('button', { className: 'dm_btn dm_btn_primary', onClick: props.onConfirm, disabled: props.busy || (summary.imported === 0 && summary.updated === 0) }, h(Icon, { name: 'check', size: 14, strokeWidth: 2.2 }), t('importConfirm'))))
       }
 
       function AuditModal(props) {
@@ -2229,20 +2240,28 @@
             }
             setBusy(true)
             return api.import({ entries: doc.entries, dryRun: true }).then(function (payload) {
-              setImportPlan({ entries: doc.entries, plan: payload.result })
+              setImportPlan({ entries: doc.entries, plan: payload.result, mode: 'skip' })
             }).catch(writeFailure).then(function () { setBusy(false) })
           }).catch(function () {
             showToast('error', t('errInvalidJson'))
           })
         }
 
+        function changeImportMode(mode) {
+          if (busy || !importPlan) return
+          setBusy(true)
+          api.import({ entries: importPlan.entries, dryRun: true, mode: mode }).then(function (payload) {
+            setImportPlan({ entries: importPlan.entries, plan: payload.result, mode: mode })
+          }).catch(writeFailure).then(function () { setBusy(false) })
+        }
+
         function confirmImport() {
           if (busy || !importPlan) return
           setBusy(true)
-          api.import({ entries: importPlan.entries }).then(function (payload) {
+          api.import({ entries: importPlan.entries, mode: importPlan.mode }).then(function (payload) {
             setImportPlan(null)
             var summary = importSummary(payload.result)
-            showToast('ok', t('imported') + ' · ' + t('importNew') + ' ' + summary.imported + ' / ' + t('importDup') + ' ' + summary.deduplicated + ' / ' + t('importRej') + ' ' + summary.rejected)
+            showToast('ok', t('imported') + ' · ' + t('importNew') + ' ' + summary.imported + ' / ' + t('importUpdated') + ' ' + summary.updated + ' / ' + t('importDup') + ' ' + summary.deduplicated + ' / ' + t('importRej') + ' ' + summary.rejected)
             setPage(0)
             return refreshRef.current()
           }).then(function () {
@@ -2460,7 +2479,7 @@
             }),
           editor ? h(EditorModal, { draft: editor, setDraft: setEditor, t: t, workspaceTarget: workspaceTarget, busy: busy, onSave: handleSave, onClose: function () { if (!busy) setEditor(null) } }) : null,
           confirm ? h(ConfirmModal, { entries: confirm.entries, t: t, busy: busy, onConfirm: handleDelete, onClose: function () { if (!busy) setConfirm(null) } }) : null,
-          importPlan ? h(ImportModal, { plan: importPlan.plan, t: t, busy: busy, onConfirm: confirmImport, onClose: function () { if (!busy) setImportPlan(null) } }) : null,
+          importPlan ? h(ImportModal, { plan: importPlan.plan, mode: importPlan.mode, t: t, busy: busy, onConfirm: confirmImport, onModeChange: changeImportMode, onClose: function () { if (!busy) setImportPlan(null) } }) : null,
           audit ? h(AuditModal, { pairs: audit.pairs, t: t, busy: busy, onSupersede: handleSupersedePair, onDismiss: dismissPair, onClose: function () { if (!busy) setAudit(null) } }) : null,
           toast ? h(Toast, { toast: toast, t: t, raised: selected.length > 0, onClose: function () { setToast(null) } }) : null)
       }
