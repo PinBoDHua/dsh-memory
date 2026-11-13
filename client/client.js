@@ -433,8 +433,9 @@
 
   var CSS = [
     // ---- 页面与调色板（浅色默认，深色跟随宿主） ----
-    '.dm_page{--dm-bg:var(--dsw-alias-bg-base,#f5f6fa);--dm-surface:var(--dsw-alias-bg-layer-1,#ffffff);--dm-ink:var(--dsw-alias-label-primary,#15171e);--dm-ink2:var(--dsw-alias-label-secondary,#5b6272);--dm-ink3:var(--dsw-alias-label-tertiary,#99a1b2);--dm-line:var(--dsw-alias-border-l1,rgba(21,23,30,.07));--dm-line2:var(--dsw-alias-border-l2,rgba(21,23,30,.14));--dm-primary:var(--dsw-alias-state-business-primary,#5b5bd6);--dm-primary2:#8b5cf6;--dm-on-primary:var(--dsw-alias-label-on-color,#ffffff);--dm-pref:#b45309;--dm-pref-soft:rgba(217,119,6,.12);--dm-fact:#1d4ed8;--dm-fact-soft:rgba(59,130,246,.12);--dm-dec:#047857;--dm-dec-soft:rgba(16,185,129,.13);--dm-danger:var(--dsw-alias-state-error-primary,#dc2626);--dm-danger-soft:rgba(220,38,38,.10);--dm-success:var(--dsw-alias-state-success-primary,#059669);--dm-success-soft:rgba(5,150,105,.12);--dm-amb-a:rgba(99,102,241,.10);--dm-amb-b:rgba(217,119,6,.07);--dm-shadow:0 1px 2px rgba(15,18,30,.05),0 10px 28px -14px rgba(15,18,30,.14);--dm-shadow-hover:0 2px 4px rgba(15,18,30,.06),0 18px 44px -16px rgba(15,18,30,.24);--dm-ring:0 0 0 3px color-mix(in srgb,var(--dm-primary) 22%,transparent);height:100%;overflow-y:auto;box-sizing:border-box;color:var(--dm-ink);padding:calc(var(--dsh-frame-top-clearance,48px) + 18px) 24px 40px;font-size:13px;line-height:1.5;background-color:var(--dm-bg);background-image:radial-gradient(900px 460px at 88% -8%,var(--dm-amb-a),transparent 62%),radial-gradient(720px 420px at -8% 24%,var(--dm-amb-b),transparent 58%);background-attachment:local;scrollbar-width:thin;scrollbar-color:color-mix(in srgb,var(--dm-ink) 22%,transparent) transparent;}',
-    'body[data-ds-dark-theme] .dm_page{--dm-bg:var(--dsw-alias-bg-base,#0f1115);--dm-surface:var(--dsw-alias-bg-layer-1,#171a21);--dm-ink:var(--dsw-alias-label-primary,#e8eaf0);--dm-ink2:var(--dsw-alias-label-secondary,#a8aebd);--dm-ink3:var(--dsw-alias-label-tertiary,#6f7688);--dm-line:var(--dsw-alias-border-l1,rgba(232,234,240,.07));--dm-line2:var(--dsw-alias-border-l2,rgba(232,234,240,.15));--dm-primary2:#a78bfa;--dm-pref:#fbbf24;--dm-pref-soft:rgba(251,191,36,.14);--dm-fact:#60a5fa;--dm-fact-soft:rgba(96,165,250,.15);--dm-dec:#34d399;--dm-dec-soft:rgba(52,211,153,.14);--dm-danger:var(--dsw-alias-state-error-primary,#f87171);--dm-danger-soft:rgba(248,113,113,.14);--dm-success:var(--dsw-alias-state-success-primary,#34d399);--dm-success-soft:rgba(52,211,153,.14);--dm-amb-a:rgba(139,92,246,.15);--dm-amb-b:rgba(251,191,36,.06);--dm-shadow:0 1px 2px rgba(0,0,0,.42),0 12px 32px -14px rgba(0,0,0,.55);--dm-shadow-hover:0 2px 4px rgba(0,0,0,.45),0 20px 48px -16px rgba(0,0,0,.65);}',
+    '.dm_page,.dm_select_pop{--dm-bg:var(--dsw-alias-bg-base,#f5f6fa);--dm-surface:var(--dsw-alias-bg-layer-1,#ffffff);--dm-ink:var(--dsw-alias-label-primary,#15171e);--dm-ink2:var(--dsw-alias-label-secondary,#5b6272);--dm-ink3:var(--dsw-alias-label-tertiary,#99a1b2);--dm-line:var(--dsw-alias-border-l1,rgba(21,23,30,.07));--dm-line2:var(--dsw-alias-border-l2,rgba(21,23,30,.14));--dm-primary:var(--dsw-alias-state-business-primary,#5b5bd6);--dm-primary2:#8b5cf6;--dm-on-primary:var(--dsw-alias-label-on-color,#ffffff);--dm-pref:#b45309;--dm-pref-soft:rgba(217,119,6,.12);--dm-fact:#1d4ed8;--dm-fact-soft:rgba(59,130,246,.12);--dm-dec:#047857;--dm-dec-soft:rgba(16,185,129,.13);--dm-danger:var(--dsw-alias-state-error-primary,#dc2626);--dm-danger-soft:rgba(220,38,38,.10);--dm-success:var(--dsw-alias-state-success-primary,#059669);--dm-success-soft:rgba(5,150,105,.12);--dm-amb-a:rgba(99,102,241,.10);--dm-amb-b:rgba(217,119,6,.07);--dm-shadow:0 1px 2px rgba(15,18,30,.05),0 10px 28px -14px rgba(15,18,30,.14);--dm-shadow-hover:0 2px 4px rgba(15,18,30,.06),0 18px 44px -16px rgba(15,18,30,.24);--dm-ring:0 0 0 3px color-mix(in srgb,var(--dm-primary) 22%,transparent);}',
+    '.dm_page{height:100%;overflow-y:auto;box-sizing:border-box;color:var(--dm-ink);padding:calc(var(--dsh-frame-top-clearance,48px) + 18px) 24px 40px;font-size:13px;line-height:1.5;background-color:var(--dm-bg);background-image:radial-gradient(900px 460px at 88% -8%,var(--dm-amb-a),transparent 62%),radial-gradient(720px 420px at -8% 24%,var(--dm-amb-b),transparent 58%);background-attachment:local;scrollbar-width:thin;scrollbar-color:color-mix(in srgb,var(--dm-ink) 22%,transparent) transparent;}',
+    'body[data-ds-dark-theme] .dm_page,body[data-ds-dark-theme] .dm_select_pop{--dm-bg:var(--dsw-alias-bg-base,#0f1115);--dm-surface:var(--dsw-alias-bg-layer-1,#171a21);--dm-ink:var(--dsw-alias-label-primary,#e8eaf0);--dm-ink2:var(--dsw-alias-label-secondary,#a8aebd);--dm-ink3:var(--dsw-alias-label-tertiary,#6f7688);--dm-line:var(--dsw-alias-border-l1,rgba(232,234,240,.07));--dm-line2:var(--dsw-alias-border-l2,rgba(232,234,240,.15));--dm-primary2:#a78bfa;--dm-pref:#fbbf24;--dm-pref-soft:rgba(251,191,36,.14);--dm-fact:#60a5fa;--dm-fact-soft:rgba(96,165,250,.15);--dm-dec:#34d399;--dm-dec-soft:rgba(52,211,153,.14);--dm-danger:var(--dsw-alias-state-error-primary,#f87171);--dm-danger-soft:rgba(248,113,113,.14);--dm-success:var(--dsw-alias-state-success-primary,#34d399);--dm-success-soft:rgba(52,211,153,.14);--dm-amb-a:rgba(139,92,246,.15);--dm-amb-b:rgba(251,191,36,.06);--dm-shadow:0 1px 2px rgba(0,0,0,.42),0 12px 32px -14px rgba(0,0,0,.55);--dm-shadow-hover:0 2px 4px rgba(0,0,0,.45),0 20px 48px -16px rgba(0,0,0,.65);}',
     '.dm_page::-webkit-scrollbar{width:10px;height:10px;}',
     '.dm_page::-webkit-scrollbar-track{background:transparent;}',
     '.dm_page::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--dm-ink) 20%,transparent);border-radius:8px;border:2.5px solid transparent;background-clip:content-box;}',
@@ -648,9 +649,42 @@
     '.dm_setfooter{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;}',
     '.dm_savestate{font-size:11.5px;color:var(--dm-ink3);display:flex;gap:6px;align-items:center;}',
     '.dm_no_anim *,.dm_no_anim *::before,.dm_no_anim *::after{animation:none !important;transition:none !important;}',
+    // ---- 自定义下拉 Select ----
+    '.dm_selectwrap{position:relative;display:inline-block;min-width:0;}',
+    '.dm_select_trigger{display:inline-flex;align-items:center;gap:8px;height:36px;width:100%;box-sizing:border-box;border:1px solid var(--dm-line2);border-radius:10px;background:var(--dm-surface);color:var(--dm-ink);padding:0 10px 0 12px;font:inherit;font-size:12.5px;cursor:pointer;max-width:340px;transition:border-color .15s,box-shadow .15s,background .15s;}',
+    '.dm_select_trigger:hover{border-color:color-mix(in srgb,var(--dm-primary) 40%,var(--dm-line2));}',
+    '.dm_select_trigger:focus-visible{outline:none;border-color:var(--dm-primary);box-shadow:var(--dm-ring);}',
+    '.dm_select_open{border-color:var(--dm-primary);box-shadow:var(--dm-ring);}',
+    '.dm_select_disabled{opacity:.45;cursor:default;}',
+    '.dm_select_val_icon{display:flex;color:var(--dm-ink3);flex-shrink:0;}',
+    '.dm_select_value{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left;}',
+    '.dm_select_chev{display:flex;color:var(--dm-ink3);flex-shrink:0;transition:transform .2s;}',
+    '.dm_select_open .dm_select_chev{transform:rotate(180deg);color:var(--dm-primary);}',
+    '.dm_select_pop{position:fixed;z-index:1200;box-sizing:border-box;background:var(--dm-surface);border:1px solid var(--dm-line2);border-radius:12px;box-shadow:var(--dm-shadow-hover);padding:5px;max-height:300px;overflow-y:auto;animation:dm_pop_in .16s ease;transform-origin:top center;scrollbar-width:thin;scrollbar-color:color-mix(in srgb,var(--dm-ink) 22%,transparent) transparent;}',
+    '.dm_select_pop::-webkit-scrollbar{width:8px;}',
+    '.dm_select_pop::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--dm-ink) 20%,transparent);border-radius:8px;}',
+    '.dm_select_pop::-webkit-scrollbar-thumb:hover{background:color-mix(in srgb,var(--dm-primary) 50%,transparent);}',
+    '.dm_select_up{transform-origin:bottom center;animation:dm_pop_in_up .16s ease;}',
+    '.dm_select_opt{display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:8px;cursor:pointer;font-size:12.5px;color:var(--dm-ink);transition:background .12s,color .12s;}',
+    '.dm_select_opt_active{background:color-mix(in srgb,var(--dm-ink) 7%,transparent);}',
+    '.dm_select_opt_sel{color:var(--dm-primary);font-weight:600;background:color-mix(in srgb,var(--dm-primary) 9%,transparent);}',
+    '.dm_select_opt_sel.dm_select_opt_active{background:color-mix(in srgb,var(--dm-primary) 15%,transparent);}',
+    '.dm_select_opt_disabled{opacity:.4;cursor:default;}',
+    '.dm_select_opt_icon{display:flex;color:var(--dm-ink3);flex-shrink:0;}',
+    '.dm_select_opt_sel .dm_select_opt_icon{color:var(--dm-primary);}',
+    '.dm_select_opt_spacer{width:14px;}',
+    '.dm_select_opt_label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
+    '.dm_select_opt_hint{font-size:11px;color:var(--dm-ink3);flex-shrink:0;font-variant-numeric:tabular-nums;}',
+    '.dm_select_opt_check{color:var(--dm-primary);flex-shrink:0;}',
+    '.dm_dialog .dm_selectwrap{display:block;width:100%;}',
+    '.dm_dialog .dm_select_trigger{max-width:none;height:38px;border-radius:12px;background:var(--dm-bg);}',
+    '.dm_setselect .dm_select_trigger{height:34px;max-width:240px;}',
+    '@keyframes dm_pop_in{from{opacity:0;transform:translateY(-4px) scale(.98);}to{opacity:1;transform:translateY(0) scale(1);}}',
+    '@keyframes dm_pop_in_up{from{opacity:0;transform:translateY(4px) scale(.98);}to{opacity:1;transform:translateY(0) scale(1);}}',
     // ---- 响应式与动效偏好 ----
     '@media (max-width:720px){.dm_header{flex-direction:column;}.dm_cta{width:100%;justify-content:center;}.dm_stats{gap:12px;padding:12px 14px;}.dm_stats_div{display:none;}.dm_card_actions{flex-direction:row;}.dm_card{flex-wrap:wrap;}.dm_import_tiles{grid-template-columns:repeat(3,1fr);}}',
-    '@media (prefers-reduced-motion:reduce){.dm_page *,.dm_page *::before,.dm_page *::after,.dm_toast,.dm_selbar,.dm_overlay,.dm_dialog{animation:none !important;transition:none !important;}}',
+    '@media (prefers-reduced-motion:reduce){.dm_page *,.dm_page *::before,.dm_page *::after,.dm_toast,.dm_selbar,.dm_overlay,.dm_dialog,.dm_select_pop{animation:none !important;transition:none !important;}}',
+    'body.dm-no-anim .dm_select_pop{animation:none !important;}',
   ].join('\n')
 
   global.__ModuleLoader__.load({
@@ -660,8 +694,11 @@
       var h = React.createElement
       var useState = React.useState
       var useEffect = React.useEffect
+      var useLayoutEffect = React.useLayoutEffect
       var useRef = React.useRef
       var useCallback = React.useCallback
+      var ReactDOM = require('react-dom')
+      var selectSeq = 0
 
       // ===== 图标（内联 SVG，stroke=currentColor） =====
       var ICONS = {
@@ -676,6 +713,7 @@
         x: ['M6 6l12 12', 'M18 6L6 18'],
         chevL: ['M15 6l-6 6 6 6'],
         chevR: ['M9 6l6 6-6 6'],
+        chevD: ['M6 9l6 6 6-6'],
         globe: ['M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z', 'M3 12h18', 'M12 3a13.5 13.5 0 0 1 0 18', 'M12 3a13.5 13.5 0 0 0 0 18'],
         folder: ['M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z'],
         clock: ['M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z', 'M12 7v5l3 2'],
@@ -995,10 +1033,15 @@
               }))),
           h('div', { className: 'dm_field' },
             h('label', { className: 'dm_label', htmlFor: 'dm-scope' }, h(Icon, { name: 'layers', size: 13 }), t('scopeLabel')),
-            h('select', { id: 'dm-scope', className: 'dm_select', disabled: props.busy, value: draft.scope, onChange: function (e) { field('scope', e.target.value) } },
-              h('option', { value: 'global' }, t('scopeGlobal')),
-              workspaceTarget ? h('option', { value: 'workspace' }, t('scopeWorkspace') + ' — ' + workspaceTarget) : null,
-              !workspaceTarget && draft.scope === 'workspace' ? h('option', { value: 'workspace', disabled: true }, t('scopeWorkspace')) : null),
+            h(Select, {
+              id: 'dm-scope', ariaLabel: t('scopeLabel'), disabled: props.busy, value: draft.scope,
+              onChange: function (v) { field('scope', v) },
+              options: [
+                { value: 'global', label: t('scopeGlobal'), icon: 'globe' },
+                workspaceTarget ? { value: 'workspace', label: t('scopeWorkspace') + ' — ' + workspaceTarget, icon: 'folder' } : null,
+                !workspaceTarget && draft.scope === 'workspace' ? { value: 'workspace', label: t('scopeWorkspace'), icon: 'folder', disabled: true } : null,
+              ].filter(Boolean),
+            }),
             draft.scope === 'workspace' && workspaceTarget
               ? h('div', { className: 'dm_hint', style: { marginTop: 4 } }, t('workspaceTarget') + ': ' + workspaceTarget)
               : null),
@@ -1155,13 +1198,21 @@
               h('button', { className: 'dm_btn dm_btn_mini', onClick: props.onBackup, disabled: props.busy }, h(Icon, { name: 'export', size: 12 }), t('backupNow')))),
           h(SettingsGroup, { icon: 'sliders', title: t('groupPanel'), style: { color: 'var(--dm-pref)', background: 'var(--dm-pref-soft)' } },
             h(SettingRow, { label: t('defaultViewLabel') },
-              h('select', { className: 'dm_select dm_setselect', value: draft.defaultView, 'aria-label': t('defaultViewLabel'), disabled: props.busy, onChange: function (e) { props.onChange('defaultView', e.target.value) } },
-                h('option', { value: 'all' }, t('viewAll')),
-                h('option', { value: 'global' }, t('viewGlobal')),
-                h('option', { value: 'workspace' }, t('viewWorkspace')))),
+              h(Select, {
+                className: 'dm_setselect', value: draft.defaultView, ariaLabel: t('defaultViewLabel'), disabled: props.busy,
+                onChange: function (v) { props.onChange('defaultView', v) },
+                options: [
+                  { value: 'all', label: t('viewAll'), icon: 'layers' },
+                  { value: 'global', label: t('viewGlobal'), icon: 'globe' },
+                  { value: 'workspace', label: t('viewWorkspace'), icon: 'folder' },
+                ],
+              })),
             h(SettingRow, { label: t('pageSizeLabel') },
-              h('select', { className: 'dm_select dm_setselect', value: String(draft.pageSize), 'aria-label': t('pageSizeLabel'), disabled: props.busy, onChange: function (e) { props.onChange('pageSize', Number(e.target.value)) } },
-                bounds.pageSizes.map(function (n) { return h('option', { key: n, value: String(n) }, String(n)) }))),
+              h(Select, {
+                className: 'dm_setselect', value: String(draft.pageSize), ariaLabel: t('pageSizeLabel'), disabled: props.busy, minWidth: 120,
+                onChange: function (v) { props.onChange('pageSize', Number(v)) },
+                options: bounds.pageSizes.map(function (n) { return { value: String(n), label: String(n) } }),
+              })),
             h(SettingRow, { label: t('animationsLabel'), desc: t('animationsDesc') },
               h(Toggle, { checked: draft.animations, onChange: set('animations'), label: t('animationsLabel'), disabled: props.busy })),
             h(SettingRow, { label: t('relativeTimeLabel'), desc: t('relativeTimeDesc') },
@@ -1171,6 +1222,178 @@
             h('span', { className: 'dm_savestate' },
               props.saving ? h(Icon, { name: 'clock', size: 13 }) : props.savedOnce ? h(Icon, { name: 'check', size: 13, strokeWidth: 2.2 }) : null,
               props.saving ? t('saving') : props.savedOnce ? t('settingsSaved') : '')))
+      }
+
+      // 自定义无障碍下拉：button + portal 浮层 listbox，彻底主题化（原生 select 弹出层无法跨浏览器主题化）。
+      // 浮层 portal 到 body，避开工具栏/弹窗的 backdrop-filter 包含块与 overflow 裁剪；fixed 坐标即视口坐标。
+      function Select(props) {
+        var options = props.options || []
+        var value = props.value
+        var disabled = props.disabled
+        var openState = useState(false)
+        var open = openState[0]; var setOpen = openState[1]
+        var activeState = useState(-1)
+        var active = activeState[0]; var setActive = activeState[1]
+        var posState = useState(null)
+        var pos = posState[0]; var setPos = posState[1]
+        var rootRef = useRef(null)
+        var triggerRef = useRef(null)
+        var listRef = useRef(null)
+        var typeRef = useRef({ buf: '', t: 0 })
+        var idRef = useRef(null)
+        if (idRef.current === null) { selectSeq += 1; idRef.current = 'dm-sel-' + selectSeq }
+        var activeRef = useRef(active); activeRef.current = active
+
+        var selectedIndex = -1
+        for (var i = 0; i < options.length; i++) {
+          if (String(options[i].value) === String(value)) { selectedIndex = i; break }
+        }
+        var selected = selectedIndex >= 0 ? options[selectedIndex] : null
+
+        function enabledIndexes() {
+          var a = []
+          for (var k = 0; k < options.length; k++) { if (!options[k].disabled) a.push(k) }
+          return a
+        }
+        function place() {
+          var trig = triggerRef.current
+          if (!trig) return
+          var r = trig.getBoundingClientRect()
+          var width = Math.max(r.width, props.minWidth || 200)
+          var list = listRef.current
+          var height = list ? Math.min(list.offsetHeight, 300) : 260
+          var spaceBelow = window.innerHeight - r.bottom
+          var up = spaceBelow < height + 10 && r.top > spaceBelow
+          var top = up ? Math.max(8, r.top - height - 6) : Math.min(r.bottom + 6, Math.max(8, window.innerHeight - height - 8))
+          var left = Math.min(Math.max(8, r.left), Math.max(8, window.innerWidth - width - 8))
+          setPos({ top: top, left: left, width: width, up: up })
+        }
+        function openList() {
+          if (disabled) return
+          var en = enabledIndexes()
+          setActive(selectedIndex >= 0 ? selectedIndex : (en.length ? en[0] : -1))
+          setOpen(true)
+        }
+        function closeList(refocus) {
+          setOpen(false)
+          setPos(null)
+          if (refocus && triggerRef.current) triggerRef.current.focus()
+        }
+        function choose(idx) {
+          var opt = options[idx]
+          if (!opt || opt.disabled) return
+          props.onChange(opt.value)
+          closeList(true)
+        }
+        function move(delta) {
+          var en = enabledIndexes()
+          if (en.length === 0) return
+          var cur = en.indexOf(activeRef.current)
+          var next = cur === -1 ? (delta > 0 ? 0 : en.length - 1) : (cur + delta + en.length) % en.length
+          setActive(en[next])
+        }
+        function edge(which) {
+          var en = enabledIndexes()
+          if (en.length) setActive(which === 'first' ? en[0] : en[en.length - 1])
+        }
+        function typeAhead(ch) {
+          var now = Date.now()
+          var st = typeRef.current
+          if (now - st.t > 600) st.buf = ''
+          st.t = now
+          st.buf += ch.toLowerCase()
+          var en = enabledIndexes()
+          for (var k = 0; k < en.length; k++) {
+            var lbl = String(options[en[k]].label || '').toLowerCase()
+            if (lbl.indexOf(st.buf) === 0) { setActive(en[k]); return }
+          }
+        }
+
+        useLayoutEffect(function () {
+          if (!open) return undefined
+          place()
+          if (listRef.current) listRef.current.focus()
+          function onDoc(e) {
+            var inTrigger = triggerRef.current && triggerRef.current.contains(e.target)
+            var inList = listRef.current && listRef.current.contains(e.target)
+            if (!inTrigger && !inList) closeList(false)
+          }
+          function onScroll() { place() }
+          function onResize() { place() }
+          document.addEventListener('mousedown', onDoc)
+          window.addEventListener('scroll', onScroll, true)
+          window.addEventListener('resize', onResize)
+          return function () {
+            document.removeEventListener('mousedown', onDoc)
+            window.removeEventListener('scroll', onScroll, true)
+            window.removeEventListener('resize', onResize)
+          }
+        }, [open])
+
+        useLayoutEffect(function () {
+          if (!open || !listRef.current) return
+          var el = listRef.current.querySelector('[data-index="' + active + '"]')
+          if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' })
+        }, [active, open])
+
+        function onTriggerKey(e) {
+          if (disabled) return
+          if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            openList()
+          }
+        }
+        function onListKey(e) {
+          switch (e.key) {
+            case 'ArrowDown': e.preventDefault(); move(1); break
+            case 'ArrowUp': e.preventDefault(); move(-1); break
+            case 'Home': e.preventDefault(); edge('first'); break
+            case 'End': e.preventDefault(); edge('last'); break
+            case 'Enter': case ' ': e.preventDefault(); choose(activeRef.current); break
+            case 'Escape': e.preventDefault(); closeList(true); break
+            case 'Tab': closeList(false); break
+            default:
+              if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); typeAhead(e.key) }
+          }
+        }
+
+        var trigger = h('div', { className: 'dm_selectwrap' + (props.className ? ' ' + props.className : ''), ref: rootRef, style: props.style },
+          h('button', {
+            type: 'button', ref: triggerRef, id: props.id,
+            className: 'dm_select_trigger' + (open ? ' dm_select_open' : '') + (disabled ? ' dm_select_disabled' : ''),
+            disabled: disabled, 'aria-haspopup': 'listbox', 'aria-expanded': open, 'aria-label': props.ariaLabel,
+            onClick: function () { if (open) closeList(true); else openList() },
+            onKeyDown: onTriggerKey,
+          },
+            selected && selected.icon ? h(Icon, { name: selected.icon, size: 14, className: 'dm_select_val_icon' }) : null,
+            h('span', { className: 'dm_select_value' }, selected ? selected.label : (props.placeholder || '')),
+            h('span', { className: 'dm_select_chev' }, h(Icon, { name: 'chevD', size: 14 }))))
+
+        if (!open) return trigger
+
+        var pop = h('div', {
+          className: 'dm_select_pop' + (pos && pos.up ? ' dm_select_up' : ''),
+          style: pos ? { top: pos.top, left: pos.left, width: pos.width } : { top: -9999, left: -9999, visibility: 'hidden' },
+          role: 'listbox', ref: listRef, tabIndex: -1, 'aria-label': props.ariaLabel,
+          'aria-activedescendant': active >= 0 ? (idRef.current + '-opt-' + active) : undefined,
+          onKeyDown: onListKey,
+        }, options.map(function (opt, idx) {
+          var isSel = String(opt.value) === String(value)
+          var isActive = idx === active
+          return h('div', {
+            key: String(opt.value) + '-' + idx, id: idRef.current + '-opt-' + idx, 'data-index': idx,
+            role: 'option', 'aria-selected': isSel, 'aria-disabled': opt.disabled || undefined,
+            className: 'dm_select_opt' + (isActive ? ' dm_select_opt_active' : '') + (isSel ? ' dm_select_opt_sel' : '') + (opt.disabled ? ' dm_select_opt_disabled' : ''),
+            onMouseEnter: function () { if (!opt.disabled) setActive(idx) },
+            onClick: function () { choose(idx) },
+          },
+            opt.icon ? h(Icon, { name: opt.icon, size: 14, className: 'dm_select_opt_icon' }) : h('span', { className: 'dm_select_opt_icon dm_select_opt_spacer' }),
+            h('span', { className: 'dm_select_opt_label' }, opt.label),
+            opt.hint ? h('span', { className: 'dm_select_opt_hint' }, opt.hint) : null,
+            isSel ? h(Icon, { name: 'check', size: 14, strokeWidth: 2.4, className: 'dm_select_opt_check' }) : null)
+        }))
+
+        return h(React.Fragment, null, trigger, ReactDOM.createPortal(pop, document.body))
       }
 
       function currentSessionCwd(ctx) {
@@ -1335,6 +1558,15 @@
           if (dv === 'global') setSelection('global')
           else if (dv === 'workspace' && currentCwd) setSelection(currentCwd)
         }, [settings, phase, currentCwd])
+
+        // 动效开关同步到 body：下拉浮层 portal 到 body，在 .dm_page 之外，
+        // 需要 body 级类才能让浮层也尊重「关闭动效」。
+        useEffect(function () {
+          var off = !!(settings && !settings.effective.animations)
+          if (off) document.body.classList.add('dm-no-anim')
+          else document.body.classList.remove('dm-no-anim')
+          return function () { document.body.classList.remove('dm-no-anim') }
+        }, [settings])
 
         function changeSetting(key, value) {
           dirtyRef.current = true
@@ -1700,16 +1932,16 @@
               renderStats(),
               h('div', { className: 'dm_toolbar_wrap' },
                 h('div', { className: 'dm_toolbar' },
-                  h('select', { className: 'dm_select', 'aria-label': t('scopeLabel'), value: selection, onChange: function (e) { changeSelection(e.target.value) } },
-                    options.map(function (opt) {
-                      var label = opt.kind === 'all' ? t('scopeAll')
-                        : opt.kind === 'global' ? t('scopeGlobal')
-                          : (opt.value === currentCwd ? '● ' : '') + opt.value + ' (' + (opt.count || 0) + ')'
-                      return h('option', { key: opt.value, value: opt.value }, label)
-                    }),
-                    unknownWorkspaces.map(function (w) {
-                      return h('option', { key: 'unknown-' + w.key, value: 'unknown-' + w.key, disabled: true }, t('workspaceUnknown') + ' (' + String(w.key).slice(0, 8) + '…)')
+                  h(Select, {
+                    ariaLabel: t('scopeLabel'), value: selection, minWidth: 220, onChange: changeSelection,
+                    options: options.map(function (opt) {
+                      if (opt.kind === 'all') return { value: 'all', label: t('scopeAll'), icon: 'layers' }
+                      if (opt.kind === 'global') return { value: 'global', label: t('scopeGlobal'), icon: 'globe' }
+                      return { value: opt.value, label: (opt.value === currentCwd ? '● ' : '') + opt.value, hint: String(opt.count || 0), icon: 'folder' }
+                    }).concat(unknownWorkspaces.map(function (w) {
+                      return { value: 'unknown-' + w.key, label: t('workspaceUnknown') + ' (' + String(w.key).slice(0, 8) + '…)', icon: 'folder', disabled: true }
                     })),
+                  }),
                   h('div', { className: 'dm_searchwrap' },
                     h('span', { className: 'dm_search_icon' }, h(Icon, { name: 'search', size: 15 })),
                     h('input', {

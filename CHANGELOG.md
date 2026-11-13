@@ -3,6 +3,17 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.8.0] - 2026-11-13
+
+### 变更 Changed
+- 全部 4 处原生 `<select>`（工具栏作用域、编辑器作用域、设置默认视图、设置每页条数）替换为统一的自定义无障碍下拉 `Select`，弹出层彻底主题化，消除系统默认白底/蓝高亮与页面风格的割裂。
+
+### 新增 Added
+- `Select` 组件：button + portal 浮层 listbox（`react-dom.createPortal` 到 body，避开工具栏/弹窗 backdrop-filter 包含块与 overflow 裁剪），主题表面/描边/阴影、开合动画、长列表主题滚动条。
+- 选项带图标（全局🌐/工作区📁/视图）、选中项打勾＋主色高亮、悬停反馈、计数 hint、禁用项（未知工作区）置灰。
+- 完整键盘导航：↑↓/Home/End/Enter/Space/Esc/Tab、字母定位（type-ahead）、`aria-haspopup/listbox/option/activedescendant`、焦点归还触发按钮、点击外部关闭、滚动/缩放自动重定位、近底自动向上翻转。
+- 浮层继承主题变量（含深色分支）；「关闭动效」与 `prefers-reduced-motion` 同样作用于 portal 浮层（body 级类同步）。
+
 ## [0.7.0] - 2026-11-13
 
 ### 新增 Added
@@ -86,6 +97,7 @@ All notable changes to this project are documented here. Format follows Keep a C
 - 系统提示注入：指引＋字符预算内召回（`interpolate: false` 保护用户内容）。
 - 隐私护栏：密码/密钥/token 规则检测硬拒写。
 
+[0.8.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/PinBoDHua/dsh-memory/compare/v0.5.0...v0.5.1

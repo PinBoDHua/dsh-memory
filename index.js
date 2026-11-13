@@ -60,6 +60,14 @@ export function apply(ctx, rawConfig) {
   const service = createMemoryService({ root, baseConfig: config })
   const controlToken = randomBytes(24).toString('hex')
 
+  // 版本号每次 apply 实时读取 package.json：宿主 ESM 模块可能被缓存，模块级
+  // version 常量会滞后于实际安装版本；状态路由据此始终报告当前真实版本。
+  let liveVersion = version
+  try {
+    const fresh = JSON.parse(readFileSync(fileURLToPath(new URL('./package.json', import.meta.url)), 'utf8')).version
+    if (typeof fresh === 'string' && fresh !== '') liveVersion = fresh
+  } catch { /* 读取失败时保留模块级 version fall back to module-level version */ }
+
   // workingDirectory 服务是会话有效目录的权威来源（会跟随 cd）；
   // 可选查找，缺失时回退到不可变的 session.header.cwd。
   let workingDirectory
@@ -282,7 +290,7 @@ export function apply(ctx, rawConfig) {
   // Web 管理面板的数据面：webServer 可选挂载，缺失时工具与注入仍可用。
   try {
     ctx.inject(['webServer'], (webCtx) => {
-      webCtx.effect(() => attachRoutes({ webCtx, service, token: controlToken, version }))
+      webCtx.effect(() => attachRoutes({ webCtx, service, token: controlToken, version: liveVersion }))
     })
   } catch (error) {
     ctx.logger?.warn?.('dsh-memory: 无法挂载 Web 面板接口（没有 webServer 服务）', error)
