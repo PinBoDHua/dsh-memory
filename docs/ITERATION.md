@@ -24,6 +24,7 @@ This file is the self-iteration ledger for dsh-memory: per-round increments, ver
 | `tests/*.test.mjs` | 纯逻辑/服务/路由/存储/锁/设置/守卫/客户端纯函数 | `node --test tests/*.test.mjs` |
 | `scripts/live-check.mjs` | 运行中宿主回环 API 全链路＋客户端 bundle rev | `--port=` 或 `DSH_MEMORY_PORT`；测试条目/设置/备份自动恢复，`--fail-at=<子串>` 失败注入验证异常清理，运行前后数据根快照 diff=0 自检 |
 | `scripts/gui-check.mjs` | 真实浏览器面板：过滤请求参数、下拉键盘、弹窗 Esc 草稿 | `--url=`；Edge headless + CDP（端口默认随机，可用 `--cdp-port=` 固定）；cookie 由 `<DSH_HOME>/.credentials.yaml` 自签；临时记忆清理，设置/备份用例前后快照恢复，运行前后数据根快照 diff=0 自检；中断安全（清理注册表 + SIGINT/SIGTERM/异常统一 abort；`--abort-after=<ms>` 注入验证） |
+| `scripts/gui-sticky-check.mjs` | 吸顶工具栏布局回归（只读、不写数据） | `--url=`；滚动后断言工具栏贴滚动容器顶（gap≤1px）且上方无露出带暴露卡片；`--probe=1` 受控实验（sticky 停驻位 = top + 容器 padding-top）；退出 0 绿 / 1 红 / 2 无法判定 |
 | `scripts/data-snapshot.mjs` | live/gui 共用的数据根快照/差异纯函数 | 条目内容 sha256、backups 内容 sha256、settings/meta；junk 清单（`.tmp-*`、`.lock-*`、非预期文件）；刻意排除 access.json/index.json 与派生 `.cache/`；`tests/data-snapshot.test.mjs` 覆盖 |
 | `scripts/verify-lock.mjs` | 验证脚本互斥锁 | 数据根 `.lock-verify`（data-snapshot 忽略其存在）；并发第二个脚本码 `busy` 快速退出；陈旧锁按 mtime 自愈、owner 死 PID 立即自愈；`tests/verify-lock.test.mjs` 覆盖 |
 | `scripts/watchdog.mjs` | live/gui 强杀看门狗 | 父进程启动时写清理 manifest（root/测试标记/settings 原始内容/backups 基线），detached 子进程每 1.5s 检查父存活；被 taskkill/CI 超时杀死后自动删测试条目、恢复 settings、删除新增备份与残留锁；正常结束由 cleanup 注册表停掉；`tests/watchdog.test.mjs` 覆盖，真实 `taskkill /F` 实测通过 |
@@ -231,3 +232,8 @@ dreaming/后台 LLM 提取、向量/图检索、完整 bi-temporal 四时间戳�
 - [ ] **origin=auto 徽章浅色对比度 3.64:1**（WCAG AA 需 4.5:1）；方案：浅色文字改 #6d28d9。
 - [ ] **超大取代链分量 >1000** 会被服务端上限拒绝（极难出现，标记待验证）。
 - [ ] **last_access 详情行按原始 ISO 展示**，与 created/updated 本地化不一致。
+
+### 用户反馈修复（2026-11-14，0.24.38）
+
+- [x] **吸顶工具栏遮挡卡片（用户截图「拦腰切断」）**：根因三重叠加——① 宿主从未定义 `--dsh-frame-top-clearance`（实测空串），v0.2.0 遗留的 48px 回退失效（面板上方无顶栏，顶部命中元素即 `.dm_page` 自身）；② 变量同时用于容器 `padding-top`（48+18=66）与工具栏 `sticky top`（48）；③ Chromium 内核 sticky 停驻位 = top + 容器 padding-top（受控实验：top0/pad66→66、top48/pad0→48、top0/pad0→0），实际停驻 114px，露出带暴露滚动卡片、工具栏盖住卡片中段。修复：容器 `padding-top:0`、呼吸空间改 `.dm_header` `margin-top:18px`、工具栏 `top:0`。回归 `scripts/gui-sticky-check.mjs` 红→绿（gap 114→0）；三段验证 350/198/91 全绿。
+- **内核怪癖沉淀**：滚动容器内做 sticky 布局时，顶部呼吸空间不要放容器 `padding-top`（会叠加进 sticky 停驻位），放首子元素 margin；吸顶元素 `top:0`。

@@ -3,6 +3,17 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.24.38] - 2026-11-14
+
+### 修复 Fixed（用户反馈：吸顶工具栏「拦腰切断」卡片）
+- **吸顶工具栏真正贴顶**：移除 v0.2.0 遗留的 `--dsh-frame-top-clearance` 失效假设（宿主从未定义该变量，面板上方也无顶栏）。旧回退 48px 同时加进滚动容器 `padding-top`（66px）与工具栏 `sticky top`，而 Chromium 内核会把容器 padding-top 叠加进 sticky 停驻位，实际停驻在滚动容器顶下方 114px——露出带让滚动卡片露头、中段被毛玻璃工具栏盖住，视觉上像卡片被拦腰切断。现容器 `padding-top:0`、顶部呼吸空间改由 `.dm_header` 的 `margin-top` 提供（margin 不参与叠加），工具栏 `top:0`，滚动后贴顶、卡片在其下正常滚动。
+
+### 新增测试
+- `scripts/gui-sticky-check.mjs` 只读布局回归（Edge headless + CDP）：滚动后断言工具栏贴滚动容器顶（gap≤1px）且上方无露出带暴露卡片；`--probe` 模式做 sticky 偏移/padding-top 受控实验。旧布局红（gap=114）、新布局绿（gap=0）。
+
+### 验证证据
+- 单元 **350/350**；live **198/198**；真实 GUI **91/91**；吸顶回归 **2/2**；数据根快照一致、零残留。
+
 ## [0.24.37] - 2026-11-14
 
 ### 修复 Fixed（第六轮审计：取代/去重/查重语义收口）
