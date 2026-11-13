@@ -29,21 +29,21 @@ This file is the self-iteration ledger for dsh-memory: per-round increments, ver
 
 ## 待办 Backlog
 
-来源：2026-11-13 双端只读审计（宿主端 12 项、客户端 12 项）。0.24.1 已清掉其中 10 项小修，以下按价值排序。
+来源：2026-11-13 双端只读审计（宿主端 12 项、客户端 12 项）。0.24.1 清掉 10 项小修；0.24.2 清掉 P1 数据一致性 6 项。以下保留未完成项。
 
 ### P1 数据一致性
 
-- [ ] **取代链不变量**：禁止成环（A 取代 B 后 B 不能再取代 A）、禁止覆盖既有 `superseded_by`；`forget` 前清理指向该条的悬垂引用（现在可静默造成两条记忆全部不可见）。
-- [ ] **`touchAccess` 旧快照整文件回写**：检索命中簿记用旧快照 `serializeEntry` 回写，可覆盖并发写入的正文；改为写前重读只合并 `last_access`/`hit_count`，或迁移到独立 `access.json` 账本；`memory_search` 的 `isConcurrencySafe` 声明与写副作用需要收敛。
-- [ ] **`parseEntry` 作用域以目录为准**：`expectedScope` 优先于 frontmatter `scope`，否则手改/错放文件会「forget 报成功但没删」「update 写到另一目录」。
-- [ ] **`memory_update` 同时带 `scope`（移动）时 `supersedes` 被静默丢弃**：`moveEntry` 内落取代链，或明确拒绝组合参数。
-- [ ] **导入跨作用域 id 唯一性**：workspace 先占 id X 后导入 global 同 id X 会共存，`findEntry` 全局优先导致按 id 操作命中错误条目；导入统一查全作用域占用。
-- [ ] **`export` 以目录为权威**：索引 `cwd` 陈旧时 `export({scope:'all'})` 会漏条目/重复；改为始终按目录 key 读取。
+- [x] **取代链不变量**（0.24.2）：禁止成环、禁止覆盖既有 `superseded_by`；`forget` 清理双向悬垂引用并恢复旧条目可见。
+- [x] **`touchAccess` 旧快照整文件回写**（0.24.2）：写前重读、只合并 `last_access`/`hit_count`；`memory_search` 改为 `isConcurrencySafe: false`。（更彻底的 access 账本仍未做，见 P4 备注。）
+- [x] **`parseEntry` 作用域以目录为准**（0.24.2）。
+- [x] **`memory_update` 同时带 `scope`（移动）时 `supersedes` 被静默丢弃**（0.24.2）。
+- [x] **导入跨作用域 id 唯一性**（0.24.2）：导入前扫描全部已占用 id。
+- [x] **`export` 以目录为权威**（0.24.2）。
 - [ ] **`detectSecret` 只查 content**：tags 可绕过机密硬拒。
 
 ### P2 性能
 
-- [ ] **批量导入 O(N×M) 读放大**：循环内每条 `listScope` 全量重读；预读一次建 `normalizeContent → id` Map。
+- [ ] **批量导入 O(N×M) 读放大**：每条仍 `listScope` 全量重读做内容去重（id 占用已改为一次扫描）；预读一次建 `normalizeContent → id` Map。
 - [ ] **热路径重复全量读盘**：`searchDetailed`/`stats` 各读两遍、每次系统提示装配全量读；按 `路径+mtime+size` 缓存解析结果（保留手工编辑即时生效），面板两个查询各读一遍。
 
 ### P3 客户端健壮性
@@ -63,6 +63,7 @@ This file is the self-iteration ledger for dsh-memory: per-round increments, ver
 - [ ] `update` 不刷新 workspaces/index.json 的 `lastSeen`。
 - [ ] `workingDirectory` 在 `apply` 时一次性捕获；若服务晚于插件就绪则永久回退 header cwd（待运行时验证，修法为 `cwdOf` 内每次 `ctx.get`）。
 - [ ] 详情里 `last_access`/`hit_count` 等展示与检索命中语义核对（注入命中是否也应簿记，文档与实现口径对齐）。
+- [ ] 命中簿记迁移到独立 `access.json` 账本（`withLock` 保护），彻底消除单条文件读-改-写窗口与写放大。
 
 ### 明确不做
 

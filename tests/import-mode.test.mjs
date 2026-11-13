@@ -75,6 +75,39 @@ test('import merge preserves scope isolation (workspace id not merged into globa
   assert.equal(service.list({ scope: 'workspace', workspace: WS }).find((e) => e.id === entry.id).content, '工作区改')
 })
 
+test('import keeps ids unique across scopes (no global/workspace id collision)', () => {
+  const { service } = tmpService()
+  const WS = path.join(os.tmpdir(), 'dsh-memory-import-id-ws')
+  const first = service.import({ entries: [{ id: 'm-cross-aaaaaa', content: '工作区先占', scope: 'workspace', workspace: WS }] })
+  assert.equal(first.imported, 1)
+  const second = service.import({ entries: [{ id: 'm-cross-aaaaaa', content: '全局后到', scope: 'global' }] })
+  assert.equal(second.imported, 1)
+  const all = [...service.list({ scope: 'global' }), ...service.list({ scope: 'workspace', workspace: WS })]
+  assert.equal(new Set(all.map((e) => e.id)).size, all.length, 'ids unique across scopes')
+
+  // 反向：global 先占 id，workspace 后导入同 id 必须换新 id。
+  service.import({ entries: [{ id: 'm-cross-bbbbbb', content: '全局先占乙', scope: 'global' }] })
+  service.import({ entries: [{ id: 'm-cross-bbbbbb', content: '工作区后到乙', scope: 'workspace', workspace: WS }] })
+  const globalIds = service.list({ scope: 'global' }).map((e) => e.id)
+  const wsIds = service.list({ scope: 'workspace', workspace: WS }).map((e) => e.id)
+  assert.ok(globalIds.includes('m-cross-bbbbbb'))
+  assert.ok(!wsIds.includes('m-cross-bbbbbb'))
+  assert.equal(new Set([...globalIds, ...wsIds]).size, globalIds.length + wsIds.length)
+})
+
+test('import merge does not merge into an id occupied in another scope', () => {
+  const { service } = tmpService()
+  const WS = path.join(os.tmpdir(), 'dsh-memory-import-id-merge')
+  service.import({ entries: [{ id: 'm-cross-cccccc', content: '工作区原内容', scope: 'workspace', workspace: WS }] })
+  const res = service.import({ mode: 'merge', entries: [{ id: 'm-cross-cccccc', content: '全局合并尝试', scope: 'global' }] })
+  assert.equal(res.updated, 0, 'must not update the workspace entry')
+  assert.equal(res.imported, 1)
+  assert.equal(service.list({ scope: 'workspace', workspace: WS }).find((e) => e.id === 'm-cross-cccccc').content, '工作区原内容')
+  const globalEntry = service.list({ scope: 'global' }).find((e) => e.content === '全局合并尝试')
+  assert.ok(globalEntry)
+  assert.notEqual(globalEntry.id, 'm-cross-cccccc', 'new id allocated to avoid cross-scope duplicate')
+})
+
 test('import invalid mode throws invalid', () => {
   const { service } = tmpService()
   assert.throws(() => service.import({ mode: 'bogus', entries: [] }), (e) => e.code === 'invalid')

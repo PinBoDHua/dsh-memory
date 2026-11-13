@@ -167,7 +167,7 @@ export function apply(ctx, rawConfig) {
 
   const saveTool = {
     name: 'memory_save',
-    description: '把一条值得长期记住的事实写入跨会话记忆（一事一条）。用户偏好→scope=global，项目事实/决策→scope=workspace。origin 必填：manual=用户显式要求，auto=你主动沉淀（便于用户审阅撤销）；信息变化可 supersedes=旧id 取代（保留历史）。写入时若检测到相似记忆会一并提示，便于取代/更新旧条目、避免并存矛盾。密码/密钥/token 会被拒绝。Save one durable fact to cross-session memory; origin is required (manual=user-requested, auto=agent-initiated); similar memories are reported on save (prefer supersede/update); credentials are rejected.',
+    description: '把一条值得长期记住的事实写入跨会话记忆（一事一条）。用户偏好→scope=global，项目事实/决策→scope=workspace。origin 必填：manual=用户显式要求，auto=你主动沉淀（便于用户审阅撤销）；信息变化可 supersedes=旧id 取代（保留历史；目标必须未被其他条目取代且不会形成取代环，否则拒绝）。写入时若检测到相似记忆会一并提示，便于取代/更新旧条目、避免并存矛盾。密码/密钥/token 会被拒绝。Save one durable fact to cross-session memory; origin is required (manual=user-requested, auto=agent-initiated); similar memories are reported on save (prefer supersede/update); supersede targets must not already have a successor or form a cycle.',
     parameters: {
       type: 'object',
       properties: {
@@ -284,7 +284,9 @@ export function apply(ctx, rawConfig) {
       },
       render: (_args, value) => renderSearchResult(value),
     },
-    isConcurrencySafe: () => true,
+    // 检索会写命中簿记（last_access/hit_count），属写副作用：遵守宿主并发契约，
+    // 声明为非并发安全，避免只读语义的并行执行互相踩写。
+    isConcurrencySafe: () => false,
     execute(args, exec) {
       const { entries, hidden } = service.searchDetailed({
         query: args.query ?? '',
@@ -308,7 +310,7 @@ export function apply(ctx, rawConfig) {
 
   const updateTool = {
     name: 'memory_update',
-    description: '按 id 更新一条记忆（新覆旧）：信息变化时原地更新，而不是新增重复条目；可选 scope 在 global 与当前工作区之间移动；可 supersedes 取代另一条、archived 归档/恢复、expires 设过期日（空串清除）、pinned 钉选、origin 修正来源标记。Update a memory by id; optional supersede/archive/expire/pin/origin.',
+    description: '按 id 更新一条记忆（新覆旧）：信息变化时原地更新，而不是新增重复条目；可选 scope 在 global 与当前工作区之间移动；可 supersedes 取代另一条（目标必须未被其他条目取代且不会形成取代环，否则拒绝）、archived 归档/恢复、expires 设过期日（空串清除）、pinned 钉选、origin 修正来源标记。Update a memory by id; optional supersede/archive/expire/pin/origin.',
     parameters: {
       type: 'object',
       properties: {

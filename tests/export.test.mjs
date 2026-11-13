@@ -51,6 +51,27 @@ test('service.export workspace without cwd throws no-workspace; invalid scope th
   assert.throws(() => service.export({ scope: 'bogus' }), (e) => e.code === 'invalid')
 })
 
+test('service.export reads each workspace by directory key, not by stale index cwd', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-memory-export-stale-'))
+  const service = createMemoryService({ root })
+  const alpha = path.join(os.tmpdir(), 'dsh-memory-export-alpha')
+  const beta = path.join(os.tmpdir(), 'dsh-memory-export-beta')
+  service.save({ content: 'alpha 记忆', scope: 'workspace', workspace: alpha, origin: 'manual' })
+  service.save({ content: 'beta 记忆', scope: 'workspace', workspace: beta, origin: 'manual' })
+  // 模拟索引损坏/陈旧：把 alpha 目录的 key 指向 beta 的 cwd。
+  const indexFile = path.join(root, 'workspaces', 'index.json')
+  const index = JSON.parse(fs.readFileSync(indexFile, 'utf8'))
+  const keys = Object.keys(index)
+  const alphaKey = keys.find((k) => index[k].cwd.endsWith('alpha'))
+  const betaKey = keys.find((k) => index[k].cwd.endsWith('beta'))
+  assert.ok(alphaKey && betaKey)
+  index[alphaKey].cwd = index[betaKey].cwd
+  fs.writeFileSync(indexFile, JSON.stringify(index), 'utf8')
+  const doc = service.export({ scope: 'all' })
+  const contents = doc.entries.map((e) => e.content).sort()
+  assert.deepEqual(contents, ['alpha 记忆', 'beta 记忆'], 'no entries lost or duplicated')
+})
+
 test('GET /export?scope=global returns global only from loopback', async () => {
   const { service } = tmpService()
   const handlers = createHandlers({ service, token: 't-0123456789abcdef', version: '0.17.0-test' })

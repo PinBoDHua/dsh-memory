@@ -9,14 +9,14 @@ Cross-session long-term memory for DeepSeek Harness: durable user preferences, p
 - **两级作用域**：`global`（用户级，跨项目共享）与 `workspace`（按会话有效工作目录隔离，互不污染）。
 - **自动召回**：会话装配系统提示时实时读取记忆，按**钉选最先→分类优先（偏好→决策→事实）→类内衰减乘子倒序**在字符预算内注入全局＋当前工作区条目；超出预算的条目提示用搜索获取。默认隐藏被取代/已过期/已归档条目。
 - **相关度检索**：关键词 AND 匹配（大小写不敏感、**CJK bigram 模糊**）之上按相关度×衰减乘子排序——内容命中×3、标签×2、分类/id×1，紧凑短语+4、空格短语+2，钉选小幅 boost；同分按更新时间倒序。空查询仍按更新时间列出。
-- **取代链（supersede）**：信息变化可 save 新条目＋`supersedes=旧id`，旧条目标记被取代、默认隐藏、历史保留可查（`include_superseded`），避免并存矛盾。
+- **取代链（supersede）**：信息变化可 save 新条目＋`supersedes=旧id`，旧条目标记被取代、默认隐藏、历史保留可查（`include_superseded`），避免并存矛盾。链完整性受校验：不能取代自身、不能覆盖已有后继、不能形成环（违反返回 `invalid`）；改取代目标会清理旧目标的反向引用；删除时自动清理两个方向的悬垂引用——被删条目的旧记忆恢复可见、后继的 `supersedes` 指针清除。
 - **可选过期日（expires）**：`YYYY-MM-DD`（UTC、当日含），到期默认隐藏不删除、可恢复（`include_expired`）；坏日期 fail-open。
 - **钉选常驻（pinned）**：钉选条目在预算内最先注入、免衰减。
 - **归档（archived）**：归档条目默认隐藏、可恢复（`include_archived`）；不自动物理删除。
 - **软衰减＋命中反馈**：检索/注入命中簿记 `last_access`/`hit_count`（节流 ≤1 次/小时）；衰减乘子 `clamp(1.5−0.15×闲置周数, 0.3, 1.5)`，永不过滤、pinned 豁免、`decayEnabled` 可关回退现状。
 - **Web 管理面板**：侧边栏「记忆」入口打开「记忆星丛」视觉面板，统计分布/浏览/搜索/分类过滤/状态过滤/分页/新建/编辑/删除撤销/批量选择/移动/钉选/归档/导出/导入，全局与工作区切换；与 agent 工具共用同一服务层。
 - **跨作用域移动**：`memory_update` 带 `scope` 或面板编辑弹窗切换作用域，即可在 global ↔ 当前工作区之间移动条目；目标已有相同内容时拒绝（409/duplicate），不产生重复。
-- **导出/导入**：面板一键导出记忆为带版本的 JSON（`dsh-memory-export` v1，作用域感知：全部/仅全局/指定工作区，默认全量；含作用域与工作区路径与 v2 可选字段）；导入先 dry-run 预览（新增/更新/重复跳过/拒绝计数），确认后落盘；可选「按 id 合并」模式原地更新已存在条目（保留 created）。逐条校验、机密硬拒、同内容去重（含批内）、保留原 id 与时间戳（skip 模式 id 被占用时自动新分配）。
+- **导出/导入**：面板一键导出记忆为带版本的 JSON（`dsh-memory-export` v1，作用域感知：全部/仅全局/指定工作区，默认全量；含作用域与工作区路径与 v2 可选字段，按工作区目录读取、不受索引陈旧影响）；导入先 dry-run 预览（新增/更新/重复跳过/拒绝计数），确认后落盘；可选「按 id 合并」模式原地更新已存在条目（保留 created）。逐条校验、机密硬拒、同内容去重（含批内）、保留原 id 与时间戳；**id 跨作用域全局唯一**：任一作用域已占用则自动新分配（merge 模式也不跨作用域合并）。
 - **一事一条目**：每条记忆一个 Markdown 文件（frontmatter 存元数据），人类可读、可手工编辑，改动立即生效。
 - **新覆旧**：信息变化时原地更新，或走取代链；仅手动遗忘，不自动删除。同内容重复保存命中归档/过期条目时会将其复活为活跃（`memory_save` 输出 `revived: true`）。
 - **隐私护栏**：密码/密钥/token（含 Bearer 令牌、带口令连接串，以及 GitLab/npm/Stripe/SendGrid/PyPI/GitHub 等独立令牌格式）在服务层被规则检测硬拒绝；其他敏感个人信息由指引要求先征得用户同意，敏感话题默认不存。
@@ -35,9 +35,9 @@ Cross-session long-term memory for DeepSeek Harness: durable user preferences, p
 
 | 工具 | 作用 |
 |---|---|
-| `memory_save` | 写入一条记忆（content 必填；category=preference/fact/decision；scope=global/workspace，默认 workspace；tags 可选；origin 必填 manual/auto；supersedes=旧id 取代；expires=YYYY-MM-DD；pinned）。同作用域完全相同的内容自动去重（仅针对未取代条目；若命中的是归档/过期条目则复活为活跃并返回 `revived: true`）。写入后返回相似记忆提示 `similar`（Jaccard≥0.5、最多 3 条、advisory 不阻断），便于取代/更新旧条目、避免并存矛盾。 |
+| `memory_save` | 写入一条记忆（content 必填；category=preference/fact/decision；scope=global/workspace，默认 workspace；tags 可选；origin 必填 manual/auto；supersedes=旧id 取代（目标必须未被他条取代且不成环，否则 `invalid`）；expires=YYYY-MM-DD；pinned）。同作用域完全相同的内容自动去重（仅针对未取代条目；若命中的是归档/过期条目则复活为活跃并返回 `revived: true`）。写入后返回相似记忆提示 `similar`（Jaccard≥0.5、最多 3 条、advisory 不阻断），便于取代/更新旧条目、避免并存矛盾。 |
 | `memory_search` | 关键词检索（大小写不敏感、多词 AND、CJK bigram 模糊），非空查询按相关度×衰减排序；空查询＝按更新时间列出；可按 scope/category/origin/tag 过滤，limit 默认 20、offset 分页；include_superseded/include_expired/include_archived 找回隐藏态（默认 false）。返回 `{entries, hidden}`：hidden 统计被隐藏的匹配数（被取代/过期/归档，按首个排除原因归类），渲染附「可用 include_* 找回」提示。 |
-| `memory_update` | 按 id 新覆旧（content/category/tags 可选更新）；可选 `scope` 在 global ↔ 当前工作区之间移动；supersedes 取代另一条、expires 设过期日（空串清除）、pinned 钉选、archived 归档/恢复、origin 修正来源标记。 |
+| `memory_update` | 按 id 新覆旧（content/category/tags 可选更新）；可选 `scope` 在 global ↔ 当前工作区之间移动（可同时 `supersedes` 建立取代链）；supersedes 取代另一条（目标必须未被他条取代且不成环）、expires 设过期日（空串清除）、pinned 钉选、archived 归档/恢复、origin 修正来源标记。 |
 | `memory_forget` | 按 id 永久删除。 |
 
 ## 存储 Storage
@@ -75,7 +75,7 @@ pinned: true
 
 v2 可选字段（`origin`/`supersedes`/`superseded_by`/`superseded_at`/`expires`/`pinned`/`archived`/`last_access`/`hit_count`）**稀疏存储**：仅在显式设置时写入文件，旧文件无需改写、读取时懒缺省（缺 origin 视为 manual、缺 pinned/archived 视为 false）；origin 可经 `memory_update` 或面板编辑弹窗显式修正（0.10.0 起 save 工具必填 origin，面板文案「显式要求/主动沉淀」）。
 
-写入为「临时文件＋改名」的原子写；每次操作实时重读磁盘，因此 DSH 运行中手工编辑文件也会立即生效。损坏的文件会被跳过而不是报错。
+写入为「临时文件＋改名」的原子写；每次操作实时重读磁盘，因此 DSH 运行中手工编辑文件也会立即生效。损坏的文件会被跳过而不是报错。命中簿记（`last_access`/`hit_count`）在写前重读文件、只合并这两个字段后落盘，不用检索时的旧快照整文件回写，避免覆盖其它进程并发写入的正文。
 
 并发与版本化：记忆按 home 共享，多个 DSH 进程可能同时写入。`index.json` 的读-改-写与批量导入的落盘阶段由跨进程写锁保护（原子 mkdir 互斥；持锁进程崩溃留下的陈旧锁按 mtime 自愈；获取超时抛错）。单条保存/更新本身是原子文件写，id 唯一，不需要锁。`meta.json` 记录 `schemaVersion`（当前 2）；加载时若检测到旧 v1 数据，先强制备份一次（即使自动备份关闭）再升级 meta 锚点，新字段懒缺省、不逐文件改写，旧记忆零丢失。缺失或损坏时自动重建，不影响读写。
 

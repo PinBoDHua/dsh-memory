@@ -174,13 +174,15 @@ test('touchAccess throttles writes to once per hour per entry', () => {
   const now = Date.parse('2026-11-13T12:00:00.000Z')
   const e1 = store.findEntry(root, entry.id, undefined)
   store.touchAccess(root, [e1], undefined, now)
-  assert.equal(e1.hit_count, 1)
+  // touchAccess 只写盘、不改调用方快照（写前重读合并，避免旧快照回写正文）。
+  assert.equal(e1.hit_count, undefined, 'snapshot not mutated')
+  assert.equal(store.findEntry(root, entry.id, undefined).hit_count, 1)
   const e2 = store.findEntry(root, entry.id, undefined)
   store.touchAccess(root, [e2], undefined, now + 30 * 60 * 1000)
-  assert.equal(e2.hit_count, 1, 'within an hour: no increment')
+  assert.equal(store.findEntry(root, entry.id, undefined).hit_count, 1, 'within an hour: no increment')
   const e3 = store.findEntry(root, entry.id, undefined)
   store.touchAccess(root, [e3], undefined, now + 61 * 60 * 1000)
-  assert.equal(e3.hit_count, 2, 'after an hour: increment')
+  assert.equal(store.findEntry(root, entry.id, undefined).hit_count, 2, 'after an hour: increment')
 })
 
 // ---------- service：公共 API ----------

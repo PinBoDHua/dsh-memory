@@ -3,6 +3,20 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.24.2] - 2026-11-13
+
+### 修复 Fixed
+- **取代链完整性**：`save`/`update` 的 `supersedes` 现在统一校验——目标必须存在、不能取代自身、**不能覆盖已有后继**（此前会静默改写 `superseded_by`，让原后继与链脱节）、**不能形成取代环**（此前 A 取代 B 后 B 再取代 A 会让两条记忆互取代、默认检索全部消失）。违反时返回 `code=invalid`；改取代目标时会清理旧目标的反向引用，不留「旧目标仍隐藏但无人指向」的悬垂态。
+- **删除时清理取代链悬垂引用**：`memory_forget`/面板删除现在会同步清理同可见范围（global＋当前工作区）内指向该条的两个方向引用——被它取代的旧条目恢复可见（清 `superseded_by`/`superseded_at`），取代它的新条目清掉 `supersedes` 指针。此前删除后继会让旧记忆永久隐藏且引用指向不存在的 id。
+- **`memory_update` 同时移动作用域时 `supersedes` 被静默丢弃**：`moveEntry` 现在先校验并建立取代链再落盘；此前工具报「已更新」但链未建立。
+- **命中簿记旧快照回写**：`touchAccess` 写前重读磁盘，只合并 `last_access`/`hit_count`，不再用检索时的旧快照整文件回写（此前可覆盖其它进程并发写入的正文）；`memory_search` 因带写副作用改为声明 `isConcurrencySafe: false`，遵守宿主并发契约。
+- **frontmatter 的 scope 不再覆盖目录作用域**：`parseEntry` 以所在目录为准（frontmatter 仅作无目录上下文时的兜底）。此前手改/错放文件会导致「forget 报成功但文件仍在」「update 写到另一目录」。
+- **导入跨作用域 id 唯一性**：导入前扫描 global＋全部工作区已占用 id，任何作用域已占用就分配新 id（merge 模式也不跨作用域合并）；此前 workspace 与 global 可并存同 id，`findEntry` 全局优先会让按 id 的更新/删除命中错误条目。
+- **导出以目录为权威**：`export({scope:'all'})` 始终按工作区目录 key 读取条目，索引 `cwd` 仅作显示字段；此前索引陈旧/损坏会漏条目或重复。
+
+### 新增 Added
+- 数据一致性回归测试 `tests/integrity.test.mjs`（取代链防环/防覆盖、forget 双向清理、跨作用域取代、move+supersedes、touchAccess 并发回写、目录作用域权威）；导入 id 唯一性与陈旧索引导出测试；live-check 增加取代链不变量与删除恢复可见往返。
+
 ## [0.24.1] - 2026-11-13
 
 ### 修复 Fixed

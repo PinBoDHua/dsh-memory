@@ -60,11 +60,11 @@ async function main() {
 
   // 1. status：版本与 schema
   let token = ''
-  await check('status 报告 version=0.24.1 / schemaVersion=2 并下发 token', async () => {
+  await check('status 报告 version=0.24.2 / schemaVersion=2 并下发 token', async () => {
     const { status, json } = await req('GET', '/status')
     ok('status HTTP 200', status === 200, `got ${status}`)
     ok('status.ok', json?.ok === true)
-    ok('version === 0.24.1', json?.version === '0.24.1', `got ${json?.version}`)
+    ok('version === 0.24.2', json?.version === '0.24.2', `got ${json?.version}`)
     ok('schemaVersion === 2', json?.schemaVersion === 2, `got ${json?.schemaVersion}`)
     ok('token 非空', typeof json?.key === 'string' && json.key.length > 0)
     token = json?.key ?? ''
@@ -127,6 +127,41 @@ async function main() {
     ok('复活后 origin 更新为 manual', again.json?.result?.entry?.origin === 'manual')
     const visible = await req('GET', `/entries?query=${encodeURIComponent(RUN)}`)
     ok('复活后重新可见', (visible.json?.entries ?? []).some((e) => e.id === idR))
+  })
+
+  await check('取代链不变量＋删除清理（0.24.2）', async () => {
+    const a = await req('POST', '/save', { token, body: { content: `${RUN} 链甲`, scope: 'global', origin: 'auto' } })
+    const idA = a.json?.result?.entry?.id ?? ''
+    if (idA) created.push(idA)
+    const b = await req('POST', '/save', { token, body: { content: `${RUN} 链乙`, scope: 'global', origin: 'auto', supersedes: idA } })
+    const idB = b.json?.result?.entry?.id ?? ''
+    if (idB) created.push(idB)
+    ok('链条建立成功', a.status === 200 && b.status === 200 && b.json?.result?.entry?.supersedes === idA, JSON.stringify(b.json))
+    // 覆盖已有后继必须被拒（不再静默改写 superseded_by）。
+    const overwrite = await req('POST', '/save', { token, body: { content: `${RUN} 链丙`, scope: 'global', origin: 'auto', supersedes: idA } })
+    ok('覆盖既有后继 HTTP 400', overwrite.status === 400, `got ${overwrite.status}`)
+    ok('覆盖既有后继 code=invalid', overwrite.json?.code === 'invalid', JSON.stringify(overwrite.json))
+    // 反向取代成环必须被拒。
+    const cycle = await req('POST', '/update', { token, body: { id: idA, supersedes: idB } })
+    ok('形成取代环 HTTP 400', cycle.status === 400, `got ${cycle.status}`)
+    ok('形成取代环 code=invalid', cycle.json?.code === 'invalid', JSON.stringify(cycle.json))
+    // 删除后继 → 被取代的旧条目恢复可见、引用清理。
+    await req('POST', '/forget', { token, body: { id: idB } })
+    const restored = await req('GET', `/entries?query=${encodeURIComponent(`${RUN} 链甲`)}`)
+    ok('删除后继后旧条目恢复可见', (restored.json?.entries ?? []).some((e) => e.id === idA))
+    const raw = await req('GET', `/entries?query=${encodeURIComponent(`${RUN} 链甲`)}&include_superseded=true`)
+    const oldEntry = (raw.json?.entries ?? []).find((e) => e.id === idA)
+    ok('旧条目 superseded_by 已清理', oldEntry && oldEntry.superseded_by === undefined, JSON.stringify(oldEntry))
+  })
+
+  await check('导入 id 跨作用域唯一（0.24.2，dry-run）', async () => {
+    const im = await req('POST', '/import', { token, body: { dryRun: true, entries: [
+      { id: 'm-live-cross-1', content: `${RUN} 跨域甲`, scope: 'workspace', workspace: 'D:\\Questions' },
+      { id: 'm-live-cross-1', content: `${RUN} 跨域乙`, scope: 'global' },
+    ] } })
+    const ids = (im.json?.result?.entries ?? []).map((e) => e.id)
+    ok('两条计划均生成', ids.length === 2, JSON.stringify(im.json))
+    ok('同 id 输入被分配为不同 id', ids.length === 2 && ids[0] !== ids[1], JSON.stringify(ids))
   })
 
   await check('update origin 修正往返（0.10.0）', async () => {
