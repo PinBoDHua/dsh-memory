@@ -5,6 +5,7 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
 import helpers from '../client/client.js'
 
 const { validateDraft, groupEntries, nextToken, entriesParams, buildEntriesQuery, workspaceOptions, errorKeyFor, shouldQueueToast, partitionSettled, parseTags, unwrapResult, settingsStatusNext, savedToastKey, exportParams, defaultViewSelection, sectionCountsExact, parseImportText, validateImportDoc, importSummary, pageSlice, entryDetailRows, relativeTime, formatBytes, isExpired, statusOf, originOf, statusQueryFlags } = helpers
@@ -202,6 +203,33 @@ test('savedToastKey prioritizes revived over dedup and similar', () => {
   assert.equal(savedToastKey({ revived: true, deduplicated: true }), 'revivedSaved')
   assert.equal(savedToastKey({ similar: [{ id: 'm-1' }, { id: 'm-2' }] }), 'similarSaved')
   assert.equal(savedToastKey({ deduplicated: false, similar: [] }), 'saved')
+})
+
+test('parseTags keeps tags named after Object.prototype members (no prototype-key dropout)', () => {
+  assert.deepEqual(parseTags('constructor, toString, __proto__, hasOwnProperty, a'), ['constructor', 'toString', '__proto__', 'hasOwnProperty', 'a'])
+  assert.deepEqual(parseTags('toString，toString，b'), ['toString', 'b'])
+})
+
+test('locale dictionaries stay in sync; import size copy matches the 32 MB limit', () => {
+  const src = fs.readFileSync(new URL('../client/client.js', import.meta.url), 'utf8')
+  const zhBlock = src.slice(src.indexOf('var ZH = {'), src.indexOf('var EN = {'))
+  const enBlock = src.slice(src.indexOf('var EN = {'), src.indexOf('var CSS = ['))
+  assert.ok(zhBlock.length > 1000 && enBlock.length > 1000)
+  const keysOf = (block) => [...block.matchAll(/^ {4}([A-Za-z_$][\w$]*):/gm)].map((m) => m[1])
+  const zhKeys = keysOf(zhBlock)
+  const enKeys = keysOf(enBlock)
+  assert.equal(new Set(zhKeys).size, zhKeys.length, 'duplicate keys in ZH')
+  assert.equal(new Set(enKeys).size, enKeys.length, 'duplicate keys in EN')
+  assert.deepEqual([...zhKeys].sort(), [...enKeys].sort(), 'zh/en key sets must match')
+  assert.match(zhBlock, /errBodyTooLarge: '文件过大（超过 32 MB）/)
+  assert.match(enBlock, /errBodyTooLarge: 'File too large \(over 32 MB\)/)
+  // 占位符一致：逐键比对（两字典行文本）。
+  const lineOf = (block, key) => (block.match(new RegExp(`^ {4}${key}: (.*)$`, 'm')) || [])[1] || ''
+  for (const key of zhKeys) {
+    const z = (lineOf(zhBlock, key).match(/\{\w+\}/g) || []).sort()
+    const e = (lineOf(enBlock, key).match(/\{\w+\}/g) || []).sort()
+    assert.deepEqual(z, e, `placeholder mismatch in ${key}`)
+  }
 })
 
 test('sectionCountsExact only trusts group counts on a single full page', () => {

@@ -524,12 +524,23 @@ async function main() {
     try {
       const status = await apiJson('/status')
       const token = status && status.key
+      // 先造滚动/分页条目（较旧，落在第 2 页），再造 A/B/K/L（最新，保证在第一页可点）。
+      for (let i = 0; i < 55; i += 1) {
+        const extra = await apiJson('/save', { method: 'POST', token, body: { content: `${marker} 滚动条目 ${i}`, scope: 'global', origin: 'auto' } })
+        const extraId = extra?.result?.entry?.id
+        if (extraId) createdIds.push(extraId)
+      }
       const a = await apiJson('/save', { method: 'POST', token, body: { content: `${marker} A`, scope: 'global', origin: 'auto' } })
       const b = await apiJson('/save', { method: 'POST', token, body: { content: `${marker} B`, scope: 'global', origin: 'auto' } })
       const idA = a?.result?.entry?.id
       const idB = b?.result?.entry?.id
-      createdIds = [idA, idB].filter(Boolean)
-      check('API 创建两条验收临时记忆', createdIds.length === 2, JSON.stringify(createdIds))
+      // 连续删除场景用的两条记忆（K/L）。
+      const k = await apiJson('/save', { method: 'POST', token, body: { content: `${marker} K`, scope: 'global', origin: 'auto' } })
+      const l = await apiJson('/save', { method: 'POST', token, body: { content: `${marker} L`, scope: 'global', origin: 'auto' } })
+      const idK = k?.result?.entry?.id
+      const idL = l?.result?.entry?.id
+      createdIds = createdIds.filter(Boolean).concat([idA, idB, idK, idL].filter(Boolean))
+      check('API 创建验收临时记忆', createdIds.length >= 4, JSON.stringify(createdIds.length))
 
       // 搜索标记让两条临时记忆出现在列表。
       await evaluate(`(() => {
@@ -543,7 +554,45 @@ async function main() {
       })()`)
       await sleep(1400)
       const cards = await evaluate(`[...document.querySelectorAll('.dm_card')].map(el => (el.innerText || '').replace(/\\s+/g, ' '))`)
-      check('临时记忆出现在面板列表', cards.filter((text) => text.includes(marker)).length === 2, JSON.stringify(cards.length))
+      check('临时记忆出现在面板列表', cards.filter((text) => text.includes(marker)).length >= 2, JSON.stringify(cards.length))
+      const boxLabels = await evaluate(`[...document.querySelectorAll('.dm_card .dm_check input')].slice(0, 2).map((el) => el.getAttribute('aria-label') || '')`)
+      check('卡片复选框 aria-label 含各自内容', boxLabels.length === 2 && boxLabels[0] !== boxLabels[1] && boxLabels.every((label) => label.includes(marker)), JSON.stringify(boxLabels))
+
+      // 0.24.23：常驻 tabpanel 共享滚动容器——切到设置页再切回，列表 scrollTop 应恢复。
+      // 判别力：保存的是列表最大滚动位置，且设置页最大滚动更小（旧实现会被夹小）。
+      const scrollState = await evaluate(`(() => {
+        const page = document.querySelector('.dm_page')
+        const tabSettings = document.querySelector('#dm-tab-settings')
+        if (!page || !tabSettings) return null
+        page.scrollTop = page.scrollHeight
+        const set = page.scrollTop
+        tabSettings.click()
+        return { set }
+      })()`)
+      await sleep(500)
+      const settingsScroll = await evaluate(`(() => { const p = document.querySelector('.dm_page'); return p ? Math.max(0, p.scrollHeight - p.clientHeight) : -1 })()`)
+      await evaluate(`(() => { const t = document.querySelector('#dm-tab-memories'); if (t) t.click(); return Boolean(t) })()`)
+      await sleep(700)
+      const scrollAfter = await evaluate(`(() => { const page = document.querySelector('.dm_page'); return page ? page.scrollTop : -1 })()`)
+      check('切 tab 恢复的是被夹取前的最大滚动位置', scrollState !== null && scrollState.set > 400 && scrollState.set > settingsScroll + 50 && Math.abs(scrollAfter - scrollState.set) <= 2, `${JSON.stringify(scrollState)} settingsMax=${settingsScroll} after=${scrollAfter}`)
+
+      // 0.24.23：翻页是导航，应回到列表顶部，而不是停在新页中后段。
+      const pagerState = await evaluate(`(() => {
+        const page = document.querySelector('.dm_page')
+        if (page) page.scrollTop = page.scrollHeight
+        const buttons = [...document.querySelectorAll('.dm_pager button')]
+        if (!buttons.length) return null
+        const next = buttons[buttons.length - 1]
+        const before = { hasNext: !next.disabled }
+        next.click()
+        return before
+      })()`)
+      await sleep(1000)
+      const afterNext = await evaluate(`(() => ({ scroll: document.querySelector('.dm_page') ? document.querySelector('.dm_page').scrollTop : -1, pageText: (document.querySelector('.dm_pageinfo') || {}).textContent || '' }))()`)
+      check('翻页后回到列表顶部', pagerState !== null && pagerState.hasNext && afterNext.scroll <= 4, `${JSON.stringify(pagerState)} -> ${JSON.stringify(afterNext)}`)
+      // 翻回第一页，后续卡片操作依赖 A/B/K/L 在第一页。
+      await evaluate(`(() => { const prev = document.querySelector('.dm_pager button'); if (prev && !prev.disabled) prev.click(); return Boolean(prev) })()`)
+      await sleep(900)
 
       // 0.24.19：批量浮栏在列表之前（键盘 Tab 可近达）+ region 语义。
       const selState = await evaluate(`(() => {
@@ -595,8 +644,13 @@ async function main() {
 
       // 0.24.19：聚焦/悬停时倒计时暂停——撤销入口不会在用户操作途中消失。
       await sleep(7000)
-      const pauseState = await evaluate(`(() => ({ hasAction: document.querySelector('.dm_toast_action') !== null, focused: document.activeElement ? document.activeElement.className || '' : '' }))()`)
+      const pauseState = await evaluate(`(() => ({
+        hasAction: document.querySelector('.dm_toast_action') !== null,
+        focused: document.activeElement ? document.activeElement.className || '' : '',
+        barState: (() => { const bar = document.querySelector('.dm_toast_bar'); return bar ? getComputedStyle(bar).animationPlayState : 'none' })(),
+      }))()`)
       check('撤销吐司聚焦时暂停倒计时（7s 后仍在）', pauseState.hasAction && /dm_toast_action/.test(pauseState.focused), JSON.stringify(pauseState))
+      check('暂停时进度条同步冻结（视觉与可撤销窗口一致）', pauseState.barState === 'paused', JSON.stringify(pauseState))
 
       // 批量浮栏在列表之前（键盘 Tab 可近达）+ region 语义。
       // 立即触发另一条普通提示（对 B 钉选）：撤销吐司不应被覆盖，普通提示排队。
@@ -626,7 +680,7 @@ async function main() {
       })()`)
       // 0.24.19：吐司切换使用新 DOM 节点（倒计时条从头开始，而不是停在旧进度）。
       check('吐司切换使用新节点（倒计时重启）', queuedPreview.marker !== 'old-node' && (!afterUndoToast.exists || afterUndoToast.marker !== 'old-node'), JSON.stringify({ queuedPreview, afterUndoToast }))
-      const listAfterUndo = await apiJson(`/entries?query=${encodeURIComponent(marker)}&scope=global&include_superseded=true&include_expired=true&include_archived=true`)
+      const listAfterUndo = await apiJson(`/entries?query=${encodeURIComponent(marker)}&scope=global&limit=100&include_superseded=true&include_expired=true&include_archived=true`)
       check('撤销后记忆恢复且 id 不变', (listAfterUndo?.entries || []).some((e) => e.id === idA), JSON.stringify((listAfterUndo?.entries || []).map((e) => e.id)))
       // 关闭当前吐司 → 若焦点在吐司内应回退到面板容器（不掉到 body）。
       const focusBeforeClose = await evaluate(`document.activeElement ? (document.activeElement.className || '') : ''`)
@@ -634,12 +688,40 @@ async function main() {
       await sleep(300)
       const focusAfterClose = await evaluate(`(document.activeElement ? (document.activeElement.className || '') : '').includes('dm_page')`)
       check('吐司关闭后焦点回退到面板容器', focusAfterClose, `${focusBeforeClose} -> page=${focusAfterClose}`)
+
+      // 0.24.23：连续删除两次——第一条的撤销吐司入队而不是被覆盖，两条都能恢复。
+      const clickDeleteFor = async (text) => evaluate(`(() => {
+        const card = [...document.querySelectorAll('.dm_card')].find((el) => (el.innerText || '').includes(${JSON.stringify(text)}))
+        if (!card) return false
+        const btn = [...card.querySelectorAll('button')].find((b) => (b.textContent || '').trim() === '删除' || (b.textContent || '').trim() === 'Delete')
+        if (btn) btn.click()
+        return Boolean(btn)
+      })()`)
+      await clickDeleteFor(`${marker} K`)
+      await sleep(500)
+      await evaluate(`(() => { const btn = document.querySelector('.dm_btn_danger_solid'); if (btn) btn.click(); return Boolean(btn) })()`)
+      await sleep(900)
+      await clickDeleteFor(`${marker} L`)
+      await sleep(500)
+      await evaluate(`(() => { const btn = document.querySelector('.dm_btn_danger_solid'); if (btn) btn.click(); return Boolean(btn) })()`)
+      await sleep(1000)
+      const secondUndo = await evaluate(`(() => ({ hasAction: document.querySelector('.dm_toast_action') !== null, text: (document.querySelector('.dm_toast_text') || {}).textContent || '' }))()`)
+      check('连续删除后仍有撤销入口', secondUndo.hasAction, JSON.stringify(secondUndo))
+      await evaluate(`(() => { const btn = document.querySelector('.dm_toast_action'); if (btn) btn.click(); return Boolean(btn) })()`)
+      await sleep(900)
+      const queuedUndo = await evaluate(`(() => ({ hasAction: document.querySelector('.dm_toast_action') !== null, text: (document.querySelector('.dm_toast_text') || {}).textContent || '' }))()`)
+      check('第一条删除的撤销吐司排队后仍可操作', queuedUndo.hasAction, JSON.stringify(queuedUndo))
+      await evaluate(`(() => { const btn = document.querySelector('.dm_toast_action'); if (btn) btn.click(); return Boolean(btn) })()`)
+      await sleep(1400)
+      const listKL = await apiJson(`/entries?query=${encodeURIComponent(marker)}&scope=global&limit=100&include_superseded=true&include_expired=true&include_archived=true`)
+      const restoredIds = new Set((listKL?.entries || []).map((e) => e.id))
+      check('连续删除的两条记忆都能撤销恢复', restoredIds.has(idK) && restoredIds.has(idL), JSON.stringify({ idK, idL, restored: [...restoredIds].filter((id) => id === idK || id === idL) }))
     } finally {
       // 清理验收临时记忆（失败路径也要清）。
       try {
         const status = await apiJson('/status')
         for (const id of createdIds) await apiJson('/forget', { method: 'POST', token: status?.key, body: { id } })
-        const left = await apiJson(`/entries?query=${encodeURIComponent(marker)}&scope=global&include_superseded=true&include_expired=true&include_archived=true`)
+        const left = await apiJson(`/entries?query=${encodeURIComponent(marker)}&scope=global&limit=100&include_superseded=true&include_expired=true&include_archived=true`)
         check('验收临时记忆已清理', (left?.entries || []).length === 0, JSON.stringify((left?.entries || []).map((e) => e.id)))
       } catch (err) {
         check('验收临时记忆已清理', false, String(err))
@@ -866,13 +948,18 @@ async function main() {
       await send('Network.emulateNetworkConditions', { offline: true, latency: 0, downloadThroughput: -1, uploadThroughput: -1 })
       const failTarget = Math.min(30, originalRetention + 1)
       await setRetention(failTarget)
-      await sleep(1600)
-      const failState = await evaluate(`(() => ({
-        footer: (document.querySelector('.dm_savestate') || {}).innerText || '',
-        retry: document.querySelector('.dm_linkbtn') !== null,
-        value: (document.querySelectorAll('.dm_numinput')[0] || {}).value || null,
-      }))()`)
-      check('保存失败显示重试而非谎报已保存', failState.retry && /重试|Retry/.test(failState.footer) && String(failState.value) === String(failTarget), JSON.stringify(failState))
+      // 轮询到错误态（离线请求的失败时机受事件循环/在途请求影响，固定 sleep 会偶发假失败）。
+      let failState = null
+      for (let i = 0; i < 8; i += 1) {
+        await sleep(500)
+        failState = await evaluate(`(() => ({
+          footer: (document.querySelector('.dm_savestate') || {}).innerText || '',
+          retry: document.querySelector('.dm_linkbtn') !== null,
+          value: (document.querySelectorAll('.dm_numinput')[0] || {}).value || null,
+        }))()`)
+        if (failState.retry) break
+      }
+      check('保存失败显示重试而非谎报已保存', failState.retry && /重试|Retry/.test(failState.footer) && String(failState.value) === String(failTarget), JSON.stringify({ ...failState, recentSettings: requests.filter((u) => u.includes('/settings')).slice(-4), recentConsole: consoleLines.slice(-4) }))
       await send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 })
       await sleep(400)
       await evaluate(`(() => { const b = document.querySelector('.dm_linkbtn'); if (b) b.click(); return Boolean(b) })()`)

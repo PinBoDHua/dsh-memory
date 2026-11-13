@@ -117,7 +117,7 @@ This file is the self-iteration ledger for dsh-memory: per-round increments, ver
 - [x] 分页时区块计数＝当前页条数，与统计条总数矛盾（0.24.19：仅单页完整结果显示计数）。
 - [x] 批量选择浮栏在 DOM 末尾，键盘用户实际不可达（0.24.19：移到列表前 + region/aria-live）。
 - [x] 设置页滑杆拖动触发整页逐帧重渲染（0.24.19：拖动只更新本地值，松手/失焦才提交）。
-- [ ] 大库导入可能超过客户端 15s 超时（0.24.15 导入单独 180s 已缓解，仍无进度/幂等确认）。
+- [ ] 大库导入可能超过客户端 15s 超时（0.24.15 导入单独 180s 已缓解；第四轮审计升级为 P1：同步冻结宿主、无进度/取消、无幂等回执，见「第四轮审计 backlog」）。
 
 **P3**
 - [x] 删除「损坏的后继文件」不清理前驱 `superseded_by`，旧记忆永久隐藏（0.24.21：两分支共用取代指针清理）。
@@ -125,12 +125,41 @@ This file is the self-iteration ledger for dsh-memory: per-round increments, ver
 - [x] `/stats` 不接收 status/include_*，「全部状态」视图下头部总数与列表不一致（0.24.20：stats 与列表同参数，客户端统计请求同步 status/include/category/origin/tag）。
 - [x] 编辑/删除确认弹窗写请求期间无「进行中」反馈（0.24.19：显示保存中/删除中）。
 - [x] 搜索框清空按钮 aria-label 误用「清除筛选」；标签过滤输入框无清空入口（0.24.19：clearSearch 文案 + 标签清空按钮）。
-- [ ] live-check bundle 标记仍为字符串包含断言（版本已动态化）。
+- [x] live-check bundle 标记仍为字符串包含断言（0.24.23：保留字符串闸门并增加陈旧 rev 必须被拒、bundle 体量下限两项行为断言）。
 
 **待验证**
-- [ ] 常驻 tabpanel 共享单一滚动容器：切设置页会把列表 scrollTop 夹小，切回无法恢复。
+- [x] 常驻 tabpanel 共享单一滚动容器：切设置页会把列表 scrollTop 夹小，切回无法恢复（0.24.23：按 tab 记忆 scrollTop 并在 layout 阶段恢复；翻页/筛选等导航回到顶部）。
 - [x] `backup()` 导出无锁快照：导入持 `.lock-import` 写盘期间可能备份到半批数据；同毫秒两次备份同名覆盖；`atomicWrite` 失败残留临时文件（0.24.21：备份与导入共用锁、唯一文件名、失败清理临时文件）。
 
-### 明确不做
+### 第四轮双端审计 backlog（2026-11-13，基线 0.24.22）
+
+> 三个只读审计员（宿主 / 面板 / 运维文档）的合并清单，按轮次逐项消化；0.24.23 已修项见 CHANGELOG。
+
+### P1（下一轮优先）
+- [ ] **导入同步冻结宿主 + 无进度/幂等**：`service.import` 在锁内同步逐条落盘（5000 条 4.9s、20k 30s，期间宿主事件循环完全冻结）；32MB 上限允许 8.9–22 万条（90–330s）超过客户端 180s；超时后服务端继续写，merge 重试会覆盖用户新编辑。方案：客户端 200–500 条分片顺序 POST + 进度 + 已写入提示；服务端 `importId` 幂等回执 + 写批心跳刷新锁 mtime（需 `withLockAsync` 或 tick 回调）。
+- [ ] **跨工作区取代链清理不完整**：`clearSupersedeReferences/clearSupersededBy` 只扫 global＋当前 cwd；A 的工作区前驱被 global 后继取代、之后在 B 删除后继 → 前驱永久隐藏且工具无法修复（`memory_update` 无清 `superseded_by`）。方案：悬垂清理扫描 global＋全部工作区（新增 `listEverywhere`），或 `moveEntry` 跨 scope 时消解/拒绝跨作用域链。
+- [ ] **批量删除 = N 次全量扫描**：每条 forget 都 `listAll` 解析以清取代指针（5000 库删 100 条 21.9s）。方案：`/forget` 接受 `ids[]` 批量语义，一次建映射、批量删、单次引用清理、逐项结算。
+
+### P2
+- [ ] **解析缓存 8192 上限在大库退化**：20k 条目 warm list ≈ cold（9–11s，顺序扫描把 LRU 冲空）；status/save/export/装配同步全量。方案：默认上限提高到 32768 或按库规模自适应（压测入口保留），DETAIL 写明内存上界。
+- [ ] **/status 与设置响应同步全量**：20k 全 global 库 `/status` 9.5s（解析全部条目；客户端未消费 counts）、设置保存响应含 backup 全量信息 790ms；自动备份定时器冷缓存 9.6s。方案：status counts 改 readdir 计数或省略、storageUsage 签名缓存、首检延后。
+- [ ] **写/读路由未知异常未脱敏**：`writeHandler/readHandler` 把 Node 原始错误（含本机绝对路径、`.tmp-` 名）500 回传面板；import 已脱敏为 `io`。方案：未知 code 统一 `500 {code:'internal'}`，日志留原文；客户端 `errorKeyFor` 映射 internal。
+- [ ] **导入绕过取代链不变量**：自指、A↔B 环、目标仅存在于其它工作区/损坏文件时指针被保留 → 永久隐藏且工具不可修。方案：导入校验自指/同作用域可达/环检测，违规计入 repaired。
+- [ ] **recall-preview 被 busy 翻转触发**：导出/查重/导入 dry-run 的 busy true→false 各多一次全量 `/recall-preview` 扫描。方案：用显式 `dataVersion` 替代 busy 依赖（写操作成功 +1）。
+- [ ] **三处操作后焦点掉 body**：审计弹窗取代（按钮 disabled 并移除）、保存失败弹窗、取消选择浮栏卸载。方案：回调/卸载后显式聚焦 `.dm_dialog` 或 `.dm_page`。
+
+### P3
+- [ ] **备份 `-1` 后缀不被白名单识别**：同毫秒去重名永不轮转、count/lastBackup 失真、24h 节流可绕过。方案：正则允许 `(?:-\d{1,3})?`，轮转按 mtime 排序。
+- [ ] **settings.json 覆盖层读-改-写无跨进程锁**：两进程并发 patch 不同键 14/20 轮丢一个键。方案：`withLock(root/.lock-settings)` 包住 read-modify-write。
+- [ ] **withLock 长临界区/双释放风险**：临界区超过 staleMs 会被抢占；finally 无条件删锁可删他人锁。方案：写批心跳刷新 mtime、锁内 owner nonce 校验后释放。
+- [ ] **导出静默漏损坏条目**：`export` 跳过不可解析 `.md` 且无 skipped 计数；「全量备份」不完整无告警。方案：返回 `skipped/warnings` 并在面板提示。
+- [ ] **gui-check 中断不清理**（第四轮实测：强杀留下 3 条 `__gui_*` 测试记忆）：无 SIGINT/SIGTERM/异常清理注册表；启动不扫描上次残留。方案：模块级 cleanup 注册表统一 abort（清理→diff 断言→非 0），启动扫描 `__gui_`/`__livecheck_` 标记残留。
+- [ ] **data-snapshot 漏检面**：只采 `.md`/backups 文件名/settings/meta hash；`.tmp-*`、`.lock-*`、非 md 垃圾、同名备份内容改写全漏；abort 路径不做 diff。方案：增加 junk/锁清单与 backups 内容 hash，abort 也断言 diff=0。
+- [ ] **验证脚本并发不安全**：gui-check CDP 固定 9334、两个脚本可同时对真实数据根破坏写入。方案：数据根验证锁 + CDP 端口动态/必填，后者 busy 快速退出。
+- [ ] **迁移 meta 写失败被吞**：`migrateSchema` 原子写失败仍返回 true/pending=false，且每次启动重跑强制备份可挤掉历史备份。方案：写失败抛错记 migrationError，失败后备份节流。
+- [ ] **导入悬垂指针指向「根内已存在但无关」id 不修复**：占位 id 视作有效目标 → 永久隐藏。方案：仅保留同批前向引用与确实反向声明的目标，其余丢弃计 repaired。
+- [ ] **包分发/引擎**：`files` 含 tests 不含 scripts（ITERATION 引用 scripts 作为验证入口）；`engines.dsh >=0.2.0-rc.2` 对宿主 0.2.2-alpha.3 严格 semver 不满足（待验证宿主校验口径）。方案：files 加 scripts，engines 按宿主语义修正或文档注明。
+- [ ] **可观测/自愈边角**：`status.schemaVersion` 在 meta 损坏时回落 2 掩盖损坏；未来 mtime 的锁永不 stale；live-check cleanup 先置 cleaned 再请求，任一步抛错即留残留。方案：schemaVersion 上报 null+metaError；stale 判断用 |now−mtime|；cleaned 置末尾且逐项 catch。
+- [ ] **设置重载与在途保存窄窗口**（待验证）：备份触发的 loadSettings 可能让在途保存响应被丢弃、UI 短暂显示旧值。
 
 dreaming/后台 LLM 提取、向量/图检索、完整 bi-temporal 四时间戳、git 版本化存储、画像 slots、回收站、默认 TTL、跨工作区移动（global↔当前工作区之外的组合）、会话级记忆开关。

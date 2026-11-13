@@ -632,6 +632,10 @@ async function main() {
     const b = await fetch(url)
     const code = await b.text()
     ok('bundle HTTP 200', b.status === 200, `got ${b.status} rev=${rev}`)
+    ok('bundle 内容体量合理（非空壳）', code.length > 20000, `${code.length} bytes`)
+    // 陈旧 rev 必须被拒绝，避免把旧代码当新版本分发。
+    const stale = await fetch(`${BASE}/plugins/??dsh-memory/client.js&rev=000000000000`)
+    ok('陈旧 rev 被拒绝', stale.status !== 200, `got ${stale.status}`)
     ok('bundle 含 0.9.0 代码标记 autoExtractHint', code.includes('autoExtractHint'))
     ok('bundle 含 0.10.0 新文案 显式要求/Requested', code.includes('显式要求') && code.includes('Requested'))
     ok('bundle 含 0.11.0 新文案 similarSaved', code.includes('similarSaved'))

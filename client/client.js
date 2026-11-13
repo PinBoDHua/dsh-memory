@@ -23,7 +23,9 @@
   // 标签解析（纯函数）：中英文逗号分隔、trim、去重、单项截 64 字符、最多 12 个。
   // 与宿主 store.cleanTags 同口径，客户端提前收敛，避免「提示已保存、服务端却静默截断」。
   function parseTags(text) {
-    var seen = {}
+    // 无原型对象：标签名可能恰好是 constructor/toString/__proto__，普通对象去重会
+    // 把这类标签静默丢弃（与宿主 Set 口径分叉，客户端少存数据）。
+    var seen = Object.create(null)
     var out = []
     var parts = String(text || '').split(/[,，]/)
     for (var i = 0; i < parts.length; i++) {
@@ -413,7 +415,6 @@ var IMPORT_TIMEOUT_MS = 180000
     bulkDeleteTitle: '删除这 {n} 条记忆？',
     deleteHint: '删除后 6 秒内可在底部提示中撤销。',
     saved: '已保存',
-    saved: '已保存',
     revivedSaved: '已恢复为活跃（原为归档/过期）',
     closeToast: '关闭提示',
     deduplicated: '已有相同记忆，未重复写入',
@@ -429,6 +430,8 @@ var IMPORT_TIMEOUT_MS = 180000
     bulkDelete: '删除所选',
     clearSelection: '取消选择',
     selectEntry: '选择这条记忆',
+    selectEntryLabel: '选择这条记忆：{c}',
+    clearTag: '清空标签过滤',
     loadError: '加载失败',
     listError: '列表加载失败',
     retry: '重试',
@@ -442,7 +445,7 @@ var IMPORT_TIMEOUT_MS = 180000
     errUnauthorized: '凭证无效',
     errLoopback: '仅允许本机访问',
     errInvalidJson: '请求数据无效',
-    errBodyTooLarge: '文件过大（超过 1 MB），请拆分后导入',
+    errBodyTooLarge: '文件过大（超过 32 MB），请拆分后导入',
     errRefreshed: '凭证已刷新，请重试',
     errTimeout: '请求超时，请重试',
     errNetwork: '网络异常，请检查连接后重试',
@@ -633,7 +636,6 @@ var IMPORT_TIMEOUT_MS = 180000
     bulkDeleteTitle: 'Delete these {n} memories?',
     deleteHint: 'You can undo from the toast within 6 seconds.',
     saved: 'Saved',
-    saved: 'Saved',
     revivedSaved: 'Restored to active (was archived/expired)',
     closeToast: 'Dismiss notification',
     deduplicated: 'Identical memory exists; nothing added',
@@ -649,6 +651,8 @@ var IMPORT_TIMEOUT_MS = 180000
     bulkDelete: 'Delete selected',
     clearSelection: 'Clear selection',
     selectEntry: 'Select this memory',
+    selectEntryLabel: 'Select this memory: {c}',
+    clearTag: 'Clear tag filter',
     loadError: 'Failed to load',
     listError: 'Failed to load entries',
     retry: 'Retry',
@@ -662,7 +666,7 @@ var IMPORT_TIMEOUT_MS = 180000
     errUnauthorized: 'Invalid credentials',
     errLoopback: 'Loopback access only',
     errInvalidJson: 'Invalid request data',
-    errBodyTooLarge: 'File too large (over 1 MB); split it before importing',
+    errBodyTooLarge: 'File too large (over 32 MB); split it before importing',
     errRefreshed: 'Credentials refreshed; please retry',
     errTimeout: 'Request timed out; please retry',
     errNetwork: 'Network error; check your connection and retry',
@@ -1371,7 +1375,7 @@ var IMPORT_TIMEOUT_MS = 180000
           h('div', { className: 'dm_rail' }),
           h('label', { className: 'dm_check' },
             h('input', {
-              type: 'checkbox', checked: checked, 'aria-label': t('selectEntry'),
+              type: 'checkbox', checked: checked, 'aria-label': t('selectEntryLabel').replace('{c}', String(entry.content || '').slice(0, 30)),
               onChange: function () { props.onToggleSelect(entry.id) },
             })),
           h('div', { className: 'dm_medal' }, h(Icon, { name: meta.icon, size: 17, strokeWidth: 1.9 })),
@@ -2182,6 +2186,20 @@ var IMPORT_TIMEOUT_MS = 180000
         var listError = listErrorState[0]; var setListError = listErrorState[1]
         var tabState = useState('memories')
         var tab = tabState[0]; var setTab = tabState[1]
+        // 常驻 tabpanel 共享 .dm_page 唯一滚动容器：按 tab 记住 scrollTop，切回时恢复，
+        // 避免切到较短设置页把列表滚动位置夹小、切回来丢失上下文。
+        var tabScrollRef = useRef({ memories: 0, settings: 0 })
+        function switchTab(next) {
+          if (next === tab) return
+          var page = pageRef.current
+          if (page) tabScrollRef.current[tab] = page.scrollTop
+          setTab(next)
+        }
+        useLayoutEffect(function () {
+          var page = pageRef.current
+          if (!page) return
+          page.scrollTop = tabScrollRef.current[tab] || 0
+        }, [tab])
         // WAI-ARIA Tabs：←/→/Home/End 切换并跟随焦点；tab 用 roving tabIndex。
         var TAB_KEYS = ['memories', 'settings']
         function focusTabButton(key) {
@@ -2197,7 +2215,7 @@ var IMPORT_TIMEOUT_MS = 180000
           else if (e.key === 'End') next = TAB_KEYS[TAB_KEYS.length - 1]
           if (next === null) return
           e.preventDefault()
-          setTab(next)
+          switchTab(next)
           focusTabButton(next)
         }
         var settingsState = useState(null)
@@ -2266,6 +2284,13 @@ var IMPORT_TIMEOUT_MS = 180000
             toastQueueRef.current.push(next)
             while (toastQueueRef.current.length > TOAST_QUEUE_MAX) toastQueueRef.current.shift()
             return
+          }
+          // 两个撤销吐司互不覆盖：连续删除/归档时把旧吐司塞回队列（稍后展示），
+// 否则第一次删除的撤销入口会在 6 秒内被第二次操作直接顶掉。
+          var currentToast = toastRef.current
+          if (currentToast && currentToast.action && next.action) {
+            toastQueueRef.current.unshift(Object.assign({}, currentToast, { until: Date.now() + (currentToast.duration || UNDO_MS) }))
+            while (toastQueueRef.current.length > TOAST_QUEUE_MAX) toastQueueRef.current.pop()
           }
           toastRef.current = next
           setToast(next)
@@ -2477,6 +2502,12 @@ var IMPORT_TIMEOUT_MS = 180000
           return function () { clearTimeout(timer) }
         }, [phase, query, categoryFilter, originFilter, tagFilter, statusFilter, page, selection, currentCwd, refreshEntries])
 
+        // 吐司进度条与 JS 计时同步冻结/恢复（否则条走完但撤销仍有效，视觉误导）。
+        function setToastBarState(paused) {
+          var bar = typeof document !== 'undefined' ? document.querySelector('.dm_toast_bar') : null
+          if (bar) bar.style.animationPlayState = paused ? 'paused' : 'running'
+        }
+
         // toast 自动消失（可被悬停/聚焦暂停）；撤销吐司到期后继续展示排队提示。
         useEffect(function () {
           if (!toast) return undefined
@@ -2486,6 +2517,7 @@ var IMPORT_TIMEOUT_MS = 180000
           toastRemainingRef.current = duration
           toastStartedRef.current = Date.now()
           toastPausedRef.current = focusedInside
+          setToastBarState(focusedInside)
           // 吐司出现即被聚焦（删除撤销按钮）：保持暂停，等失焦后 resumeToast 再启动计时。
           if (focusedInside) {
             toast.until = Date.now() + duration
@@ -2500,6 +2532,7 @@ var IMPORT_TIMEOUT_MS = 180000
           clearTimeout(toastTimerRef.current)
           var elapsed = Date.now() - toastStartedRef.current
           toastRemainingRef.current = Math.max(300, toastRemainingRef.current - elapsed)
+          setToastBarState(true)
           toastPausedRef.current = true
           // 同步延长撤销保护窗口：暂停期间其它普通提示不得替换撤销吐司。
           toast.until = Date.now() + toastRemainingRef.current
@@ -2508,6 +2541,7 @@ var IMPORT_TIMEOUT_MS = 180000
         function resumeToast() {
           if (!toast) return
           toastPausedRef.current = false
+          setToastBarState(false)
           toast.until = Date.now() + toastRemainingRef.current
           toastStartedRef.current = Date.now()
           toastTimerRef.current = setTimeout(dismissToast, toastRemainingRef.current)
@@ -2534,11 +2568,18 @@ var IMPORT_TIMEOUT_MS = 180000
         var unknownWorkspaces = workspaces.filter(function (w) { return !w || typeof w.cwd !== 'string' || w.cwd === '' })
         var workspaceTarget = selection !== 'all' && selection !== 'global' ? selection : currentCwd
 
-        function changeQuery(value) { setQuery(value); setPage(0); setSelected([]) }
-        function changeSelection(value) { setSelection(value); setPage(0); setSelected([]) }
-        function changeCategory(value) { setCategoryFilter(value); setPage(0); setSelected([]) }
-        function changeOrigin(value) { setOriginFilter(value); setPage(0); setSelected([]) }
-        function changeTag(value) { setTagFilter(value); setPage(0); setSelected([]) }
+        // 翻页/筛选/切换作用域是「导航」而非「刷新」：回到列表顶部（并同步 tab 记忆），
+// 否则在第 1 页底部点下一页会停在新页中后段。
+        function resetListScroll() {
+          var page = pageRef.current
+          if (page) page.scrollTop = 0
+          tabScrollRef.current.memories = 0
+        }
+        function changeQuery(value) { setQuery(value); setPage(0); setSelected([]); resetListScroll() }
+        function changeSelection(value) { setSelection(value); setPage(0); setSelected([]); resetListScroll() }
+        function changeCategory(value) { setCategoryFilter(value); setPage(0); setSelected([]); resetListScroll() }
+        function changeOrigin(value) { setOriginFilter(value); setPage(0); setSelected([]); resetListScroll() }
+        function changeTag(value) { setTagFilter(value); setPage(0); setSelected([]); resetListScroll() }
         // 卡片标签点击 = 精确标签过滤（与服务端 tag= 语义一致），而不是把标签塞进全文查询。
         function filterByTag(tag) {
           setTagFilter(String(tag || ''))
@@ -2546,11 +2587,11 @@ var IMPORT_TIMEOUT_MS = 180000
           setPage(0)
           setSelected([])
         }
-        function changeStatus(value) { setStatusFilter(value); setPage(0); setSelected([]) }
-        function clearAllFilters() { setQuery(''); setCategoryFilter(''); setOriginFilter(''); setTagFilter(''); setStatusFilter('active'); setPage(0); setSelected([]) }
+        function changeStatus(value) { setStatusFilter(value); setPage(0); setSelected([]); resetListScroll() }
+        function clearAllFilters() { setQuery(''); setCategoryFilter(''); setOriginFilter(''); setTagFilter(''); setStatusFilter('active'); setPage(0); setSelected([]); resetListScroll() }
         // 被取代条目的「查看后继」：按 id 搜索（host query 匹配 id），回到活跃视图。
         function jumpToEntry(id) { setStatusFilter('all'); setOriginFilter(''); setCategoryFilter(''); setTagFilter(''); setPage(0); setSelected([]); setQuery(String(id || '')) }
-        function changePage(value) { setPage(value); setSelected([]) }
+        function changePage(value) { setPage(value); setSelected([]); resetListScroll() }
         function toggleSelect(id) {
           setSelected(function (prev) { return prev.indexOf(id) === -1 ? prev.concat([id]) : prev.filter(function (x) { return x !== id }) })
         }
@@ -2937,14 +2978,14 @@ var IMPORT_TIMEOUT_MS = 180000
               role: 'tab', 'aria-selected': tab === 'memories', 'aria-controls': 'dm-panel-memories',
               tabIndex: tab === 'memories' ? 0 : -1,
               className: 'dm_tab' + (tab === 'memories' ? ' dm_tab_active' : ''),
-              onClick: function () { setTab('memories') }, onKeyDown: onTabKey,
+              onClick: function () { switchTab('memories') }, onKeyDown: onTabKey,
             }, h(Icon, { name: 'layers', size: 15 }), t('tabMemories'), h('span', { className: 'dm_tab_n' }, stats ? String(stats.total) : '…')),
             h('button', {
               ref: tabSettingsRef, id: 'dm-tab-settings',
               role: 'tab', 'aria-selected': tab === 'settings', 'aria-controls': 'dm-panel-settings',
               tabIndex: tab === 'settings' ? 0 : -1,
               className: 'dm_tab' + (tab === 'settings' ? ' dm_tab_active' : ''),
-              onClick: function () { setTab('settings') }, onKeyDown: onTabKey,
+              onClick: function () { switchTab('settings') }, onKeyDown: onTabKey,
             }, h(Icon, { name: 'sliders', size: 15 }), t('tabSettings'))),
           // 两个 tabpanel 常驻 DOM（非激活用 hidden）：aria-controls 始终指向存在的面板，
 // 同时保留列表/设置的滚动与焦点上下文；hidden 使非激活面板不可聚焦。
@@ -2975,7 +3016,7 @@ var IMPORT_TIMEOUT_MS = 180000
                       className: 'dm_taginput', type: 'text', 'aria-label': t('tagFilterPlaceholder'), placeholder: t('tagFilterPlaceholder'), title: t('tagFilterHint'),
                       value: tagFilter, onChange: function (e) { changeTag(e.target.value) },
                     }),
-                    tagFilter ? h('button', { className: 'dm_tagclear', 'aria-label': t('clearSearch'), title: t('clearSearch'), onClick: function () { changeTag('') } }, h(Icon, { name: 'x', size: 12, strokeWidth: 2.2 })) : null),
+                    tagFilter ? h('button', { className: 'dm_tagclear', 'aria-label': t('clearTag'), title: t('clearTag'), onClick: function () { changeTag('') } }, h(Icon, { name: 'x', size: 12, strokeWidth: 2.2 })) : null),
                   h('div', { className: 'dm_searchwrap' },
                     h('span', { className: 'dm_search_icon' }, h(Icon, { name: 'search', size: 15 })),
                     h('input', {

@@ -3,6 +3,25 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.24.23] - 2026-11-13
+
+### 修复 Fixed（第四轮审计已确认问题 + 0.24.19 回归）
+- **标签静默丢失**：`parseTags` 用普通对象去重，`constructor`/`toString`/`__proto__` 等与 `Object.prototype` 同名的标签被丢弃（与宿主 `Set` 口径分叉，用户敲了保存不上）→ 改用 `Object.create(null)`；新增回归测试。
+- **连续删除丢撤销入口**：第二个撤销吐司会直接覆盖第一个（`shouldQueueToast` 对 action→action 返回 false），第一条删除的撤销闭包被 GC。现在旧撤销吐司入队（上限内），两条都能先后撤销；GUI 实测连续删 K/L 后依次撤销均恢复。
+- **暂停时进度条继续走**：吐司悬停/聚焦暂停只停 setTimeout，CSS 倒计时条仍 6 秒走空（视觉与真实可撤销窗口矛盾）→ `animation-play-state` 与 JS 计时同步冻结/恢复（含首次聚焦分支）。
+- **tab 滚动位置丢失**：常驻 tabpanel 共享 `.dm_page` 滚动容器，切设置页会把列表 scrollTop 夹小且切回不恢复 → 按 tab 记忆 scrollTop，`useLayoutEffect` 恢复；GUI 断言改为「保存被夹取前的最大滚动位置且 > 设置页最大滚动」，能真正区分修复前后。
+- **翻页/筛选不回顶部**：在第 1 页底部点下一页会停在新页中后段 → `changePage`/各筛选/清空筛选/切换作用域统一回列表顶部并同步 tab 记忆。
+- **导入体积文案错误**：`errBodyTooLarge` 中英均写「超过 1 MB」，实际上限 32 MB → 改为 32 MB；新增 i18n 守卫测试（键集一致、占位符一致、重复键检测——顺带发现并修复 `saved` 重复键）。
+- **复选框不可区分**：50 张卡片都是同一个 aria-label「选择这条记忆」→ 改为「选择这条记忆：<内容前 30 字>」；GUI 断言前两张标签不同且各含自身内容。
+- **标签清空按钮读作「清空搜索」**：新增 `clearTag` 文案（清空标签过滤）。
+
+### 新增 Added
+- live-check：bundle 陈旧 rev 必须被拒 + 体量下限断言；GUI 新增 7 项（滚动恢复判别、翻页回顶、复选框标签、进度条冻结、连续删除双撤销等）；保存失败断言改为轮询错误态，消除偶发假失败（连续两次 74/74）。
+- ITERATION 新增「第四轮双端审计 backlog（基线 0.24.22）」：宿主/面板/运维三份审计合并的 P1–P3 清单（导入冻结与幂等、跨工作区取代链、批量删除全量扫描、缓存 8192 上限、路由错误脱敏、验证脚本中断安全等）。
+
+### 验证证据
+- 单元 **276/276**；live **166/166**；真实 GUI **74/74**（数据根快照前后一致、零残留）
+
 ## [0.24.22] - 2026-11-13
 
 ### 新增 Added / 测试基础设施
