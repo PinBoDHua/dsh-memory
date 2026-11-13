@@ -3,6 +3,21 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.6.0] - 2026-11-13
+
+### 新增 Added
+- 「记忆星丛 Memory Atlas」视觉 overhaul：靛紫渐变主色＋分类三色（偏好琥珀/事实湛蓝/决策翡翠）＋玫红警示；环境光晕背景、品牌徽章脉冲环、分类色轨卡片＋图标勋章、悬停浮起与分类色描边、卡片入场级联动画。
+- 统计条：总数（衬线大数字）＋分类分布条＋分类计数筛选 chips（替代原下拉）＋全局/工作区计数；新增 `GET /stats` 路由与 `service.stats()`（全量过滤统计，不分页），`store.filterEntries` 与检索共用同一语义。
+- 删除撤销：单条/批量删除后 6 秒内可在吐司中一键撤销（经 import 原样恢复 id/时间戳/来源）；吐司带图标、动作按钮与倒计时进度条。
+- 批量选择：卡片悬停显示复选框，选中后浮出操作栏（已选 N 条 · 删除所选 · 取消选择），Esc 清除选择。
+- 标签直达：卡片标签成为可点击 chips，点击即按该标签搜索。
+- 相对时间（刚刚/N 分钟前/N 小时前/N 天前，超出 7 天回退日期），绝对时间悬停可见；`relativeTime` 纯函数单测覆盖。
+- 骨架屏加载态、星座插画空态/无结果态（含清除筛选/新建 CTA）、吸顶毛玻璃工具栏、搜索图标与一键清空、`/` 快捷聚焦搜索、编辑器 Ctrl/⌘+Enter 保存与字数统计、分类单选卡片、自定义滚动条（页面与弹窗）。
+- 深色主题分支跟随宿主 `body[data-ds-dark-theme]`；动效尊重 `prefers-reduced-motion`；窄屏响应式。
+
+### 变更 Changed
+- 编辑器分类由下拉改为三色单选卡片；删除确认文案改为「6 秒内可撤销」；导入预览改为三枚统计瓦片。
+
 ## [0.5.1] - 2026-11-13
 
 ### 修复 Fixed（UX 评审后的实证问题）
@@ -58,6 +73,7 @@ All notable changes to this project are documented here. Format follows Keep a C
 - 系统提示注入：指引＋字符预算内召回（`interpolate: false` 保护用户内容）。
 - 隐私护栏：密码/密钥/token 规则检测硬拒写。
 
+[0.6.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/PinBoDHua/dsh-memory/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.3.0...v0.4.0

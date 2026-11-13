@@ -7,7 +7,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import helpers from '../client/client.js'
 
-const { validateDraft, groupEntries, nextToken, buildEntriesQuery, workspaceOptions, errorKeyFor, validateImportDoc, importSummary, pageSlice, entryDetailRows } = helpers
+const { validateDraft, groupEntries, nextToken, buildEntriesQuery, workspaceOptions, errorKeyFor, validateImportDoc, importSummary, pageSlice, entryDetailRows, relativeTime } = helpers
 
 test('validateDraft accepts a complete draft and rejects bad ones', () => {
   assert.deepEqual(validateDraft({ content: '一条事实', category: 'fact' }), { ok: true })
@@ -50,6 +50,23 @@ test('pageSlice splits items and detects a next page', () => {
   assert.deepEqual(pageSlice(rows, 5), { items: rows, hasMore: false })
   assert.deepEqual(pageSlice([], 2), { items: [], hasMore: false })
   assert.deepEqual(pageSlice(null, 2), { items: [], hasMore: false })
+})
+
+test('relativeTime renders zh/en buckets and falls back to a date', () => {
+  const now = Date.parse('2026-11-13T12:00:00Z')
+  const at = (ms) => new Date(now - ms).toISOString()
+  assert.equal(relativeTime(at(10_000), now, 'zh'), '刚刚')
+  assert.equal(relativeTime(at(10_000), now, 'en'), 'just now')
+  assert.equal(relativeTime(at(5 * 60_000), now, 'zh'), '5 分钟前')
+  assert.equal(relativeTime(at(5 * 60_000), now, 'en'), '5 min ago')
+  assert.equal(relativeTime(at(3 * 3_600_000), now, 'zh'), '3 小时前')
+  assert.equal(relativeTime(at(3 * 3_600_000), now, 'en'), '3 h ago')
+  assert.equal(relativeTime(at(2 * 86_400_000), now, 'zh'), '2 天前')
+  assert.equal(relativeTime(at(2 * 86_400_000), now, 'en'), '2 d ago')
+  assert.equal(relativeTime(at(20 * 86_400_000), now, 'zh'), '10 月 24 日')
+  assert.equal(relativeTime(at(-60_000), now, 'zh'), '刚刚')
+  assert.equal(relativeTime('not-a-date', now, 'zh'), 'not-a-date')
+  assert.equal(relativeTime('', now, 'en'), '')
 })
 
 test('entryDetailRows lists created/updated and omits empty source', () => {

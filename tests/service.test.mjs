@@ -147,6 +147,24 @@ test('workspaces() ignores lock and non-hash directories', () => {
   assert.match(workspaces[0].key, /^[a-f0-9]{16}$/)
 })
 
+test('stats reports totals, category and scope distribution for the filter', () => {
+  const { service } = tmpService()
+  service.save({ content: '统计甲 pnpm', scope: 'global', category: 'preference' })
+  service.save({ content: '统计乙 pnpm', scope: 'global', category: 'fact' })
+  service.save({ content: '统计丙 pnpm', scope: 'workspace', workspace: WS, category: 'decision' })
+  service.save({ content: '无关条目', scope: 'global', category: 'fact' })
+  const all = service.stats({ workspace: WS })
+  assert.equal(all.total, 4)
+  assert.deepEqual(all.byCategory, { preference: 1, fact: 2, decision: 1 })
+  assert.deepEqual(all.byScope, { global: 3, workspace: 1 })
+  const queried = service.stats({ query: 'pnpm', workspace: WS })
+  assert.equal(queried.total, 3)
+  assert.deepEqual(queried.byCategory, { preference: 1, fact: 1, decision: 1 })
+  const scoped = service.stats({ scope: 'global', query: 'pnpm', workspace: WS })
+  assert.equal(scoped.total, 2)
+  assert.deepEqual(scoped.byScope, { global: 2, workspace: 0 })
+})
+
 test('search offset paginates without overlap', () => {
   const { service } = tmpService()
   for (let i = 0; i < 5; i++) service.save({ content: `服务分页 ${i}`, scope: 'global' })

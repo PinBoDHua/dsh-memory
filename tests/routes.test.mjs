@@ -141,6 +141,22 @@ test('GET entries honors offset and category together', async () => {
   assert.ok(ids.includes(doc.entries[0].id))
 })
 
+test('GET stats returns distribution; loopback enforced', async () => {
+  const { service, handlers } = setup()
+  service.save({ content: '统计路由', scope: 'global', category: 'decision' })
+  service.save({ content: '统计路由二', scope: 'workspace', workspace: 'D:\\proj\\alpha', category: 'fact' })
+  const res = fakeRes()
+  await handlers.stats(fakeReq({ url: '/plugins/dsh-memory/stats?workspace=D%3A%5Cproj%5Calpha' }), res)
+  assert.equal(res.statusCode, 200)
+  const doc = res.json()
+  assert.equal(doc.stats.total, 2)
+  assert.deepEqual(doc.stats.byCategory, { preference: 0, fact: 1, decision: 1 })
+  assert.deepEqual(doc.stats.byScope, { global: 1, workspace: 1 })
+  const remote = fakeRes()
+  await handlers.stats(fakeReq({ url: '/plugins/dsh-memory/stats', remoteAddress: '10.0.0.9' }), remote)
+  assert.equal(remote.statusCode, 403)
+})
+
 test('GET export returns the full document; loopback enforced', async () => {
   const { service, handlers } = setup()
   service.save({ content: '导出内容', scope: 'global' })

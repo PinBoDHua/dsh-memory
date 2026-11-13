@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "Memory",
-    "description": "Cross-session long-term memory: saves user preferences, project facts, and decisions as hand-editable Markdown entries, recalls them into new sessions by category priority within a character budget, and ranks searches by relevance; the sidebar Memory panel adds filtering, pagination, cross-scope moves, and JSON export/import; never stores passwords, keys, or tokens.",
+    "description": "Cross-session long-term memory: saves user preferences, project facts, and decisions as hand-editable Markdown entries, recalls them into new sessions by category priority within a character budget, and ranks searches by relevance; the Memory Atlas panel adds a live distribution bar, category-accent cards, tag shortcuts, bulk selection, delete undo, and JSON export/import; never stores passwords, keys, or tokens.",
     "detail": "docs/DETAIL.md"
   }
 }
