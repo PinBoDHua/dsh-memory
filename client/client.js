@@ -245,6 +245,17 @@ function settingsStatusNext(status, event) {
     return 'saved'
   }
 
+  // 大库导入分片：每片 ≤300 条（每次请求仍是原子批次），逐片顺序提交、显示进度。
+// 这样单次请求不会冻结宿主事件循环数十秒，也不会撞上 180s 总超时；已写入的片重试时
+// 由服务端内容去重/merge 幂等吸收。
+  function chunkEntries(items, size) {
+    var list = Array.isArray(items) ? items : []
+    var n = Math.max(1, Math.floor(Number(size) || 1))
+    var out = []
+    for (var i = 0; i < list.length; i += n) out.push(list.slice(i, i + n))
+    return out
+  }
+
   // 区块计数是否可信（纯函数）：只有「单页完整结果」时，页内分组条数才等于全量总数；
 // 分页或筛选状态下列表只是子集，显示条数会与统计条数字矛盾。
   function sectionCountsExact(page, hasMore, filtered) {
@@ -348,7 +359,7 @@ function settingsStatusNext(status, event) {
     return (mb < 10 ? mb.toFixed(1) : Math.round(mb)) + ' MB'
   }
 
-  var helpers = { validateDraft: validateDraft, groupEntries: groupEntries, nextToken: nextToken, entriesParams: entriesParams, buildEntriesQuery: buildEntriesQuery, workspaceOptions: workspaceOptions, errorKeyFor: errorKeyFor, shouldQueueToast: shouldQueueToast, partitionSettled: partitionSettled, parseTags: parseTags, unwrapResult: unwrapResult, settingsStatusNext: settingsStatusNext, savedToastKey: savedToastKey, exportParams: exportParams, defaultViewSelection: defaultViewSelection, sectionCountsExact: sectionCountsExact, parseImportText: parseImportText, validateImportDoc: validateImportDoc, importSummary: importSummary, pageSlice: pageSlice, entryDetailRows: entryDetailRows, relativeTime: relativeTime, formatBytes: formatBytes, isExpired: isExpired, statusOf: statusOf, originOf: originOf, statusQueryFlags: statusQueryFlags }
+  var helpers = { validateDraft: validateDraft, groupEntries: groupEntries, nextToken: nextToken, entriesParams: entriesParams, buildEntriesQuery: buildEntriesQuery, workspaceOptions: workspaceOptions, errorKeyFor: errorKeyFor, shouldQueueToast: shouldQueueToast, partitionSettled: partitionSettled, parseTags: parseTags, unwrapResult: unwrapResult, settingsStatusNext: settingsStatusNext, savedToastKey: savedToastKey, exportParams: exportParams, defaultViewSelection: defaultViewSelection, sectionCountsExact: sectionCountsExact, chunkEntries: chunkEntries, parseImportText: parseImportText, validateImportDoc: validateImportDoc, importSummary: importSummary, pageSlice: pageSlice, entryDetailRows: entryDetailRows, relativeTime: relativeTime, formatBytes: formatBytes, isExpired: isExpired, statusOf: statusOf, originOf: originOf, statusQueryFlags: statusQueryFlags }
 
   // ===== node 测试导出（CJS） =====
   if (typeof module !== 'undefined' && module.exports) {
@@ -368,6 +379,8 @@ function settingsStatusNext(status, event) {
 // 否则用户会看到「请求数据过大」而实际备份完全可用。请求超时对导入单独放宽。
 var IMPORT_MAX_BYTES = 32 * 1024 * 1024
 var IMPORT_TIMEOUT_MS = 180000
+  var IMPORT_CHUNK_SIZE = 300
+
   var TOAST_QUEUE_MAX = 3
 
   var ZH = {
@@ -523,6 +536,8 @@ var IMPORT_TIMEOUT_MS = 180000
     importRejHint: '被拒绝的条目（机密/无效/缺工作区）不会写入。',
     importConfirm: '确认导入',
     importAllDup: '全部条目均已存在，无需导入。',
+    importingProgress: '正在导入 {d}/{t}…',
+    importPartialFail: '已写入 {d}/{t} 条后中断，可重试导入（已存在条目会去重/合并）',
     imported: '导入完成',
     audit: '查重',
     auditTitle: '相似记忆查重',
@@ -745,6 +760,8 @@ var IMPORT_TIMEOUT_MS = 180000
     importRejHint: 'Rejected entries (credentials/invalid/no workspace) are not written.',
     importConfirm: 'Import',
     importAllDup: 'All entries already exist; nothing to import.',
+    importingProgress: 'Importing {d}/{t}…',
+    importPartialFail: 'Interrupted after writing {d}/{t} entries; retry is safe (existing entries are deduplicated/merged)',
     imported: 'Import complete',
     audit: 'Audit',
     auditTitle: 'Similar memory audit',
@@ -1302,6 +1319,7 @@ var IMPORT_TIMEOUT_MS = 180000
           save: function (input) { return post(API_BASE + '/save', input) },
           update: function (input) { return post(API_BASE + '/update', input) },
           forget: function (input) { return post(API_BASE + '/forget', input) },
+          forgetMany: function (input) { return post(API_BASE + '/forget', input) },
           import: function (input) { return post(API_BASE + '/import', input, IMPORT_TIMEOUT_MS) },
         }
       }
@@ -1662,6 +1680,9 @@ var IMPORT_TIMEOUT_MS = 180000
             ? h('div', { className: 'dm_hint', style: { marginTop: 8 } }, t('importAllDup'))
             : null,
           h('div', { className: 'dm_dialog_footer' },
+            props.progress
+              ? h('span', { className: 'dm_hint' }, t('importingProgress').replace('{d}', String(props.progress.done)).replace('{t}', String(props.progress.total)))
+              : null,
             h('button', { className: 'dm_btn', onClick: props.onClose, disabled: props.busy }, t('cancel')),
             h('button', { className: 'dm_btn dm_btn_primary', onClick: props.onConfirm, disabled: props.busy || (summary.imported === 0 && summary.updated === 0) }, h(Icon, { name: 'check', size: 14, strokeWidth: 2.2 }), t('importConfirm'))))
       }
@@ -2170,6 +2191,8 @@ var IMPORT_TIMEOUT_MS = 180000
         var confirm = confirmState[0]; var setConfirm = confirmState[1]
         var importState = useState(null)
         var importPlan = importState[0]; var setImportPlan = importState[1]
+        var importProgressState = useState(null)
+        var importProgress = importProgressState[0]; var setImportProgress = importProgressState[1]
         var auditState = useState(null)
         var audit = auditState[0]; var setAudit = auditState[1]
         var toastState = useState(null)
@@ -2705,12 +2728,27 @@ var IMPORT_TIMEOUT_MS = 180000
           var targets = started.entries
           var wsTarget = workspaceTarget
           setBusy(true)
-          var calls = targets.map(function (e) {
-            return api.forget({ id: e.id, workspace: e.scope === 'workspace' ? wsTarget : undefined })
-          })
-          Promise.allSettled(calls).then(function (settled) {
+          var outcomePromise
+          if (targets.length === 1) {
+            var one = targets[0]
+            outcomePromise = api.forget({ id: one.id, workspace: one.scope === 'workspace' ? wsTarget : undefined })
+              .then(function () { return { ok: targets, failed: [] } })
+          } else {
+            // 批量删除走单请求（服务端一次扫描/一次取代指针清理），不再 N 次全量扫描。
+            outcomePromise = api.forgetMany({ ids: targets.map(function (e) { return e.id }) }).then(function (payload) {
+              var ids = (payload && payload.result && payload.result.ids) || []
+              var removed = {}
+              for (var i = 0; i < ids.length; i++) removed[ids[i]] = true
+              return {
+                ok: targets.filter(function (e) { return removed[e.id] === true }),
+                failed: targets.filter(function (e) { return removed[e.id] !== true }).map(function (e) {
+                  return { item: e, error: { code: 'not-found', message: t('errNotFound') } }
+                }),
+              }
+            })
+          }
+          outcomePromise.then(function (outcome) {
             if (confirmRef.current === started) setConfirm(null)
-            var outcome = partitionSettled(targets, settled)
             setSelected([])
             // 成功项先从当前页移除，不必等刷新（刷新也仍会执行）。
             var removed = {}
@@ -2811,11 +2849,40 @@ var IMPORT_TIMEOUT_MS = 180000
         function confirmImport() {
           if (busy || !importPlan) return
           setBusy(true)
-          api.import({ entries: importPlan.entries, mode: importPlan.mode }).then(function (payload) {
+          var entries = importPlan.entries
+          var mode = importPlan.mode
+          var chunks = chunkEntries(entries, IMPORT_CHUNK_SIZE)
+          var totals = { imported: 0, updated: 0, deduplicated: 0, repaired: 0, rejected: [] }
+          var written = 0
+          setImportProgress({ done: 0, total: entries.length })
+          var chain = Promise.resolve()
+          chunks.forEach(function (chunk) {
+            chain = chain.then(function () {
+              return api.import({ entries: chunk, mode: mode }).then(function (payload) {
+                var r = (payload && payload.result) || {}
+                totals.imported += r.imported || 0
+                totals.updated += r.updated || 0
+                totals.deduplicated += r.deduplicated || 0
+                totals.repaired += r.repaired || 0
+                if (Array.isArray(r.rejected)) totals.rejected = totals.rejected.concat(r.rejected)
+                written += chunk.length
+                setImportProgress({ done: written, total: entries.length })
+              })
+            })
+          })
+          chain.then(function () {
             setImportPlan(null)
-            var summary = importSummary(payload.result)
+            setImportProgress(null)
+            var summary = importSummary(totals)
             showToast('ok', t('imported') + ' · ' + t('importNew') + ' ' + summary.imported + ' / ' + t('importUpdated') + ' ' + summary.updated + ' / ' + t('importDup') + ' ' + summary.deduplicated + ' / ' + t('importRej') + ' ' + summary.rejected)
             setPage(0)
+            return refreshRef.current()
+          }).catch(function (err) {
+            // 分片导入中途失败：已提交的片是完整的，报告进度并提示重试（重试由内容去重吸收）。
+            var text = t('importPartialFail').replace('{d}', String(written)).replace('{t}', String(entries.length)) + '：' + errorText(err, t)
+            showToast('error', text)
+            setImportPlan(null)
+            setImportProgress(null)
             return refreshRef.current()
           }).then(function () {
             return refreshWorkspaces()
@@ -3057,7 +3124,7 @@ var IMPORT_TIMEOUT_MS = 180000
             })),
           editor ? h(EditorModal, { draft: editor, setDraft: setEditor, t: t, workspaceTarget: workspaceTarget, busy: busy, onSave: handleSave, onClose: function () { if (!busy) setEditor(null) } }) : null,
           confirm ? h(ConfirmModal, { entries: confirm.entries, t: t, busy: busy, onConfirm: handleDelete, onClose: function () { if (!busy) setConfirm(null) } }) : null,
-          importPlan ? h(ImportModal, { plan: importPlan.plan, mode: importPlan.mode, t: t, busy: busy, onConfirm: confirmImport, onModeChange: changeImportMode, onClose: function () { if (!busy) setImportPlan(null) } }) : null,
+          importPlan ? h(ImportModal, { plan: importPlan.plan, mode: importPlan.mode, progress: importProgress, t: t, busy: busy, onConfirm: confirmImport, onModeChange: changeImportMode, onClose: function () { if (!busy) setImportPlan(null) } }) : null,
           audit ? h(AuditModal, { pairs: audit.pairs, t: t, busy: busy, onSupersede: handleSupersedePair, onDismiss: dismissPair, onClose: function () { if (!busy) setAudit(null) } }) : null,
           toast ? h(Toast, { key: toast.id, toast: toast, t: t, raised: selected.length > 0, onClose: dismissToast, actionRef: toastActionRef, onPause: pauseToast, onResume: resumeToast }) : null)
       }

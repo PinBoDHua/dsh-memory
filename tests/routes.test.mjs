@@ -307,6 +307,19 @@ test('import bodies larger than the old 1MB cap are accepted (backup restore pat
   assert.equal(dry.json().result.entries.length, 1)
 })
 
+test('POST /forget accepts an ids array and returns per-id result', async () => {
+  const { service, handlers } = setup()
+  const a = service.save({ content: '批量路由删除甲', scope: 'global' })
+  const b = service.save({ content: '批量路由删除乙', scope: 'global' })
+  const res = fakeRes()
+  await handlers.forget(fakeReq({ method: 'POST', url: '/plugins/dsh-memory/forget', headers: { 'x-rpc-key': TOKEN }, body: { ids: [a.entry.id, b.entry.id, 'm-route-missing'] } }), res)
+  assert.equal(res.statusCode, 200)
+  const result = res.json().result
+  assert.equal(result.deleted, 2)
+  assert.deepEqual(result.notFound, ['m-route-missing'])
+  assert.equal(service.list({ scope: 'global' }).length, 0)
+})
+
 test('unknown filesystem errors are sanitized to 500 code=internal (no absolute paths leak)', async () => {
   const { service, handlers, root } = setup()
   // 让 global 目录无法创建：用同名文件占位 → save 内部 mkdir/写文件抛 EEXIST。

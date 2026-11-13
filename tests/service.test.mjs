@@ -8,6 +8,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createMemoryService } from '../lib/service.js'
+import * as store from '../lib/store.js'
 
 function tmpService() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-memory-svc-'))
@@ -346,6 +347,43 @@ test('same-millisecond backups get unique names, are counted and rotated as plug
   } finally {
     globalThis.Date = RealDate
   }
+})
+
+test('forgetMany deletes a batch in one pass and clears supersede refs', () => {
+  const { root, service } = tmpService()
+  const entries = Array.from({ length: 400 }, (_, i) => ({
+    id: `m-batch-${String(i).padStart(4, '0')}`,
+    content: `批量删除条目 ${i}`,
+    scope: 'global',
+    origin: 'auto',
+  }))
+  service.import({ entries })
+  // 被取代的前驱必须在批量删除后继后恢复可见。
+  const pred = service.save({ content: '批量前驱记忆', scope: 'global' })
+  const succ = service.save({ content: '批量后继记忆', scope: 'global', supersedes: pred.entry.id })
+  const ids = entries.slice(0, 100).map((e) => e.id).concat([succ.entry.id])
+  const started = Date.now()
+  const res = service.forgetMany({ ids })
+  const elapsed = Date.now() - started
+  assert.equal(res.deleted, 101)
+  assert.deepEqual(res.notFound, [])
+  assert.equal(service.list({ scope: 'global' }).length, 400 - 100 + 1)
+  assert.equal(store.findEntry(root, pred.entry.id, undefined).superseded_by, undefined)
+  assert.ok(service.search({ scope: 'global' }).some((e) => e.id === pred.entry.id), 'predecessor restored')
+  assert.ok(elapsed < 1500, `forgetMany 101 of ~400 took ${elapsed}ms (N full scans would be seconds)`)
+  // 空数组 / 全部不存在 → 明确错误。
+  assert.throws(() => service.forgetMany({ ids: [] }), (err) => err.code === 'invalid')
+  assert.throws(() => service.forgetMany({ ids: ['m-batch-missing'] }), (err) => err.code === 'not-found')
+})
+
+test('forgetMany deletes damaged files by id and reports missing ids', () => {
+  const { root, service } = tmpService()
+  fs.mkdirSync(path.join(root, 'global'), { recursive: true })
+  fs.writeFileSync(path.join(root, 'global', 'm-batch-broken.md'), 'not frontmatter', 'utf8')
+  const res = service.forgetMany({ ids: ['m-batch-broken', 'm-batch-absent'] })
+  assert.deepEqual(res.ids, ['m-batch-broken'])
+  assert.deepEqual(res.notFound, ['m-batch-absent'])
+  assert.equal(fs.existsSync(path.join(root, 'global', 'm-batch-broken.md')), false)
 })
 
 test('stats honours status/include_* so filtered view totals match the list', () => {

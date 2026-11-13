@@ -136,9 +136,9 @@ This file is the self-iteration ledger for dsh-memory: per-round increments, ver
 > 三个只读审计员（宿主 / 面板 / 运维文档）的合并清单，按轮次逐项消化；0.24.23 已修项见 CHANGELOG。
 
 ### P1（下一轮优先）
-- [ ] **导入同步冻结宿主 + 无进度/幂等**：`service.import` 在锁内同步逐条落盘（5000 条 4.9s、20k 30s，期间宿主事件循环完全冻结）；32MB 上限允许 8.9–22 万条（90–330s）超过客户端 180s；超时后服务端继续写，merge 重试会覆盖用户新编辑。方案：客户端 200–500 条分片顺序 POST + 进度 + 已写入提示；服务端 `importId` 幂等回执 + 写批心跳刷新锁 mtime（需 `withLockAsync` 或 tick 回调）。
+- [ ] **导入同步冻结宿主 + 无进度/幂等**：客户端分片（≤300 条/片）+ 进度 + 部分失败提示已完成（0.24.25，320 条实测 2 次请求）；**剩余**：服务端 `importId` 幂等回执（merge 重试仍可能覆盖首次完成后被用户改过的条目）与写批 `setImmediate`/锁心跳（单片已足够小，跨进程 stale 风险降低但未消除）。
 - [x] **跨工作区取代链清理不完整**：`clearSupersedeReferences/clearSupersededBy` 只扫 global＋当前 cwd；A 的工作区前驱被 global 后继取代、之后在 B 删除后继 → 前驱永久隐藏且工具无法修复（`memory_update` 无清 `superseded_by`）。方案：悬垂清理扫描 global＋全部工作区（新增 `listEverywhere`），或 `moveEntry` 跨 scope 时消解/拒绝跨作用域链。
-- [ ] **批量删除 = N 次全量扫描**：每条 forget 都 `listAll` 解析以清取代指针（5000 库删 100 条 21.9s）。方案：`/forget` 接受 `ids[]` 批量语义，一次建映射、批量删、单次引用清理、逐项结算。
+- [x] **批量删除 = N 次全量扫描**（0.24.25：`/forget ids[]` 单请求、一次扫描/一次取代指针清理；GUI 断言只发 1 个请求、可一次撤销恢复多条）。
 
 ### P2
 - [x] **解析缓存上限在大库退化**：20k 条目 warm list ≈ cold（9–11s，顺序扫描把 LRU 冲空）；status/save/export/装配同步全量。方案：默认上限提高到 32768 或按库规模自适应（压测入口保留），DETAIL 写明内存上界。

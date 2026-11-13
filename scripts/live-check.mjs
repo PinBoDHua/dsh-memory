@@ -631,6 +631,52 @@ async function main() {
     }
   })
 
+  await check('批量删除单请求 + 取代指针清理（0.24.25）', async () => {
+    const pred = await req('POST', '/save', { token, body: { content: `${RUN} 批量前驱`, scope: 'global', origin: 'auto' } })
+    const pid = pred.json?.result?.entry?.id ?? ''
+    if (pid) created.push(pid)
+    const succ = await req('POST', '/save', { token, body: { content: `${RUN} 批量后继`, scope: 'global', origin: 'auto', supersedes: pid } })
+    const sid = succ.json?.result?.entry?.id ?? ''
+    if (sid) created.push(sid)
+    const hiddenBefore = await req('GET', `/entries?query=${encodeURIComponent(`${RUN} 批量前驱`)}&scope=global`)
+    ok('批量删除前前驱默认隐藏', (hiddenBefore.json?.entries ?? []).length === 0)
+    const r = await req('POST', '/forget', { token, body: { ids: [sid] } })
+    ok('批量 forget HTTP 200', r.status === 200, `got ${r.status}`)
+    ok('批量 forget deleted=1', r.json?.result?.deleted === 1, JSON.stringify(r.json?.result))
+    const visible = await req('GET', `/entries?query=${encodeURIComponent(`${RUN} 批量前驱`)}&scope=global`)
+    ok('批量删除后前驱恢复可见', (visible.json?.entries ?? []).some((e) => e.id === pid), JSON.stringify((visible.json?.entries ?? []).map((e) => e.id)))
+    // 本用例自建的两条都在这里删干净（successor 已删，predecessor 恢复后同样删除）。
+    if (pid) await req('POST', '/forget', { token, body: { ids: [pid] } })
+    for (const gone of [pid, sid]) {
+      const idx = created.indexOf(gone)
+      if (idx >= 0) created.splice(idx, 1)
+    }
+  })
+
+  await check('620 条导入落盘与批量清理（0.24.25）', async () => {
+    const entries = Array.from({ length: 620 }, (_, i) => ({
+      id: `m-live-shard-${String(i).padStart(4, '0')}`,
+      content: `${RUN} 分片导入 ${i}`,
+      scope: 'global',
+      category: 'fact',
+    }))
+    const started = Date.now()
+    try {
+      const r = await req('POST', '/import', { token, body: { entries } })
+      const elapsed = Date.now() - started
+      ok('620 条导入 HTTP 200', r.status === 200, `got ${r.status}`)
+      ok('620 条全部落盘', r.json?.result?.imported === 620, JSON.stringify({ imported: r.json?.result?.imported, elapsed }))
+      ok('导入耗时合理（≤15s）', elapsed < 15000, `${elapsed}ms`)
+      const forget = await req('POST', '/forget', { token, body: { ids: entries.map((e) => e.id) } })
+      ok('620 条批量删除', forget.json?.result?.deleted === 620, JSON.stringify(forget.json?.result))
+      const left = await req('GET', `/entries?query=${encodeURIComponent(`${RUN} 分片导入`)}&scope=global&limit=10`)
+      ok('分片导入条目清理干净', (left.json?.entries ?? []).length === 0, JSON.stringify((left.json?.entries ?? []).map((e) => e.id)))
+    } finally {
+      // 异常路径也清一次（已删除时服务端返回 not-found，忽略）。
+      await req('POST', '/forget', { token, body: { ids: entries.map((e) => e.id) } }).catch(() => {})
+    }
+  })
+
   await check('>1MB 导入备份可恢复（0.24.15）', async () => {
     const bigContent = `${RUN} 大备份 ` + 'x'.repeat(1_200_000)
     const dry = await req('POST', '/import', { token, body: { dryRun: true, entries: [{ content: bigContent, scope: 'global' }] } })

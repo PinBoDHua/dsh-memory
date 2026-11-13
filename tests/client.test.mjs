@@ -8,7 +8,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import helpers from '../client/client.js'
 
-const { validateDraft, groupEntries, nextToken, entriesParams, buildEntriesQuery, workspaceOptions, errorKeyFor, shouldQueueToast, partitionSettled, parseTags, unwrapResult, settingsStatusNext, savedToastKey, exportParams, defaultViewSelection, sectionCountsExact, parseImportText, validateImportDoc, importSummary, pageSlice, entryDetailRows, relativeTime, formatBytes, isExpired, statusOf, originOf, statusQueryFlags } = helpers
+const { validateDraft, groupEntries, nextToken, entriesParams, buildEntriesQuery, workspaceOptions, errorKeyFor, shouldQueueToast, partitionSettled, parseTags, unwrapResult, settingsStatusNext, savedToastKey, exportParams, defaultViewSelection, sectionCountsExact, chunkEntries, parseImportText, validateImportDoc, importSummary, pageSlice, entryDetailRows, relativeTime, formatBytes, isExpired, statusOf, originOf, statusQueryFlags } = helpers
 
 test('validateDraft accepts a complete draft and rejects bad ones', () => {
   assert.deepEqual(validateDraft({ content: '一条事实', category: 'fact' }), { ok: true })
@@ -230,6 +230,17 @@ test('locale dictionaries stay in sync; import size copy matches the 32 MB limit
     const e = (lineOf(enBlock, key).match(/\{\w+\}/g) || []).sort()
     assert.deepEqual(z, e, `placeholder mismatch in ${key}`)
   }
+})
+
+test('chunkEntries splits import payloads into bounded atomic batches', () => {
+  assert.deepEqual(chunkEntries([], 300), [])
+  assert.deepEqual(chunkEntries([1, 2, 3], 2), [[1, 2], [3]])
+  const items = Array.from({ length: 320 }, (_, i) => i)
+  const chunks = chunkEntries(items, 300)
+  assert.equal(chunks.length, 2)
+  assert.equal(chunks[0].length, 300)
+  assert.equal(chunks[1].length, 20)
+  assert.equal(chunkEntries(items, 0).length, 320, 'invalid size falls back to 1 per chunk')
 })
 
 test('sectionCountsExact only trusts group counts on a single full page', () => {

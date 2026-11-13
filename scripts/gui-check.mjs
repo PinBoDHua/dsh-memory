@@ -513,6 +513,50 @@ async function main() {
         check('导入预览后 busy 已复位', planState.busyButtons === 0, JSON.stringify(planState))
         await key('Escape', 'Escape', 27)
         await sleep(400)
+
+        // 0.24.25：大文件导入分片（320 条 → 2 次 /import）、显示进度、全部落盘；批量接口清理。
+        const bigEntries = Array.from({ length: 320 }, (_, i) => ({
+          id: `m-gui-shard-${String(i).padStart(4, '0')}`,
+          content: `GUI 分片导入 ${i}`,
+          scope: 'global',
+          category: 'fact',
+        }))
+        const bigFile = path.join(dir, 'big-export.json')
+        writeFileSync(bigFile, JSON.stringify({ format: 'dsh-memory-export', version: 1, exportedAt: new Date().toISOString(), entries: bigEntries }), 'utf8')
+        try {
+          const { root: docRoot } = await send('DOM.getDocument', { depth: -1 })
+          const { nodeId: bigNode } = await send('DOM.querySelector', { nodeId: docRoot.nodeId, selector: 'input[type=file]' })
+          await send('DOM.setFileInputFiles', { files: [bigFile], nodeId: bigNode })
+          await sleep(2600)
+          const importBefore = requests.filter((u) => u.includes('/import')).length
+          await send('Network.emulateNetworkConditions', { offline: false, latency: 250, downloadThroughput: -1, uploadThroughput: -1 })
+          await evaluate(`(() => {
+            const dialog = document.querySelector('.dm_dialog')
+            if (!dialog) return false
+            const btn = [...dialog.querySelectorAll('button')].find((b) => b.classList.contains('dm_btn_primary'))
+            if (btn) btn.click()
+            return Boolean(btn)
+          })()`)
+          let sawProgress = false
+          for (let i = 0; i < 30; i += 1) {
+            await sleep(120)
+            const st = await evaluate(`(() => ({ open: document.querySelector('.dm_dialog') !== null, text: (document.querySelector('.dm_dialog') || {}).innerText || '' }))()`)
+            if (/正在导入|Importing/.test(st.text)) sawProgress = true
+            if (!st.open) break
+          }
+          await sleep(1200)
+          await send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 })
+          const importAfter = requests.filter((u) => u.includes('/import')).length
+          const listed = await apiJson(`/entries?query=${encodeURIComponent('GUI 分片导入')}&scope=global&limit=1000`)
+          check('大导入按分片多次提交（≥2 次 /import）', importAfter - importBefore >= 2, `${importBefore} -> ${importAfter}`)
+          check('大导入显示分片进度', sawProgress, 'progress text not observed')
+          check('大导入全部落盘（320 条）', (listed?.entries || []).length === 320, String((listed?.entries || []).length))
+        } finally {
+          const st = await apiJson('/status')
+          await apiJson('/forget', { method: 'POST', token: st?.key, body: { ids: bigEntries.map((e) => e.id) } }).catch(() => {})
+          const left = await apiJson(`/entries?query=${encodeURIComponent('GUI 分片导入')}&scope=global&limit=10`)
+          check('分片导入测试条目已批量清理', (left?.entries || []).length === 0, String((left?.entries || []).length))
+        }
       } finally {
         rmSync(dir, { recursive: true, force: true })
       }
@@ -539,7 +583,12 @@ async function main() {
       const l = await apiJson('/save', { method: 'POST', token, body: { content: `${marker} L`, scope: 'global', origin: 'auto' } })
       const idK = k?.result?.entry?.id
       const idL = l?.result?.entry?.id
-      createdIds = createdIds.filter(Boolean).concat([idA, idB, idK, idL].filter(Boolean))
+      // 批量删除场景用的两条记忆（M/N，最新 → 第一页可点）。
+      const m = await apiJson('/save', { method: 'POST', token, body: { content: `${marker} M`, scope: 'global', origin: 'auto' } })
+      const n = await apiJson('/save', { method: 'POST', token, body: { content: `${marker} N`, scope: 'global', origin: 'auto' } })
+      const idM = m?.result?.entry?.id
+      const idN = n?.result?.entry?.id
+      createdIds = createdIds.filter(Boolean).concat([idA, idB, idK, idL, idM, idN].filter(Boolean))
       check('API 创建验收临时记忆', createdIds.length >= 4, JSON.stringify(createdIds.length))
 
       // 搜索标记让两条临时记忆出现在列表。
@@ -625,7 +674,7 @@ async function main() {
       await sleep(500)
       // 0.24.19：删除确认弹窗在请求期间显示「删除中…」而不是整框静默变灰。
       await send('Network.emulateNetworkConditions', { offline: false, latency: 1500, downloadThroughput: -1, uploadThroughput: -1 })
-      await evaluate(`(() => { const btn = document.querySelector('.dm_btn_danger_solid'); if (btn) btn.click(); return Boolean(btn) })()`)
+      await evaluate(`(() => { const btn = document.querySelector('.dm_dialog .dm_btn_danger_solid'); if (btn) btn.click(); return Boolean(btn) })()`)
       await sleep(400)
       const deleteBusy = await evaluate(`(() => {
         const dialog = document.querySelector('.dm_dialog')
@@ -699,11 +748,11 @@ async function main() {
       })()`)
       await clickDeleteFor(`${marker} K`)
       await sleep(500)
-      await evaluate(`(() => { const btn = document.querySelector('.dm_btn_danger_solid'); if (btn) btn.click(); return Boolean(btn) })()`)
+      await evaluate(`(() => { const btn = document.querySelector('.dm_dialog .dm_btn_danger_solid'); if (btn) btn.click(); return Boolean(btn) })()`)
       await sleep(900)
       await clickDeleteFor(`${marker} L`)
       await sleep(500)
-      await evaluate(`(() => { const btn = document.querySelector('.dm_btn_danger_solid'); if (btn) btn.click(); return Boolean(btn) })()`)
+      await evaluate(`(() => { const btn = document.querySelector('.dm_dialog .dm_btn_danger_solid'); if (btn) btn.click(); return Boolean(btn) })()`)
       await sleep(1000)
       const secondUndo = await evaluate(`(() => ({ hasAction: document.querySelector('.dm_toast_action') !== null, text: (document.querySelector('.dm_toast_text') || {}).textContent || '' }))()`)
       check('连续删除后仍有撤销入口', secondUndo.hasAction, JSON.stringify(secondUndo))
@@ -728,6 +777,48 @@ async function main() {
         if (restoredIds.has(idK) && restoredIds.has(idL)) break
       }
       check('连续删除的两条记忆都能撤销恢复', restoredIds.has(idK) && restoredIds.has(idL), JSON.stringify({ idK, idL, restored: [...restoredIds].filter((id) => id === idK || id === idL) }))
+
+      // 0.24.25：批量删除单请求 + 一次撤销恢复多条。
+      const forgetReqBefore = requests.filter((u) => u.includes('/forget')).length
+      const bulkPicked = await evaluate(`(() => {
+        const cards = [...document.querySelectorAll('.dm_card')]
+        let picked = 0
+        for (const text of [${JSON.stringify(`${marker} M`)}, ${JSON.stringify(`${marker} N`)}]) {
+          const card = cards.find((el) => (el.innerText || '').includes(text))
+          const box = card ? card.querySelector('.dm_check input') : null
+          if (box) { box.click(); picked += 1 }
+        }
+        return picked
+      })()`)
+      await sleep(300)
+      const selbarState = await evaluate(`(() => { const bar = document.querySelector('.dm_selbar'); return { exists: bar !== null, text: bar ? (bar.innerText || '').replace(/\\s+/g, ' ') : '' } })()`)
+      await evaluate(`(() => { const b = [...document.querySelectorAll('.dm_selbar button')].find((x) => /删除所选|Delete selected/.test((x.textContent || '').trim())); if (b) b.click(); return Boolean(b) })()`)
+      await sleep(700)
+      const bulkDialog = await evaluate(`(() => { const d = document.querySelector('.dm_dialog'); return { open: d !== null, text: d ? (d.innerText || '').replace(/\\s+/g, ' ').slice(0, 100) : '' } })()`)
+      const confirmState = await evaluate(`(() => ({ count: document.querySelectorAll('.dm_dialog .dm_btn_danger_solid').length, disabled: (() => { const b = document.querySelector('.dm_dialog .dm_btn_danger_solid'); return b ? b.disabled : null })(), cardBusy: [...document.querySelectorAll('.dm_card button')].filter((b) => b.disabled).length }))()`)
+      const clickedConfirm = await evaluate(`(() => { const b = document.querySelector('.dm_dialog .dm_btn_danger_solid'); if (b) { b.click() } return Boolean(b) })()`)
+      await sleep(300)
+      const dialogAfterClick = await evaluate(`(() => { const d = document.querySelector('.dm_dialog'); return { open: d !== null, text: d ? (d.innerText || '').replace(/\\s+/g, ' ').slice(0, 80) : '' } })()`)
+      let bulkToast = { hasAction: false }
+      for (let i = 0; i < 12; i += 1) {
+        await sleep(250)
+        bulkToast = await evaluate(`(() => ({ hasAction: document.querySelector('.dm_toast_action') !== null }))()`)
+        if (bulkToast.hasAction) break
+      }
+      const forgetReqAfter = requests.filter((u) => u.includes('/forget')).length
+      const bulkInfo = { picked: bulkPicked, selbar: selbarState, dialog: bulkDialog, confirmState, clickedConfirm, dialogAfterClick, forgetBefore: forgetReqBefore, forgetAfter: forgetReqAfter, recentRequests: requests.slice(-8), recentConsole: consoleLines.slice(-8) }
+      check('批量删除只发一次 /forget 请求', bulkToast.hasAction && forgetReqAfter - forgetReqBefore === 1, JSON.stringify(bulkInfo))
+      if (bulkToast.hasAction) {
+        await evaluate(`(() => { const btn = document.querySelector('.dm_toast_action'); if (btn) btn.click(); return Boolean(btn) })()`)
+      }
+      let bulkRestored = new Set()
+      for (let i = 0; i < 12; i += 1) {
+        await sleep(300)
+        const listed = await apiJson(`/entries?query=${encodeURIComponent(marker)}&scope=global&limit=100&include_superseded=true&include_expired=true&include_archived=true`)
+        bulkRestored = new Set((listed?.entries || []).map((e) => e.id))
+        if (bulkRestored.has(idM) && bulkRestored.has(idN)) break
+      }
+      check('批量删除可一次撤销恢复多条', bulkToast.hasAction && bulkRestored.has(idM) && bulkRestored.has(idN), JSON.stringify({ bulkInfo, idM, idN, restored: [idM, idN].filter((id) => bulkRestored.has(id)) }))
     } finally {
       // 清理验收临时记忆（失败路径也要清）。
       try {
