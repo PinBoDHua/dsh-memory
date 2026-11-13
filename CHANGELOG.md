@@ -3,6 +3,16 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.12.0] - 2026-11-13
+
+### 新增 Added
+- **相似记忆查重（duplicate audit）**：面板工具栏新增「查重」按钮，扫描当前作用域活跃记忆两两 Jaccard 相似度（≥0.5），弹出相似对列表（旧/新内容对照＋相似度百分比）。每对可「新取代旧」（较新条目 supersedes 较旧，保留历史、旧条目默认隐藏）或「忽略」（仅本次移除，保留两条）。治理存量近似重复，与 0.11.0 写入时提示形成「防新增＋清存量」闭环。
+- 新路由 `GET /similar`（scope/workspace 参数，返回 `{pairs:[{score,older,newer}]}`，按分数倒序、上限 50）；`service.similarPairs()`、`store.findSimilarPairs()`（特征集预计算，O(n²) 仅按需调用）。
+- `store.contentSimilarity` 重构为共享 `jaccardFeatures`（行为不变），查重与写入提示共用同一相似度语义。
+
+### 变更 Changed
+- 查重排除被取代/已归档/已过期条目，跨作用域不配对；中英文案与主题化弹窗（复用 Modal/图标/按钮体系）。
+
 ## [0.11.0] - 2026-11-13
 
 ### 新增 Added
@@ -158,6 +168,7 @@ All notable changes to this project are documented here. Format follows Keep a C
 - 系统提示注入：指引＋字符预算内召回（`interpolate: false` 保护用户内容）。
 - 隐私护栏：密码/密钥/token 规则检测硬拒写。
 
+[0.12.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.8.1...v0.9.0

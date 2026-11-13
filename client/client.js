@@ -350,6 +350,17 @@
     importConfirm: '确认导入',
     importAllDup: '全部条目均已存在，无需导入。',
     imported: '导入完成',
+    audit: '查重',
+    auditTitle: '相似记忆查重',
+    auditHint: '扫描当前作用域内活跃记忆的相似度（≥50%）。可让较新条目取代较旧条目（保留历史），或忽略以保留两条。',
+    auditEmpty: '未发现相似记忆',
+    auditScore: '相似度',
+    auditOlder: '旧',
+    auditNewer: '新',
+    auditSupersede: '新取代旧',
+    auditDismiss: '忽略',
+    auditSuperseded: '已取代旧条目',
+    auditCount: '共 {n} 对相似记忆',
     errDuplicate: '目标作用域已有相同内容的记忆',
     errImportDoc: '不是有效的 dsh-memory 导出文件（format/version/entries 不符）',
     tabMemories: '记忆',
@@ -522,6 +533,17 @@
     importConfirm: 'Import',
     importAllDup: 'All entries already exist; nothing to import.',
     imported: 'Import complete',
+    audit: 'Audit',
+    auditTitle: 'Similar memory audit',
+    auditHint: 'Scans active memories in the current scope for similarity (≥50%). Supersede the older with the newer (history kept), or dismiss to keep both.',
+    auditEmpty: 'No similar memories found',
+    auditScore: 'Similarity',
+    auditOlder: 'Older',
+    auditNewer: 'Newer',
+    auditSupersede: 'Supersede older',
+    auditDismiss: 'Dismiss',
+    auditSuperseded: 'Older entry superseded',
+    auditCount: '{n} similar pairs',
     errDuplicate: 'Identical memory already exists in the target scope',
     errImportDoc: 'Not a valid dsh-memory export file (format/version/entries mismatch)',
     tabMemories: 'Memories',
@@ -712,6 +734,14 @@
     '.dm_delete_preview{border:1px solid var(--dm-line);border-radius:12px;padding:12px;margin:10px 0;white-space:pre-wrap;word-break:break-word;background:var(--dm-bg);max-height:36vh;overflow-y:auto;font-size:13px;line-height:1.6;}',
     '.dm_hint{color:var(--dm-ink3);font-size:11.5px;}',
     '.dm_import_tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:6px 0 10px;}',
+    '.dm_audit_list{display:flex;flex-direction:column;gap:12px;}',
+    '.dm_audit_pair{border:1px solid var(--dm-line2);border-radius:12px;padding:12px;background:var(--dm-bg);}',
+    '.dm_audit_score{font-size:12px;font-weight:700;color:var(--dm-primary);margin-bottom:8px;}',
+    '.dm_audit_side{display:flex;gap:8px;align-items:flex-start;margin-bottom:6px;}',
+    '.dm_audit_tag{flex-shrink:0;font-size:11px;font-weight:700;padding:2px 7px;border-radius:6px;background:var(--dm-line);color:var(--dm-ink3);}',
+    '.dm_audit_tag_new{background:color-mix(in srgb,var(--dm-primary) 14%,transparent);color:var(--dm-primary);}',
+    '.dm_audit_content{font-size:13px;line-height:1.45;color:var(--dm-ink);word-break:break-word;}',
+    '.dm_audit_actions{display:flex;justify-content:flex-end;gap:8px;margin-top:8px;}',
     '.dm_tile{border:1px solid var(--dm-line);border-radius:12px;padding:12px;background:var(--dm-bg);text-align:center;}',
     '.dm_tile_num{font-family:Georgia,"Times New Roman",serif;font-size:26px;font-weight:700;line-height:1.1;font-variant-numeric:tabular-nums;}',
     '.dm_tile_label{font-size:11px;color:var(--dm-ink3);margin-top:3px;}',
@@ -995,6 +1025,7 @@
           cwd: function (sessionId) { return request(API_BASE + '/cwd?sessionId=' + encodeURIComponent(sessionId || '')) },
           entries: function (params) { return request(API_BASE + '/entries' + buildEntriesQuery(params)) },
           stats: function (params) { return request(API_BASE + '/stats' + buildEntriesQuery(params)) },
+          similar: function (params) { return request(API_BASE + '/similar' + buildEntriesQuery(params)) },
           export: function () { return request(API_BASE + '/export') },
           settings: function () { return request(API_BASE + '/settings') },
           saveSettings: function (input) { return post(API_BASE + '/settings', input) },
@@ -1324,6 +1355,37 @@
           h('div', { className: 'dm_dialog_footer' },
             h('button', { className: 'dm_btn', onClick: props.onClose, disabled: props.busy }, t('cancel')),
             h('button', { className: 'dm_btn dm_btn_primary', onClick: props.onConfirm, disabled: props.busy || summary.imported === 0 }, h(Icon, { name: 'check', size: 14, strokeWidth: 2.2 }), t('importConfirm'))))
+      }
+
+      function AuditModal(props) {
+        var t = props.t
+        var pairs = props.pairs || []
+        return h(Modal, { title: t('auditTitle'), onClose: props.onClose, busy: props.busy },
+          h('div', { className: 'dm_dialog_head' },
+            h('div', { className: 'dm_dialog_medal dm_dialog_medal_primary' }, h(Icon, { name: 'copy', size: 17, strokeWidth: 2 })),
+            h('h2', { className: 'dm_dialog_title' }, t('auditTitle'))),
+          h('div', { className: 'dm_hint', style: { marginBottom: 12 } }, t('auditHint')),
+          pairs.length === 0
+            ? h('div', { className: 'dm_empty', style: { padding: '24px 0' } },
+              h(Icon, { name: 'checkCircle', size: 28, style: { color: 'var(--dm-success)', marginBottom: 10 } }),
+              h('div', null, t('auditEmpty')))
+            : h('div', { className: 'dm_audit_list' },
+              pairs.map(function (p) {
+                return h('div', { key: p.older.id + '-' + p.newer.id, className: 'dm_audit_pair' },
+                  h('div', { className: 'dm_audit_score' }, t('auditScore') + ' ' + Math.round(p.score * 100) + '%'),
+                  h('div', { className: 'dm_audit_side' },
+                    h('span', { className: 'dm_audit_tag' }, t('auditOlder')),
+                    h('span', { className: 'dm_audit_content' }, p.older.content)),
+                  h('div', { className: 'dm_audit_side' },
+                    h('span', { className: 'dm_audit_tag dm_audit_tag_new' }, t('auditNewer')),
+                    h('span', { className: 'dm_audit_content' }, p.newer.content)),
+                  h('div', { className: 'dm_audit_actions' },
+                    h('button', { className: 'dm_btn dm_btn_mini', onClick: function () { props.onDismiss(p) }, disabled: props.busy }, t('auditDismiss')),
+                    h('button', { className: 'dm_btn dm_btn_mini dm_btn_primary', onClick: function () { props.onSupersede(p) }, disabled: props.busy }, h(Icon, { name: 'check', size: 12, strokeWidth: 2.2 }), t('auditSupersede'))))
+              })),
+          h('div', { className: 'dm_dialog_footer' },
+            h('span', { className: 'dm_hint' }, pairs.length > 0 ? t('auditCount').replace('{n}', String(pairs.length)) : ''),
+            h('button', { className: 'dm_btn', onClick: props.onClose, disabled: props.busy }, t('cancel'))))
       }
 
       function Toast(props) {
@@ -1682,6 +1744,8 @@
         var confirm = confirmState[0]; var setConfirm = confirmState[1]
         var importState = useState(null)
         var importPlan = importState[0]; var setImportPlan = importState[1]
+        var auditState = useState(null)
+        var audit = auditState[0]; var setAudit = auditState[1]
         var toastState = useState(null)
         var toast = toastState[0]; var setToast = toastState[1]
         var busyState = useState(false)
@@ -1706,7 +1770,7 @@
         var confirmRef = useRef(null)
         confirmRef.current = confirm
         var modalOpenRef = useRef(false)
-        modalOpenRef.current = !!(editor || confirm || importPlan)
+        modalOpenRef.current = !!(editor || confirm || importPlan || audit)
         var selectedRef = useRef(selected)
         selectedRef.current = selected
         var draftRef = useRef(draft)
@@ -2096,6 +2160,36 @@
           }).catch(writeFailure).then(function () { setBusy(false) })
         }
 
+        function auditParams() {
+          if (selection === 'global') return { scope: 'global' }
+          if (selection === 'all') return { scope: 'all', workspace: currentCwd }
+          return { scope: 'workspace', workspace: selection }
+        }
+        function handleAudit() {
+          if (busy) return
+          setBusy(true)
+          var params = auditParams()
+          api.similar(params).then(function (payload) {
+            setAudit({ pairs: (payload && payload.pairs) || [], params: params })
+          }).catch(writeFailure).then(function () { setBusy(false) })
+        }
+        function handleSupersedePair(pair) {
+          if (busy || !audit) return
+          setBusy(true)
+          var params = audit.params
+          api.update({ id: pair.newer.id, supersedes: pair.older.id, workspace: pair.newer.scope === 'workspace' ? params.workspace : undefined }).then(function () {
+            showToast('ok', t('auditSuperseded'))
+            return api.similar(params)
+          }).then(function (payload) {
+            setAudit({ pairs: (payload && payload.pairs) || [], params: params })
+            return refreshRef.current()
+          }).catch(writeFailure).then(function () { setBusy(false) })
+        }
+        function dismissPair(pair) {
+          if (!audit) return
+          setAudit(Object.assign({}, audit, { pairs: audit.pairs.filter(function (p) { return !(p.older.id === pair.older.id && p.newer.id === pair.newer.id) }) }))
+        }
+
         function renderStats() {
           var total = stats ? stats.total : null
           var cats = ['preference', 'fact', 'decision']
@@ -2247,6 +2341,7 @@
                     query ? h('button', { className: 'dm_search_clear', 'aria-label': t('clearFilters'), onClick: function () { changeQuery('') } }, h(Icon, { name: 'x', size: 12, strokeWidth: 2.2 })) : null),
                   h('button', { className: 'dm_btn dm_toolbtn', onClick: handleExport, disabled: busy || phase !== 'ready' }, h(Icon, { name: 'export', size: 15 }), t('export')),
                   h('button', { className: 'dm_btn dm_toolbtn', onClick: function () { if (fileInputRef.current) fileInputRef.current.click() }, disabled: busy || phase !== 'ready' }, h(Icon, { name: 'import', size: 15 }), t('import')),
+                  h('button', { className: 'dm_btn dm_toolbtn', onClick: handleAudit, disabled: busy || phase !== 'ready' }, h(Icon, { name: 'copy', size: 15 }), t('audit')),
                   h('input', { ref: fileInputRef, type: 'file', accept: '.json,application/json', style: { display: 'none' }, onChange: handleImportFile }))),
               unknownWorkspaces.length > 0 ? h('div', { className: 'dm_hint', style: { margin: '8px 0 0' } }, t('unknownWorkspaceHint')) : null,
               phase === 'loading' ? h(Skeletons)
@@ -2269,6 +2364,7 @@
           editor ? h(EditorModal, { draft: editor, setDraft: setEditor, t: t, workspaceTarget: workspaceTarget, busy: busy, onSave: handleSave, onClose: function () { if (!busy) setEditor(null) } }) : null,
           confirm ? h(ConfirmModal, { entries: confirm.entries, t: t, busy: busy, onConfirm: handleDelete, onClose: function () { if (!busy) setConfirm(null) } }) : null,
           importPlan ? h(ImportModal, { plan: importPlan.plan, t: t, busy: busy, onConfirm: confirmImport, onClose: function () { if (!busy) setImportPlan(null) } }) : null,
+          audit ? h(AuditModal, { pairs: audit.pairs, t: t, busy: busy, onSupersede: handleSupersedePair, onDismiss: dismissPair, onClose: function () { if (!busy) setAudit(null) } }) : null,
           toast ? h(Toast, { toast: toast, t: t, raised: selected.length > 0, onClose: function () { setToast(null) } }) : null)
       }
 

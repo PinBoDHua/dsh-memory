@@ -60,11 +60,11 @@ async function main() {
 
   // 1. status：版本与 schema
   let token = ''
-  await check('status 报告 version=0.11.0 / schemaVersion=2 并下发 token', async () => {
+  await check('status 报告 version=0.12.0 / schemaVersion=2 并下发 token', async () => {
     const { status, json } = await req('GET', '/status')
     ok('status HTTP 200', status === 200, `got ${status}`)
     ok('status.ok', json?.ok === true)
-    ok('version === 0.11.0', json?.version === '0.11.0', `got ${json?.version}`)
+    ok('version === 0.12.0', json?.version === '0.12.0', `got ${json?.version}`)
     ok('schemaVersion === 2', json?.schemaVersion === 2, `got ${json?.schemaVersion}`)
     ok('token 非空', typeof json?.key === 'string' && json.key.length > 0)
     token = json?.key ?? ''
@@ -73,6 +73,7 @@ async function main() {
 
   // 2. CRUD 往返（写路由包 {result}；save 返回 {entry, deduplicated}）
   let idA = ''
+  let idN = ''
   await check('save → entries 检索往返', async () => {
     const { status, json } = await req('POST', '/save', { token, body: { content: `${RUN} 甲事实`, scope: 'global', category: 'fact', origin: 'auto' } })
     ok('save HTTP 200', status === 200, `got ${status} ${JSON.stringify(json)}`)
@@ -86,10 +87,18 @@ async function main() {
 
   await check('save 相似记忆提示（0.11.0）', async () => {
     const near = await req('POST', '/save', { token, body: { content: `${RUN} 甲事实乙`, scope: 'global', origin: 'auto' } })
-    const idN = near.json?.result?.entry?.id ?? ''
+    idN = near.json?.result?.entry?.id ?? ''
     if (idN) created.push(idN)
     ok('save 返回 similar 数组', Array.isArray(near.json?.result?.similar), JSON.stringify(near.json))
     ok('similar 命中既有甲（score≥0.5）', (near.json?.result?.similar ?? []).some((s) => s.id === idA && s.score >= 0.5))
+  })
+
+  await check('GET /similar 查重命中相似对（0.12.0）', async () => {
+    const sim = await req('GET', '/similar?scope=global')
+    ok('similar HTTP 200', sim.status === 200, `got ${sim.status}`)
+    const pairs = sim.json?.pairs ?? []
+    ok('similar 返回 pairs 数组', Array.isArray(pairs))
+    ok('similar 含甲↔甲乙对', pairs.some((p) => (p.older.id === idA && p.newer.id === idN) || (p.older.id === idN && p.newer.id === idA)))
   })
 
   await check('update origin 修正往返（0.10.0）', async () => {
@@ -185,6 +194,7 @@ async function main() {
     ok('bundle 含 0.9.0 代码标记 autoExtractHint', code.includes('autoExtractHint'))
     ok('bundle 含 0.10.0 新文案 显式要求/Requested', code.includes('显式要求') && code.includes('Requested'))
     ok('bundle 含 0.11.0 新文案 similarSaved', code.includes('similarSaved'))
+    ok('bundle 含 0.12.0 新文案 auditTitle', code.includes('auditTitle'))
   })
 
   // 7. 清理测试条目
