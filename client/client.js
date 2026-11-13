@@ -660,7 +660,7 @@
     '.dm_select_value{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left;}',
     '.dm_select_chev{display:flex;color:var(--dm-ink3);flex-shrink:0;transition:transform .2s;}',
     '.dm_select_open .dm_select_chev{transform:rotate(180deg);color:var(--dm-primary);}',
-    '.dm_select_pop{position:fixed;z-index:1200;box-sizing:border-box;background:var(--dm-surface);border:1px solid var(--dm-line2);border-radius:12px;box-shadow:var(--dm-shadow-hover);padding:5px;max-height:300px;overflow-y:auto;animation:dm_pop_in .16s ease;transform-origin:top center;scrollbar-width:thin;scrollbar-color:color-mix(in srgb,var(--dm-ink) 22%,transparent) transparent;}',
+    '.dm_select_pop{position:fixed;z-index:1200;box-sizing:border-box;background:var(--dm-surface);border:1px solid color-mix(in srgb,var(--dm-primary) 35%,var(--dm-line2));border-radius:12px;box-shadow:var(--dm-shadow-hover);padding:5px;max-height:300px;overflow-y:auto;animation:dm_pop_in .16s ease;transform-origin:top center;scrollbar-width:thin;scrollbar-color:color-mix(in srgb,var(--dm-ink) 22%,transparent) transparent;}',
     '.dm_select_pop::-webkit-scrollbar{width:8px;}',
     '.dm_select_pop::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--dm-ink) 20%,transparent);border-radius:8px;}',
     '.dm_select_pop::-webkit-scrollbar-thumb:hover{background:color-mix(in srgb,var(--dm-primary) 50%,transparent);}',
@@ -1199,7 +1199,7 @@
           h(SettingsGroup, { icon: 'sliders', title: t('groupPanel'), style: { color: 'var(--dm-pref)', background: 'var(--dm-pref-soft)' } },
             h(SettingRow, { label: t('defaultViewLabel') },
               h(Select, {
-                className: 'dm_setselect', value: draft.defaultView, ariaLabel: t('defaultViewLabel'), disabled: props.busy,
+                className: 'dm_setselect', value: draft.defaultView, ariaLabel: t('defaultViewLabel'), disabled: props.busy, minWidth: 200,
                 onChange: function (v) { props.onChange('defaultView', v) },
                 options: [
                   { value: 'all', label: t('viewAll'), icon: 'layers' },
@@ -1259,12 +1259,14 @@
           var trig = triggerRef.current
           if (!trig) return
           var r = trig.getBoundingClientRect()
-          var width = Math.max(r.width, props.minWidth || 200)
+          // 严格等宽：弹出层宽度＝触发按钮的渲染宽度（按钮已带稳定最小宽），
+          // 左右边缘完全对齐，读起来是同一件控件而非两块板。
+          var width = r.width
           var list = listRef.current
           var height = list ? Math.min(list.offsetHeight, 300) : 260
           var spaceBelow = window.innerHeight - r.bottom
-          var up = spaceBelow < height + 10 && r.top > spaceBelow
-          var top = up ? Math.max(8, r.top - height - 6) : Math.min(r.bottom + 6, Math.max(8, window.innerHeight - height - 8))
+          var up = spaceBelow < height + 8 && r.top > spaceBelow
+          var top = up ? Math.max(8, r.top - height - 4) : Math.min(r.bottom + 4, Math.max(8, window.innerHeight - height - 8))
           var left = Math.min(Math.max(8, r.left), Math.max(8, window.innerWidth - width - 8))
           setPos({ top: top, left: left, width: width, up: up })
         }
@@ -1357,7 +1359,8 @@
           }
         }
 
-        var trigger = h('div', { className: 'dm_selectwrap' + (props.className ? ' ' + props.className : ''), ref: rootRef, style: props.style },
+        var wrapStyle = Object.assign({}, props.minWidth ? { minWidth: props.minWidth } : null, props.style)
+        var trigger = h('div', { className: 'dm_selectwrap' + (props.className ? ' ' + props.className : ''), ref: rootRef, style: wrapStyle },
           h('button', {
             type: 'button', ref: triggerRef, id: props.id,
             className: 'dm_select_trigger' + (open ? ' dm_select_open' : '') + (disabled ? ' dm_select_disabled' : ''),
@@ -1388,7 +1391,7 @@
             onClick: function () { choose(idx) },
           },
             opt.icon ? h(Icon, { name: opt.icon, size: 14, className: 'dm_select_opt_icon' }) : h('span', { className: 'dm_select_opt_icon dm_select_opt_spacer' }),
-            h('span', { className: 'dm_select_opt_label' }, opt.label),
+            h('span', { className: 'dm_select_opt_label', title: opt.label }, opt.label),
             opt.hint ? h('span', { className: 'dm_select_opt_hint' }, opt.hint) : null,
             isSel ? h(Icon, { name: 'check', size: 14, strokeWidth: 2.4, className: 'dm_select_opt_check' }) : null)
         }))

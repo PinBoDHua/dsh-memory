@@ -3,6 +3,15 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.8.1] - 2026-11-13
+
+### 修复 Fixed
+- 下拉弹出层与触发按钮宽度不一致、左右不对齐，看起来像「两块板」而非一个整体。现弹出层宽度严格等于触发按钮的渲染宽度，左右边缘完全对齐。
+- 触发按钮按场景带稳定最小宽度（工具栏 220 / 默认视图 200 / 每页条数 120），切换选中值时宽度不跳动、常见长选项不截断；超长选项省略号＋悬停显示全文。
+
+### 变更 Changed
+- 弹出层与按钮间隙由 6px 收紧到 4px；打开时弹出层描边染主色（35%）与触发按钮的主色描边呼应，视觉上连成一件。
+
 ## [0.8.0] - 2026-11-13
 
 ### 变更 Changed
@@ -97,6 +106,7 @@ All notable changes to this project are documented here. Format follows Keep a C
 - 系统提示注入：指引＋字符预算内召回（`interpolate: false` 保护用户内容）。
 - 隐私护栏：密码/密钥/token 规则检测硬拒写。
 
+[0.8.1]: https://github.com/PinBoDHua/dsh-memory/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.5.1...v0.6.0
