@@ -57,7 +57,7 @@ export function apply(ctx, rawConfig) {
   const config = resolveConfig(rawConfig)
   if (!config.enabled) return
   const root = dataRoot()
-  const service = createMemoryService({ root })
+  const service = createMemoryService({ root, baseConfig: config })
   const controlToken = randomBytes(24).toString('hex')
 
   // workingDirectory 服务是会话有效目录的权威来源（会跟随 cd）；
@@ -237,15 +237,16 @@ export function apply(ctx, rawConfig) {
     },
   }
 
-  // 每次装配实时重读：手工编辑记忆文件立即生效；任何读取失败都只降级为
-  // 纯指引文本，绝不让系统提示装配失败。
+  // 每次装配实时重读：手工编辑记忆文件与 settings.json 立即生效；任何读取
+  // 失败都只降级为纯指引文本，绝不让系统提示装配失败。
   const sectionText = (assembly) => {
     try {
       const cwd = cwdOf(assembly?.agent?.session)
       const entries = service.list({ scope: 'all', workspace: cwd })
+      const recall = service.recallConfig()
       return renderSection(entries, {
-        autoInject: config.autoInject,
-        budgetChars: config.injectionBudgetChars,
+        autoInject: recall.autoInject,
+        budgetChars: recall.injectionBudgetChars,
       })
     } catch {
       return GUIDANCE
@@ -260,7 +261,16 @@ export function apply(ctx, rawConfig) {
       ctx.tools.register(updateTool),
       ctx.tools.register(forgetTool),
     ]
+    // 自动备份：启动 5 秒后首检，此后每小时检查一次（开启且超 24h 才落盘）。
+    const startupTimer = setTimeout(() => {
+      try { service.maybeAutoBackup() } catch { /* best-effort */ }
+    }, 5000)
+    const backupTimer = setInterval(() => {
+      try { service.maybeAutoBackup() } catch { /* best-effort */ }
+    }, 3600 * 1000)
     return () => {
+      clearTimeout(startupTimer)
+      clearInterval(backupTimer)
       for (const dispose of disposers.reverse()) {
         try {
           dispose()

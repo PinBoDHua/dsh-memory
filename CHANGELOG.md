@@ -3,6 +3,19 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.7.0] - 2026-11-13
+
+### 新增 Added
+- 面板「记忆 / 设置」双标签。设置页四组（沿用记忆星丛视觉）：
+  - **注入与召回**：autoInject 开关、注入字符预算滑杆（0–20000）；固定分类优先说明；总开关 enabled 仍由 profile 管理（关闭会卸载整个插件，故不入面板）。
+  - **隐私护栏**：机密拦截展示为「始终启用」的安全护栏，不可关闭（密码/密钥/token 永不写入）。
+  - **存储与备份**：数据目录（可复制）、存储占用（条目数＋字节）、自动备份开关、备份保留份数（1–30）、上次备份时间与份数、「立即备份」。
+  - **面板偏好**：默认视图（全部/全局/工作区）、每页条数（20/50/100）、界面动效开关、相对时间开关。
+- 设置持久化为数据目录 `settings.json` 覆盖层：profile 配置为基线、settings.json 覆盖其上，服务实时读取、改完即生效（防抖自动保存）、可手工编辑；「恢复默认」一键删除覆盖层。新增 `lib/settings.js`（集中校验/夹取）。
+- 自动备份：开启后启动 5 秒首检、此后每小时检查，距上次备份超 24h 才导出全量到 `backups/` 并按保留份数裁剪最旧（仅删备份，不删记忆）。
+- 新路由 `GET/POST /settings`、`POST /settings/reset`、`POST /backup`；`service.settings()/updateSettings()/resetSettings()/backup()/maybeAutoBackup()/recallConfig()`；系统提示装配改为实时读取 `recallConfig()`。
+- 面板偏好实时生效：每页条数驱动分页、默认视图初始化作用域、动效开关（`dm_no_anim`）、相对时间开关切换卡片时间显示。`formatBytes` 纯函数单测。
+
 ## [0.6.0] - 2026-11-13
 
 ### 新增 Added
@@ -73,6 +86,7 @@ All notable changes to this project are documented here. Format follows Keep a C
 - 系统提示注入：指引＋字符预算内召回（`interpolate: false` 保护用户内容）。
 - 隐私护栏：密码/密钥/token 规则检测硬拒写。
 
+[0.7.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/PinBoDHua/dsh-memory/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.4.0...v0.5.0

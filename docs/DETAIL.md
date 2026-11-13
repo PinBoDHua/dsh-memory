@@ -18,10 +18,11 @@ Cross-session long-term memory for DeepSeek Harness: durable user preferences, p
 
 ## Web 管理面板 Panel
 
-- 入口：左侧边栏「记忆」图标 → 主区域面板（与 Plugins 页同级）。
-- 视觉：「记忆星丛 Memory Atlas」——靛紫渐变主色＋分类三色（偏好琥珀/事实湛蓝/决策翡翠）＋玫红警示；环境光晕背景、品牌徽章、分类色轨卡片＋图标勋章、悬停浮起、入场级联动画、骨架屏、星座插画空态、吸顶毛玻璃工具栏、自定义滚动条；深色跟随宿主 `body[data-ds-dark-theme]`，动效尊重 `prefers-reduced-motion`，窄屏响应式。
-- 能力：作用域切换（全局＋当前工作区 / 仅全局 / 各已知工作区）、统计条（总数＋分类分布条＋计数筛选 chips＋全局/工作区计数）、关键词搜索（300ms 防抖、相关度排序、`/` 快捷聚焦、一键清空）、分页（每页 50 条）、新建/编辑（内容字数统计、分类单选卡片、标签、作用域、Ctrl/⌘+Enter 保存）、删除二次确认＋6 秒撤销（单条/批量，原样恢复 id/时间戳）、批量选择浮栏（Esc 清除）、标签点击直达搜索、相对时间（悬停见绝对时间）、条目详情（点击正文展开：创建/更新时间、来源会话、复制 id）、导出 JSON、导入（dry-run 预览瓦片＋确认）、图标吐司（动作按钮＋倒计时进度条）。
-- 数据面：宿主 `webServer` 命名路由 `/plugins/dsh-memory/{status,entries,workspaces,stats,export,save,update,forget,import}`，浏览器同源 fetch；进程级 token（status 下发），写操作校验 `X-RPC-Key`，全部路由仅回环可达。
+- 入口：左侧边栏「记忆」图标 → 主区域面板（与 Plugins 页同级），含「记忆 / 设置」双标签。
+- 视觉：「记忆星丛 Memory Atlas」——靛紫渐变主色＋分类三色（偏好琥珀/事实湛蓝/决策翡翠）＋玫红警示；环境光晕背景、品牌徽章、分类色轨卡片＋图标勋章、悬停浮起、入场级联动画、骨架屏、星座插画空态、吸顶毛玻璃工具栏、自定义滚动条；深色跟随宿主 `body[data-ds-dark-theme]`，动效尊重 `prefers-reduced-motion`（并可在设置中关闭），窄屏响应式。
+- 记忆标签能力：作用域切换（全局＋当前工作区 / 仅全局 / 各已知工作区）、统计条（总数＋分类分布条＋计数筛选 chips＋全局/工作区计数）、关键词搜索（300ms 防抖、相关度排序、`/` 快捷聚焦、一键清空）、分页（每页条数可设 20/50/100）、新建/编辑（内容字数统计、分类单选卡片、标签、作用域、Ctrl/⌘+Enter 保存）、删除二次确认＋6 秒撤销（单条/批量，原样恢复 id/时间戳）、批量选择浮栏（Esc 清除）、标签点击直达搜索、相对时间（可设绝对时间，悬停见绝对时间）、条目详情（点击正文展开：创建/更新时间、来源会话、复制 id）、导出 JSON、导入（dry-run 预览瓦片＋确认）、图标吐司（动作按钮＋倒计时进度条）。
+- 设置标签能力：见下「设置 Settings」。
+- 数据面：宿主 `webServer` 命名路由 `/plugins/dsh-memory/{status,entries,workspaces,stats,export,settings,settings/reset,backup,save,update,forget,import}`，浏览器同源 fetch；进程级 token（status 下发），写操作校验 `X-RPC-Key`，全部路由仅回环可达。
 - 一个操作，两个调用方：面板与 agent 工具调用同一 `lib/service.js`，语义与失败原因完全一致。
 - 样式仅用 `--dsw-alias-*` 主题令牌，自动跟随亮/暗主题；文案中英双语（zh/en）。
 
@@ -41,6 +42,8 @@ Cross-session long-term memory for DeepSeek Harness: durable user preferences, p
 ```
 .dsh-memory/
 ├── meta.json                 # 存储元数据：schemaVersion/createdAt（首次写入时创建）
+├── settings.json             # 设置覆盖层（可选；缺失＝用默认/profile 基线）
+├── backups/                  # 自动/手动备份的全量导出 JSON（按保留份数裁剪）
 ├── global/<id>.md
 └── workspaces/
     ├── index.json            # 目录哈希 → 工作区路径对照（仅供排查）
@@ -81,20 +84,38 @@ source: <session-id>
 
 global 条目的 `workspace` 为 `null`。导入保留原 id/时间戳/来源；id 已被不同内容占用时自动新分配；`created`/`updated` 缺失或非法时取导入时刻。
 
+## 设置 Settings
+
+面板「设置」标签提供四组配置，持久化为数据目录下的 `settings.json` 覆盖层：**profile 插件行 `config` 为基线，`settings.json` 覆盖其上**，服务实时读取、改完即生效（防抖自动保存），可手工编辑；「恢复默认」一键删除 `settings.json`。所有值在 `lib/settings.js` 集中校验/夹取，未知键丢弃。
+
+| 组 | 字段 | 默认 | 说明 |
+|---|---|---|---|
+| 注入与召回 | `autoInject` | `true` | 是否把召回的记忆注入系统提示（关闭后工具仍可用）。 |
+| 注入与召回 | `injectionBudgetChars` | `6000` | 注入字符预算（0–20000）；按分类优先（偏好→决策→事实，同级新者优先）装填，超出提示用 `memory_search`。 |
+| 存储与备份 | `autoBackup` | `false` | 开启后每天自动导出全量到 `backups/`（启动 5 秒首检、每小时检查、距上次超 24h 才落盘）。 |
+| 存储与备份 | `backupRetention` | `7` | 备份保留份数（1–30），超出裁剪最旧；仅删备份，不删记忆。 |
+| 面板偏好 | `defaultView` | `all` | 默认视图：`all`/`global`/`workspace`（workspace＝当前工作区）。 |
+| 面板偏好 | `pageSize` | `50` | 每页条数：20/50/100。 |
+| 面板偏好 | `animations` | `true` | 界面动效开关。 |
+| 面板偏好 | `relativeTime` | `true` | 相对时间（关闭则显示绝对时间）。 |
+
+- **隐私护栏**：机密拦截（密码/密钥/token 硬拒写）始终启用、不可关闭，面板仅作展示。
+- **总开关 `enabled`**：仍由 profile 配置管理（关闭会卸载整个插件，面板自身亦消失），故不放入面板。
+
 ## 配置 Config
 
-通过插件行的 `config` 调整（profile 的 `cordis.patch.yml` 中 `id: dsh-memory` 条目）；默认值由插件自身收敛，无需 schemastery 依赖。
+profile 插件行 `config`（`cordis.patch.yml` 中 `id: dsh-memory` 条目）作为基线，可被面板 `settings.json` 覆盖；默认值由插件自身收敛，无需 schemastery 依赖。
 
 | 字段 | 默认 | 说明 |
 |---|---|---|
-| `enabled` | `true` | 总开关：关闭后不注册工具与注入。 |
-| `autoInject` | `true` | 是否把召回的记忆注入系统提示（关闭后工具仍可用）。 |
-| `injectionBudgetChars` | `6000` | 注入记忆的字符预算；按分类优先（偏好→决策→事实，同级新者优先）装填，装不下的提示用 `memory_search`。 |
+| `enabled` | `true` | 总开关：关闭后不注册工具与注入（仅 profile 可设）。 |
+| `autoInject` | `true` | 注入基线值；面板设置可覆盖。 |
+| `injectionBudgetChars` | `6000` | 注入预算基线值；面板设置可覆盖。 |
 
 ## 限制 Limitations
 
 - 检索为关键词匹配＋相关度排序，无语义/向量检索。
-- 无自动衰减/自动清理；遗忘只能手动。
+- 无自动衰减/自动清理；遗忘只能手动（自动备份仅裁剪备份文件，不删记忆）。
 - 自动记录依赖模型遵循注入指引，不是后台独立提取。
 - 记忆按 home 共享：同一台机器上的所有 profile 看到同一份记忆。
 - 移动仅支持 global ↔ 当前工作区（工具按会话有效目录，面板按所选工作区）；不支持在两个不同工作区之间直接移动。

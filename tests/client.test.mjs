@@ -7,7 +7,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import helpers from '../client/client.js'
 
-const { validateDraft, groupEntries, nextToken, buildEntriesQuery, workspaceOptions, errorKeyFor, validateImportDoc, importSummary, pageSlice, entryDetailRows, relativeTime } = helpers
+const { validateDraft, groupEntries, nextToken, buildEntriesQuery, workspaceOptions, errorKeyFor, validateImportDoc, importSummary, pageSlice, entryDetailRows, relativeTime, formatBytes } = helpers
 
 test('validateDraft accepts a complete draft and rejects bad ones', () => {
   assert.deepEqual(validateDraft({ content: '一条事实', category: 'fact' }), { ok: true })
@@ -67,6 +67,15 @@ test('relativeTime renders zh/en buckets and falls back to a date', () => {
   assert.equal(relativeTime(at(-60_000), now, 'zh'), '刚刚')
   assert.equal(relativeTime('not-a-date', now, 'zh'), 'not-a-date')
   assert.equal(relativeTime('', now, 'en'), '')
+})
+
+test('formatBytes renders human-readable sizes', () => {
+  assert.equal(formatBytes(0), '0 B')
+  assert.equal(formatBytes(512), '512 B')
+  assert.equal(formatBytes(1536), '1.5 KB')
+  assert.equal(formatBytes(2048), '2.0 KB')
+  assert.equal(formatBytes(1048576), '1.0 MB')
+  assert.equal(formatBytes(null), '0 B')
 })
 
 test('entryDetailRows lists created/updated and omits empty source', () => {

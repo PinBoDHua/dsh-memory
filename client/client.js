@@ -138,7 +138,16 @@
     return zh ? (d.getMonth() + 1) + ' 月 ' + d.getDate() + ' 日' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
   }
 
-  var helpers = { validateDraft: validateDraft, groupEntries: groupEntries, nextToken: nextToken, buildEntriesQuery: buildEntriesQuery, workspaceOptions: workspaceOptions, errorKeyFor: errorKeyFor, validateImportDoc: validateImportDoc, importSummary: importSummary, pageSlice: pageSlice, entryDetailRows: entryDetailRows, relativeTime: relativeTime }
+  function formatBytes(n) {
+    var b = Number(n) || 0
+    if (b < 1024) return b + ' B'
+    var kb = b / 1024
+    if (kb < 1024) return (kb < 10 ? kb.toFixed(1) : Math.round(kb)) + ' KB'
+    var mb = kb / 1024
+    return (mb < 10 ? mb.toFixed(1) : Math.round(mb)) + ' MB'
+  }
+
+  var helpers = { validateDraft: validateDraft, groupEntries: groupEntries, nextToken: nextToken, buildEntriesQuery: buildEntriesQuery, workspaceOptions: workspaceOptions, errorKeyFor: errorKeyFor, validateImportDoc: validateImportDoc, importSummary: importSummary, pageSlice: pageSlice, entryDetailRows: entryDetailRows, relativeTime: relativeTime, formatBytes: formatBytes }
 
   // ===== node 测试导出（CJS） =====
   if (typeof module !== 'undefined' && module.exports) {
@@ -244,6 +253,48 @@
     imported: '导入完成',
     errDuplicate: '目标作用域已有相同内容的记忆',
     errImportDoc: '不是有效的 dsh-memory 导出文件（format/version/entries 不符）',
+    tabMemories: '记忆',
+    tabSettings: '设置',
+    settingsSubtitle: '注入 · 隐私 · 存储 · 面板',
+    groupInjection: '注入与召回',
+    groupPrivacy: '隐私护栏',
+    groupStorage: '存储与备份',
+    groupPanel: '面板偏好',
+    autoInjectLabel: '自动注入记忆',
+    autoInjectDesc: '装配系统提示时召回记忆（关闭后工具仍可用）',
+    budgetLabel: '注入字符预算',
+    budgetDesc: '超出预算的条目改用 memory_search 获取',
+    priorityNote: '注入顺序固定：偏好 → 决策 → 事实（同级新者优先）',
+    privacyLabel: '机密拦截 · 始终启用',
+    privacyDesc: '密码 / 密钥 / token 永不写入记忆，此护栏不可关闭。',
+    dataRootLabel: '数据目录',
+    storageUsageLabel: '存储占用',
+    storageEntries: '{n} 条记忆',
+    autoBackupLabel: '自动备份',
+    autoBackupDesc: '每天自动导出全量记忆到 backups/ 目录',
+    retentionLabel: '备份保留份数',
+    retentionDesc: '超出时自动删除最旧的备份（仅删备份，不删记忆）',
+    lastBackupLabel: '上次备份',
+    backupCount: '{n} 份备份',
+    neverBackup: '尚未备份',
+    backupNow: '立即备份',
+    backupDone: '备份完成',
+    defaultViewLabel: '默认视图',
+    pageSizeLabel: '每页条数',
+    animationsLabel: '界面动效',
+    animationsDesc: '卡片入场、悬停浮起等动画',
+    relativeTimeLabel: '相对时间',
+    relativeTimeDesc: '显示「N 小时前」而非绝对时间',
+    viewAll: '全局＋当前工作区',
+    viewGlobal: '仅全局',
+    viewWorkspace: '当前工作区',
+    resetDefaults: '恢复默认',
+    resetDone: '已恢复默认设置',
+    settingsSaved: '设置已保存',
+    saving: '保存中…',
+    copyPath: '复制路径',
+    pathCopied: '已复制路径',
+    enabledNote: '插件总开关 enabled 由 profile 配置管理（关闭会卸载整个插件）。',
   }
   var EN = {
     nav: 'Memory',
@@ -336,6 +387,48 @@
     imported: 'Import complete',
     errDuplicate: 'Identical memory already exists in the target scope',
     errImportDoc: 'Not a valid dsh-memory export file (format/version/entries mismatch)',
+    tabMemories: 'Memories',
+    tabSettings: 'Settings',
+    settingsSubtitle: 'Injection · Privacy · Storage · Panel',
+    groupInjection: 'Injection & recall',
+    groupPrivacy: 'Privacy guard',
+    groupStorage: 'Storage & backup',
+    groupPanel: 'Panel preferences',
+    autoInjectLabel: 'Auto-inject memories',
+    autoInjectDesc: 'Recall memories when assembling the system prompt (tools still work when off)',
+    budgetLabel: 'Injection character budget',
+    budgetDesc: 'Entries beyond the budget stay reachable via memory_search',
+    priorityNote: 'Fixed injection order: preference → decision → fact (newest first within a category)',
+    privacyLabel: 'Credential block · always on',
+    privacyDesc: 'Passwords / keys / tokens are never stored. This guard cannot be disabled.',
+    dataRootLabel: 'Data directory',
+    storageUsageLabel: 'Storage usage',
+    storageEntries: '{n} memories',
+    autoBackupLabel: 'Automatic backup',
+    autoBackupDesc: 'Export all memories to backups/ daily',
+    retentionLabel: 'Backups to keep',
+    retentionDesc: 'Oldest backups are pruned beyond this count (backups only, never memories)',
+    lastBackupLabel: 'Last backup',
+    backupCount: '{n} backups',
+    neverBackup: 'No backup yet',
+    backupNow: 'Back up now',
+    backupDone: 'Backup complete',
+    defaultViewLabel: 'Default view',
+    pageSizeLabel: 'Entries per page',
+    animationsLabel: 'Animations',
+    animationsDesc: 'Card entrance, hover lift and other motion',
+    relativeTimeLabel: 'Relative time',
+    relativeTimeDesc: 'Show “N hours ago” instead of absolute timestamps',
+    viewAll: 'Global + current workspace',
+    viewGlobal: 'Global only',
+    viewWorkspace: 'Current workspace',
+    resetDefaults: 'Reset to defaults',
+    resetDone: 'Settings reset to defaults',
+    settingsSaved: 'Settings saved',
+    saving: 'Saving…',
+    copyPath: 'Copy path',
+    pathCopied: 'Path copied',
+    enabledNote: 'The master switch enabled is managed in the profile config (disabling it unloads the whole plugin).',
   }
 
   var CSS = [
@@ -507,6 +600,54 @@
     '@keyframes dm_pulse{0%,100%{opacity:.5;transform:scale(1);}50%{opacity:.12;transform:scale(1.06);}}',
     '@keyframes dm_float{from{transform:translateY(0);}to{transform:translateY(-5px);}}',
     '@keyframes dm_bar{from{width:100%;}to{width:0%;}}',
+    // ---- 标签页 ----
+    '.dm_tabs{display:flex;gap:6px;margin:0 0 16px;border-bottom:1px solid var(--dm-line);padding-bottom:0;}',
+    '.dm_tab{display:inline-flex;align-items:center;gap:7px;border:none;background:transparent;color:var(--dm-ink2);font:inherit;font-size:13.5px;font-weight:600;padding:9px 16px;cursor:pointer;border-radius:10px 10px 0 0;position:relative;transition:color .15s,background .15s;}',
+    '.dm_tab:hover{color:var(--dm-ink);background:color-mix(in srgb,var(--dm-ink) 5%,transparent);}',
+    '.dm_tab:focus-visible{outline:none;box-shadow:var(--dm-ring);}',
+    '.dm_tab_active{color:var(--dm-primary);}',
+    '.dm_tab_active::after{content:"";position:absolute;left:12px;right:12px;bottom:-1px;height:2.5px;border-radius:3px;background:linear-gradient(90deg,var(--dm-primary),var(--dm-primary2));}',
+    '.dm_tab_n{font-size:11px;font-weight:600;color:var(--dm-ink3);background:var(--dm-line);border-radius:999px;padding:0 7px;corner-shape:round;}',
+    '.dm_tab_active .dm_tab_n{color:var(--dm-primary);background:color-mix(in srgb,var(--dm-primary) 14%,transparent);}',
+    // ---- 设置页 ----
+    '.dm_settings{display:flex;flex-direction:column;gap:16px;max-width:880px;animation:dm_enter .35s ease;}',
+    '.dm_setgroup{background:var(--dm-surface);border:1px solid var(--dm-line);border-radius:16px;padding:18px 20px;box-shadow:var(--dm-shadow);}',
+    '.dm_setgroup_head{display:flex;align-items:center;gap:11px;margin-bottom:6px;}',
+    '.dm_setgroup_icon{width:32px;height:32px;border-radius:9px;display:flex;align-items:center;justify-content:center;flex-shrink:0;}',
+    '.dm_setgroup_title{margin:0;font-size:14.5px;font-weight:700;letter-spacing:-.01em;}',
+    '.dm_setrow{display:flex;justify-content:space-between;align-items:center;gap:18px;padding:13px 0;border-top:1px solid var(--dm-line);}',
+    '.dm_setrow:first-of-type{border-top:none;}',
+    '.dm_setrow_text{flex:1;min-width:0;}',
+    '.dm_setrow_label{font-size:13px;font-weight:600;color:var(--dm-ink);}',
+    '.dm_setrow_desc{font-size:11.5px;color:var(--dm-ink3);margin-top:2px;line-height:1.5;}',
+    '.dm_setrow_ctrl{flex-shrink:0;display:flex;align-items:center;gap:8px;}',
+    '.dm_setnote{font-size:11.5px;color:var(--dm-ink3);padding:10px 12px;background:var(--dm-bg);border:1px solid var(--dm-line);border-radius:10px;margin-top:10px;display:flex;gap:7px;align-items:flex-start;line-height:1.5;}',
+    // ---- 开关 ----
+    '.dm_switch{position:relative;width:42px;height:24px;border:none;border-radius:999px;background:var(--dm-line2);cursor:pointer;padding:0;transition:background .2s;corner-shape:round;flex-shrink:0;}',
+    '.dm_switch:focus-visible{outline:none;box-shadow:var(--dm-ring);}',
+    '.dm_switch_on{background:linear-gradient(135deg,var(--dm-primary),var(--dm-primary2));}',
+    '.dm_switch:disabled{opacity:.45;cursor:default;}',
+    '.dm_switch_knob{position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.3);transition:transform .2s;corner-shape:round;}',
+    '.dm_switch_on .dm_switch_knob{transform:translateX(18px);}',
+    // ---- 滑杆 / 数字 ----
+    '.dm_slider_row{display:flex;align-items:center;gap:12px;}',
+    '.dm_range{width:180px;accent-color:var(--dm-primary);cursor:pointer;}',
+    '.dm_slider_val{font-size:12.5px;font-weight:600;color:var(--dm-ink);font-variant-numeric:tabular-nums;min-width:52px;text-align:right;}',
+    '.dm_numinput{width:72px;height:32px;border:1px solid var(--dm-line2);border-radius:8px;background:var(--dm-bg);color:var(--dm-ink);padding:0 8px;font:inherit;font-size:12.5px;text-align:center;}',
+    '.dm_numinput:focus{outline:none;border-color:var(--dm-primary);box-shadow:var(--dm-ring);}',
+    '.dm_setselect{height:34px;max-width:220px;}',
+    // ---- 隐私护栏 ----
+    '.dm_guard{display:flex;gap:12px;align-items:center;padding:14px 16px;border-radius:12px;background:var(--dm-success-soft);border:1px solid color-mix(in srgb,var(--dm-success) 35%,transparent);margin-top:8px;}',
+    '.dm_guard_icon{color:var(--dm-success);flex-shrink:0;display:flex;}',
+    '.dm_guard_title{font-size:13px;font-weight:700;color:var(--dm-ink);}',
+    '.dm_guard_desc{font-size:11.5px;color:var(--dm-ink2);margin-top:2px;line-height:1.5;}',
+    // ---- 路径 / 备份元信息 ----
+    '.dm_pathrow{display:flex;gap:8px;align-items:center;}',
+    '.dm_path{font-family:ui-monospace,"Cascadia Mono",Consolas,monospace;font-size:11.5px;color:var(--dm-ink2);background:var(--dm-bg);border:1px solid var(--dm-line);border-radius:8px;padding:7px 10px;flex:1;word-break:break-all;min-width:0;}',
+    '.dm_backupmeta{font-size:11.5px;color:var(--dm-ink3);display:flex;gap:14px;flex-wrap:wrap;margin-top:8px;}',
+    '.dm_setfooter{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;}',
+    '.dm_savestate{font-size:11.5px;color:var(--dm-ink3);display:flex;gap:6px;align-items:center;}',
+    '.dm_no_anim *,.dm_no_anim *::before,.dm_no_anim *::after{animation:none !important;transition:none !important;}',
     // ---- 响应式与动效偏好 ----
     '@media (max-width:720px){.dm_header{flex-direction:column;}.dm_cta{width:100%;justify-content:center;}.dm_stats{gap:12px;padding:12px 14px;}.dm_stats_div{display:none;}.dm_card_actions{flex-direction:row;}.dm_card{flex-wrap:wrap;}.dm_import_tiles{grid-template-columns:repeat(3,1fr);}}',
     '@media (prefers-reduced-motion:reduce){.dm_page *,.dm_page *::before,.dm_page *::after,.dm_toast,.dm_selbar,.dm_overlay,.dm_dialog{animation:none !important;transition:none !important;}}',
@@ -545,6 +686,9 @@
         checkCircle: ['M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z', 'M8.5 12.5l2.5 2.5 4.5-5'],
         tag: ['M20.6 13.4L11 3.8A2 2 0 0 0 9.6 3H5a2 2 0 0 0-2 2v4.6c0 .5.2 1 .6 1.4l9.6 9.6a2 2 0 0 0 2.8 0l4.6-4.6a2 2 0 0 0 0-2.8z', 'M7.5 7.5h.01'],
         layers: ['M12 3l9 5-9 5-9-5 9-5z', 'M3 13l9 5 9-5'],
+        lock: ['M6 10V8a6 6 0 0 1 12 0v2', 'M5 10h14v10H5z', 'M12 14v3'],
+        database: ['M12 8c4.4 0 8-1.3 8-3s-3.6-3-8-3-8 1.3-8 3 3.6 3 8 3z', 'M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5', 'M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3'],
+        sliders: ['M4 21v-7', 'M4 10V3', 'M12 21v-9', 'M12 8V3', 'M20 21v-5', 'M20 12V3', 'M1 14h6', 'M9 8h6', 'M17 16h6'],
       }
 
       function Icon(props) {
@@ -642,6 +786,10 @@
           entries: function (params) { return request(API_BASE + '/entries' + buildEntriesQuery(params)) },
           stats: function (params) { return request(API_BASE + '/stats' + buildEntriesQuery(params)) },
           export: function () { return request(API_BASE + '/export') },
+          settings: function () { return request(API_BASE + '/settings') },
+          saveSettings: function (input) { return post(API_BASE + '/settings', input) },
+          resetSettings: function () { return post(API_BASE + '/settings/reset', {}) },
+          backup: function () { return post(API_BASE + '/backup', {}) },
           save: function (input) { return post(API_BASE + '/save', input) },
           update: function (input) { return post(API_BASE + '/update', input) },
           forget: function (input) { return post(API_BASE + '/forget', input) },
@@ -732,7 +880,7 @@
                 entry.scope === 'global' ? t('scopeGlobal') : t('scopeWorkspace')),
               h('span', { className: 'dm_time', title: formatTime(entry.updated) },
                 h(Icon, { name: 'clock', size: 11, style: { verticalAlign: '-1px', marginRight: 3 } }),
-                relativeTime(entry.updated, Date.now(), uiLang()))),
+                props.useRelative === false ? formatTime(entry.updated) : relativeTime(entry.updated, Date.now(), uiLang()))),
             h('div', {
               className: 'dm_content' + (expanded ? ' dm_content_open' : ''),
               title: entry.content,
@@ -927,6 +1075,104 @@
           h('span', { className: 'dm_toast_bar', style: { animationDuration: (toast.duration || 2600) + 'ms' } }))
       }
 
+      function Toggle(props) {
+        return h('button', {
+          type: 'button', role: 'switch', 'aria-checked': props.checked, 'aria-label': props.label,
+          className: 'dm_switch' + (props.checked ? ' dm_switch_on' : ''),
+          disabled: props.disabled, onClick: function () { props.onChange(!props.checked) },
+        }, h('span', { className: 'dm_switch_knob' }))
+      }
+
+      function Slider(props) {
+        return h('div', { className: 'dm_slider_row' },
+          h('input', {
+            type: 'range', className: 'dm_range', min: props.min, max: props.max, step: props.step || 1,
+            value: props.value, 'aria-label': props.label, disabled: props.disabled,
+            onChange: function (e) { props.onChange(Number(e.target.value)) },
+          }),
+          h('span', { className: 'dm_slider_val' }, props.value))
+      }
+
+      function SettingRow(props) {
+        return h('div', { className: 'dm_setrow' },
+          h('div', { className: 'dm_setrow_text' },
+            h('div', { className: 'dm_setrow_label' }, props.label),
+            props.desc ? h('div', { className: 'dm_setrow_desc' }, props.desc) : null),
+          h('div', { className: 'dm_setrow_ctrl' }, props.children))
+      }
+
+      function SettingsGroup(props) {
+        return h('section', { className: 'dm_setgroup' },
+          h('div', { className: 'dm_setgroup_head' },
+            h('span', { className: 'dm_setgroup_icon', style: props.style }, h(Icon, { name: props.icon, size: 16, strokeWidth: 1.9 })),
+            h('h3', { className: 'dm_setgroup_title' }, props.title)),
+          props.children)
+      }
+
+      function SettingsPage(props) {
+        var t = props.t
+        var view = props.view
+        var draft = props.draft
+        if (!view || !draft) return h(Skeletons)
+        var bounds = view.bounds
+        var meta = view.meta
+        function set(key) { return function (value) { props.onChange(key, value) } }
+        function copyPath() {
+          copyText(meta.root).then(function () { props.onToast(t('pathCopied'), 'ok') }, function () { props.onToast(t('copyFailed'), 'error') })
+        }
+        return h('div', { className: 'dm_settings' },
+          h(SettingsGroup, { icon: 'layers', title: t('groupInjection'), style: { color: 'var(--dm-primary)', background: 'color-mix(in srgb,var(--dm-primary) 12%,transparent)' } },
+            h(SettingRow, { label: t('autoInjectLabel'), desc: t('autoInjectDesc') },
+              h(Toggle, { checked: draft.autoInject, onChange: set('autoInject'), label: t('autoInjectLabel'), disabled: props.busy })),
+            h(SettingRow, { label: t('budgetLabel'), desc: t('budgetDesc') },
+              h(Slider, { min: 0, max: bounds.budgetMax, step: 100, value: draft.injectionBudgetChars, onChange: set('injectionBudgetChars'), label: t('budgetLabel'), disabled: props.busy })),
+            h('div', { className: 'dm_setnote' }, h(Icon, { name: 'info', size: 14, style: { flexShrink: 0, marginTop: 1 } }), t('priorityNote')),
+            h('div', { className: 'dm_setnote' }, h(Icon, { name: 'info', size: 14, style: { flexShrink: 0, marginTop: 1 } }), t('enabledNote'))),
+          h(SettingsGroup, { icon: 'lock', title: t('groupPrivacy'), style: { color: 'var(--dm-success)', background: 'var(--dm-success-soft)' } },
+            h('div', { className: 'dm_guard' },
+              h('span', { className: 'dm_guard_icon' }, h(Icon, { name: 'checkCircle', size: 22, strokeWidth: 1.9 })),
+              h('div', null,
+                h('div', { className: 'dm_guard_title' }, t('privacyLabel')),
+                h('div', { className: 'dm_guard_desc' }, t('privacyDesc'))))),
+          h(SettingsGroup, { icon: 'database', title: t('groupStorage'), style: { color: 'var(--dm-fact)', background: 'var(--dm-fact-soft)' } },
+            h(SettingRow, { label: t('dataRootLabel') },
+              h('div', { className: 'dm_pathrow' },
+                h('span', { className: 'dm_path' }, meta.root),
+                h('button', { className: 'dm_btn dm_btn_mini', onClick: copyPath }, h(Icon, { name: 'copy', size: 12 }), t('copyPath')))),
+            h(SettingRow, { label: t('storageUsageLabel') },
+              h('span', { className: 'dm_slider_val' }, formatBytes(meta.storage.bytes) + ' · ' + t('storageEntries').replace('{n}', String(meta.storage.entries)))),
+            h(SettingRow, { label: t('autoBackupLabel'), desc: t('autoBackupDesc') },
+              h(Toggle, { checked: draft.autoBackup, onChange: set('autoBackup'), label: t('autoBackupLabel'), disabled: props.busy })),
+            h(SettingRow, { label: t('retentionLabel'), desc: t('retentionDesc') },
+              h('input', {
+                type: 'number', className: 'dm_numinput', min: bounds.retentionMin, max: bounds.retentionMax,
+                value: draft.backupRetention, 'aria-label': t('retentionLabel'), disabled: props.busy,
+                onChange: function (e) { props.onChange('backupRetention', Number(e.target.value)) },
+              })),
+            h('div', { className: 'dm_backupmeta' },
+              h('span', null, t('lastBackupLabel') + ': ' + (meta.backup.lastBackup ? formatTime(meta.backup.lastBackup) : t('neverBackup'))),
+              h('span', null, t('backupCount').replace('{n}', String(meta.backup.count))),
+              h('button', { className: 'dm_btn dm_btn_mini', onClick: props.onBackup, disabled: props.busy }, h(Icon, { name: 'export', size: 12 }), t('backupNow')))),
+          h(SettingsGroup, { icon: 'sliders', title: t('groupPanel'), style: { color: 'var(--dm-pref)', background: 'var(--dm-pref-soft)' } },
+            h(SettingRow, { label: t('defaultViewLabel') },
+              h('select', { className: 'dm_select dm_setselect', value: draft.defaultView, 'aria-label': t('defaultViewLabel'), disabled: props.busy, onChange: function (e) { props.onChange('defaultView', e.target.value) } },
+                h('option', { value: 'all' }, t('viewAll')),
+                h('option', { value: 'global' }, t('viewGlobal')),
+                h('option', { value: 'workspace' }, t('viewWorkspace')))),
+            h(SettingRow, { label: t('pageSizeLabel') },
+              h('select', { className: 'dm_select dm_setselect', value: String(draft.pageSize), 'aria-label': t('pageSizeLabel'), disabled: props.busy, onChange: function (e) { props.onChange('pageSize', Number(e.target.value)) } },
+                bounds.pageSizes.map(function (n) { return h('option', { key: n, value: String(n) }, String(n)) }))),
+            h(SettingRow, { label: t('animationsLabel'), desc: t('animationsDesc') },
+              h(Toggle, { checked: draft.animations, onChange: set('animations'), label: t('animationsLabel'), disabled: props.busy })),
+            h(SettingRow, { label: t('relativeTimeLabel'), desc: t('relativeTimeDesc') },
+              h(Toggle, { checked: draft.relativeTime, onChange: set('relativeTime'), label: t('relativeTimeLabel'), disabled: props.busy }))),
+          h('div', { className: 'dm_setfooter' },
+            h('button', { className: 'dm_btn dm_btn_danger', onClick: props.onReset, disabled: props.busy }, h(Icon, { name: 'undo', size: 14 }), t('resetDefaults')),
+            h('span', { className: 'dm_savestate' },
+              props.saving ? h(Icon, { name: 'clock', size: 13 }) : props.savedOnce ? h(Icon, { name: 'check', size: 13, strokeWidth: 2.2 }) : null,
+              props.saving ? t('saving') : props.savedOnce ? t('settingsSaved') : '')))
+      }
+
       function currentSessionCwd(ctx) {
         try {
           var sessions = ctx.get('sessions')
@@ -987,6 +1233,16 @@
         var errorTextState = errorState[0]; var setErrorText = errorState[1]
         var listErrorState = useState('')
         var listError = listErrorState[0]; var setListError = listErrorState[1]
+        var tabState = useState('memories')
+        var tab = tabState[0]; var setTab = tabState[1]
+        var settingsState = useState(null)
+        var settings = settingsState[0]; var setSettings = settingsState[1]
+        var draftState = useState(null)
+        var draft = draftState[0]; var setDraft = draftState[1]
+        var savingState = useState(false)
+        var saving = savingState[0]; var setSaving = savingState[1]
+        var savedOnceState = useState(false)
+        var savedOnce = savedOnceState[0]; var setSavedOnce = savedOnceState[1]
 
         var editorRef = useRef(null)
         editorRef.current = editor
@@ -996,6 +1252,12 @@
         modalOpenRef.current = !!(editor || confirm || importPlan)
         var selectedRef = useRef(selected)
         selectedRef.current = selected
+        var draftRef = useRef(draft)
+        draftRef.current = draft
+        var dirtyRef = useRef(false)
+        var viewInitialized = useRef(false)
+        var settingsSeq = useRef(0)
+        var pageSize = (settings && settings.effective && settings.effective.pageSize) || PAGE_SIZE
 
         function showToast(kind, text, action) {
           toastSeq.current += 1
@@ -1010,13 +1272,13 @@
           if (selection === 'global') scopeParams.scope = 'global'
           else if (selection === 'all') { scopeParams.scope = 'all'; scopeParams.workspace = currentCwd }
           else { scopeParams.scope = 'workspace'; scopeParams.workspace = selection }
-          var params = Object.assign({}, scopeParams, { query: query, category: categoryFilter, limit: PAGE_SIZE + 1, offset: page * PAGE_SIZE })
+          var params = Object.assign({}, scopeParams, { query: query, category: categoryFilter, limit: pageSize + 1, offset: page * pageSize })
           var statsParams = Object.assign({}, scopeParams, { query: query })
           return Promise.all([api.entries(params), api.stats(statsParams)]).then(function (results) {
             if (seq !== seqRef.current) return
             var doc = results[0]
             setStats(results[1].stats)
-            var sliced = pageSlice(doc.entries, PAGE_SIZE)
+            var sliced = pageSlice(doc.entries, pageSize)
             // 当前页被删空（如删掉末页最后一条）→ 自动回退一页，避免误导性空态。
             if (sliced.items.length === 0 && page > 0) { setPage(page - 1); return }
             setEntries(sliced.items)
@@ -1026,7 +1288,7 @@
             if (seq !== seqRef.current) return
             setListError(errorText(err, t))
           })
-        }, [api, query, categoryFilter, page, selection, currentCwd, t])
+        }, [api, query, categoryFilter, page, pageSize, selection, currentCwd, t])
 
         // 写入完成回调可能捕获旧的 refreshEntries（busy 期间过滤条件可变）；
         // 一律经 ref 调用最新版本，避免陈旧过滤结果覆盖列表。
@@ -1052,6 +1314,74 @@
         }, [api, ctx, t])
 
         useEffect(function () { loadInitial() }, [loadInitial])
+
+        // 设置：加载有效值作为可编辑草稿；改动防抖自动保存（改完即生效）。
+        var loadSettings = useCallback(function () {
+          var seq = ++settingsSeq.current
+          return api.settings().then(function (view) {
+            if (seq !== settingsSeq.current) return
+            setSettings(view)
+            setDraft(view.effective)
+          }).catch(function () {})
+        }, [api])
+
+        useEffect(function () { loadSettings() }, [loadSettings])
+
+        // 首次拿到设置且面板就绪时，应用默认视图（workspace → 当前工作区）。
+        useEffect(function () {
+          if (viewInitialized.current || !settings || phase !== 'ready') return
+          viewInitialized.current = true
+          var dv = settings.effective.defaultView
+          if (dv === 'global') setSelection('global')
+          else if (dv === 'workspace' && currentCwd) setSelection(currentCwd)
+        }, [settings, phase, currentCwd])
+
+        function changeSetting(key, value) {
+          dirtyRef.current = true
+          setDraft(function (prev) {
+            var next = Object.assign({}, prev)
+            next[key] = value
+            return next
+          })
+        }
+
+        useEffect(function () {
+          if (!dirtyRef.current || !draft) return undefined
+          var timer = setTimeout(function () {
+            dirtyRef.current = false
+            var seq = ++settingsSeq.current
+            setSaving(true)
+            api.saveSettings(draftRef.current).then(function (view) {
+              if (seq !== settingsSeq.current) return
+              setSettings(view)
+              setSavedOnce(true)
+            }).catch(function (err) {
+              showToast('error', errorText(err, t))
+            }).then(function () { setSaving(false) })
+          }, 600)
+          return function () { clearTimeout(timer) }
+        }, [draft, api, t])
+
+        function resetSettings() {
+          if (busy) return
+          setBusy(true)
+          api.resetSettings().then(function (view) {
+            setSettings(view)
+            setDraft(view.effective)
+            dirtyRef.current = false
+            setSavedOnce(true)
+            showToast('ok', t('resetDone'))
+          }).catch(writeFailure).then(function () { setBusy(false) })
+        }
+
+        function backupNow() {
+          if (busy) return
+          setBusy(true)
+          api.backup().then(function () {
+            showToast('ok', t('backupDone'))
+            return loadSettings()
+          }).catch(writeFailure).then(function () { setBusy(false) })
+        }
 
         // 选择/查询/分类/页码变化 → 刷新列表（查询防抖 300ms）
         useEffect(function () {
@@ -1324,6 +1654,7 @@
               return h(MemoryCard, {
                 key: entry.id, entry: entry, t: t, index: offset + i,
                 selected: selected.indexOf(entry.id) !== -1,
+                useRelative: !settings || settings.effective.relativeTime,
                 onToggleSelect: toggleSelect,
                 onEdit: openEdit, onDelete: openDelete,
                 onTagClick: changeQuery,
@@ -1343,52 +1674,71 @@
 
         var fileInputRef = useRef(null)
 
-        return h('div', { className: 'dm_page' + (selected.length > 0 ? ' dm_selecting' : '') },
+        var noAnim = settings && !settings.effective.animations
+        return h('div', { className: 'dm_page' + (selected.length > 0 ? ' dm_selecting' : '') + (noAnim ? ' dm_no_anim' : '') },
           h('div', { className: 'dm_header' },
             h('div', { className: 'dm_brand' },
               h('div', { className: 'dm_brand_medal' }, h(NavIcon, { size: 24 })),
               h('div', null,
                 h('div', { className: 'dm_overline' }, t('overline')),
-                h('h1', { className: 'dm_title' }, t('title')),
-                h('div', { className: 'dm_subtitle' }, t('subtitle')))),
-            h('button', { className: 'dm_btn dm_btn_primary dm_cta', onClick: openCreate, disabled: busy }, h(Icon, { name: 'plus', size: 15, strokeWidth: 2.2 }), t('newMemory'))),
-          renderStats(),
-          h('div', { className: 'dm_toolbar_wrap' },
-            h('div', { className: 'dm_toolbar' },
-              h('select', { className: 'dm_select', 'aria-label': t('scopeLabel'), value: selection, onChange: function (e) { changeSelection(e.target.value) } },
-                options.map(function (opt) {
-                  var label = opt.kind === 'all' ? t('scopeAll')
-                    : opt.kind === 'global' ? t('scopeGlobal')
-                      : (opt.value === currentCwd ? '● ' : '') + opt.value + ' (' + (opt.count || 0) + ')'
-                  return h('option', { key: opt.value, value: opt.value }, label)
-                }),
-                unknownWorkspaces.map(function (w) {
-                  return h('option', { key: 'unknown-' + w.key, value: 'unknown-' + w.key, disabled: true }, t('workspaceUnknown') + ' (' + String(w.key).slice(0, 8) + '…)')
-                })),
-              h('div', { className: 'dm_searchwrap' },
-                h('span', { className: 'dm_search_icon' }, h(Icon, { name: 'search', size: 15 })),
-                h('input', {
-                  ref: searchRef, className: 'dm_search', type: 'text', inputMode: 'search',
-                  'aria-label': t('searchPlaceholder'), placeholder: t('searchPlaceholder'), title: t('searchHint'),
-                  value: query, onChange: function (e) { changeQuery(e.target.value) },
-                }),
-                query ? h('button', { className: 'dm_search_clear', 'aria-label': t('clearFilters'), onClick: function () { changeQuery('') } }, h(Icon, { name: 'x', size: 12, strokeWidth: 2.2 })) : null),
-              h('button', { className: 'dm_btn dm_toolbtn', onClick: handleExport, disabled: busy || phase !== 'ready' }, h(Icon, { name: 'export', size: 15 }), t('export')),
-              h('button', { className: 'dm_btn dm_toolbtn', onClick: function () { if (fileInputRef.current) fileInputRef.current.click() }, disabled: busy || phase !== 'ready' }, h(Icon, { name: 'import', size: 15 }), t('import')),
-              h('input', { ref: fileInputRef, type: 'file', accept: '.json,application/json', style: { display: 'none' }, onChange: handleImportFile }))),
-          unknownWorkspaces.length > 0 ? h('div', { className: 'dm_hint', style: { margin: '8px 0 0' } }, t('unknownWorkspaceHint')) : null,
-          phase === 'loading' ? h(Skeletons)
-            : phase === 'error' ? h('div', { className: 'dm_empty' },
-              h(Icon, { name: 'alert', size: 28, style: { color: 'var(--dm-danger)', marginBottom: 10 } }),
-              h('div', null, t('loadError') + ': ' + errorTextState),
-              h('button', { className: 'dm_btn', style: { marginTop: 12 }, onClick: function () { loadInitial() } }, h(Icon, { name: 'undo', size: 13 }), t('retry')))
-              : renderList(),
-          selected.length > 0
-            ? h('div', { className: 'dm_selbar' },
-              h('span', { className: 'dm_selbar_n' }, t('bulkSelected').replace('{n}', String(selected.length))),
-              h('button', { className: 'dm_btn dm_btn_danger_solid', onClick: openBulkDelete, disabled: busy }, h(Icon, { name: 'trash', size: 14 }), t('bulkDelete')),
-              h('button', { className: 'dm_btn', onClick: function () { setSelected([]) }, disabled: busy }, t('clearSelection')))
-            : null,
+                h('h1', { className: 'dm_title' }, tab === 'settings' ? t('tabSettings') : t('title')),
+                h('div', { className: 'dm_subtitle' }, tab === 'settings' ? t('settingsSubtitle') : t('subtitle')))),
+            tab === 'memories'
+              ? h('button', { className: 'dm_btn dm_btn_primary dm_cta', onClick: openCreate, disabled: busy }, h(Icon, { name: 'plus', size: 15, strokeWidth: 2.2 }), t('newMemory'))
+              : null),
+          h('div', { className: 'dm_tabs', role: 'tablist' },
+            h('button', {
+              role: 'tab', 'aria-selected': tab === 'memories', className: 'dm_tab' + (tab === 'memories' ? ' dm_tab_active' : ''),
+              onClick: function () { setTab('memories') },
+            }, h(Icon, { name: 'layers', size: 15 }), t('tabMemories'), h('span', { className: 'dm_tab_n' }, stats ? String(stats.total) : '…')),
+            h('button', {
+              role: 'tab', 'aria-selected': tab === 'settings', className: 'dm_tab' + (tab === 'settings' ? ' dm_tab_active' : ''),
+              onClick: function () { setTab('settings') },
+            }, h(Icon, { name: 'sliders', size: 15 }), t('tabSettings'))),
+          tab === 'memories'
+            ? h('div', null,
+              renderStats(),
+              h('div', { className: 'dm_toolbar_wrap' },
+                h('div', { className: 'dm_toolbar' },
+                  h('select', { className: 'dm_select', 'aria-label': t('scopeLabel'), value: selection, onChange: function (e) { changeSelection(e.target.value) } },
+                    options.map(function (opt) {
+                      var label = opt.kind === 'all' ? t('scopeAll')
+                        : opt.kind === 'global' ? t('scopeGlobal')
+                          : (opt.value === currentCwd ? '● ' : '') + opt.value + ' (' + (opt.count || 0) + ')'
+                      return h('option', { key: opt.value, value: opt.value }, label)
+                    }),
+                    unknownWorkspaces.map(function (w) {
+                      return h('option', { key: 'unknown-' + w.key, value: 'unknown-' + w.key, disabled: true }, t('workspaceUnknown') + ' (' + String(w.key).slice(0, 8) + '…)')
+                    })),
+                  h('div', { className: 'dm_searchwrap' },
+                    h('span', { className: 'dm_search_icon' }, h(Icon, { name: 'search', size: 15 })),
+                    h('input', {
+                      ref: searchRef, className: 'dm_search', type: 'text', inputMode: 'search',
+                      'aria-label': t('searchPlaceholder'), placeholder: t('searchPlaceholder'), title: t('searchHint'),
+                      value: query, onChange: function (e) { changeQuery(e.target.value) },
+                    }),
+                    query ? h('button', { className: 'dm_search_clear', 'aria-label': t('clearFilters'), onClick: function () { changeQuery('') } }, h(Icon, { name: 'x', size: 12, strokeWidth: 2.2 })) : null),
+                  h('button', { className: 'dm_btn dm_toolbtn', onClick: handleExport, disabled: busy || phase !== 'ready' }, h(Icon, { name: 'export', size: 15 }), t('export')),
+                  h('button', { className: 'dm_btn dm_toolbtn', onClick: function () { if (fileInputRef.current) fileInputRef.current.click() }, disabled: busy || phase !== 'ready' }, h(Icon, { name: 'import', size: 15 }), t('import')),
+                  h('input', { ref: fileInputRef, type: 'file', accept: '.json,application/json', style: { display: 'none' }, onChange: handleImportFile }))),
+              unknownWorkspaces.length > 0 ? h('div', { className: 'dm_hint', style: { margin: '8px 0 0' } }, t('unknownWorkspaceHint')) : null,
+              phase === 'loading' ? h(Skeletons)
+                : phase === 'error' ? h('div', { className: 'dm_empty' },
+                  h(Icon, { name: 'alert', size: 28, style: { color: 'var(--dm-danger)', marginBottom: 10 } }),
+                  h('div', null, t('loadError') + ': ' + errorTextState),
+                  h('button', { className: 'dm_btn', style: { marginTop: 12 }, onClick: function () { loadInitial() } }, h(Icon, { name: 'undo', size: 13 }), t('retry')))
+                  : renderList(),
+              selected.length > 0
+                ? h('div', { className: 'dm_selbar' },
+                  h('span', { className: 'dm_selbar_n' }, t('bulkSelected').replace('{n}', String(selected.length))),
+                  h('button', { className: 'dm_btn dm_btn_danger_solid', onClick: openBulkDelete, disabled: busy }, h(Icon, { name: 'trash', size: 14 }), t('bulkDelete')),
+                  h('button', { className: 'dm_btn', onClick: function () { setSelected([]) }, disabled: busy }, t('clearSelection')))
+                : null)
+            : h(SettingsPage, {
+              view: settings, draft: draft, busy: busy, saving: saving, savedOnce: savedOnce, t: t,
+              onChange: changeSetting, onReset: resetSettings, onBackup: backupNow,
+              onToast: function (text, kind) { showToast(kind, text) },
+            }),
           editor ? h(EditorModal, { draft: editor, setDraft: setEditor, t: t, workspaceTarget: workspaceTarget, busy: busy, onSave: handleSave, onClose: function () { if (!busy) setEditor(null) } }) : null,
           confirm ? h(ConfirmModal, { entries: confirm.entries, t: t, busy: busy, onConfirm: handleDelete, onClose: function () { if (!busy) setConfirm(null) } }) : null,
           importPlan ? h(ImportModal, { plan: importPlan.plan, t: t, busy: busy, onConfirm: confirmImport, onClose: function () { if (!busy) setImportPlan(null) } }) : null,
