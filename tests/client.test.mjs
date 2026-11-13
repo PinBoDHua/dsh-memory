@@ -326,6 +326,8 @@ test('errorKeyFor maps service and route errors to locale keys', () => {
   assert.equal(errorKeyFor({ status: 403, message: 'loopback-only' }), 'errLoopback')
   assert.equal(errorKeyFor({ status: 400, message: 'invalid-json' }), 'errInvalidJson')
   assert.equal(errorKeyFor({ status: 413, message: 'body-too-large' }), 'errBodyTooLarge')
+  // 0.24.24：宿主未知异常统一 internal（不回传路径）；面板显示本地化通用错误。
+  assert.equal(errorKeyFor({ status: 500, code: 'internal', message: 'internal' }), 'errInternal')
   assert.equal(errorKeyFor({ status: 500, message: 'boom' }), null)
   assert.equal(errorKeyFor(null), null)
 })

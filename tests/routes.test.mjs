@@ -307,6 +307,20 @@ test('import bodies larger than the old 1MB cap are accepted (backup restore pat
   assert.equal(dry.json().result.entries.length, 1)
 })
 
+test('unknown filesystem errors are sanitized to 500 code=internal (no absolute paths leak)', async () => {
+  const { service, handlers, root } = setup()
+  // 让 global 目录无法创建：用同名文件占位 → save 内部 mkdir/写文件抛 EEXIST。
+  fs.writeFileSync(path.join(root, 'global'), 'not a directory', 'utf8')
+  const res = fakeRes()
+  await handlers.save(fakeReq({ method: 'POST', url: '/plugins/dsh-memory/save', headers: { 'x-rpc-key': TOKEN }, body: { content: '触发原始异常', scope: 'global' } }), res)
+  assert.equal(res.statusCode, 500)
+  const body = res.json()
+  assert.equal(body.code, 'internal')
+  assert.equal(body.error, 'internal error')
+  assert.ok(!String(res.body).includes(root), 'response must not leak the data root path')
+  assert.ok(!String(res.body).includes('.tmp-'), 'response must not leak temp file names')
+})
+
 test('GET /stats honours status/include_* and category filters', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-memory-stats-'))
   const service = createMemoryService({ root })

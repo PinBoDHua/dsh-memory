@@ -107,6 +107,32 @@ test('import repairs dangling supersede pointers; in-batch forward refs are kept
   assert.equal(c.superseded_by, 'm-dangle-d')
 })
 
+test('import rejects self/cycle/unreachable supersede pointers (never permanently hidden)', () => {
+  const { root, service } = tmpService()
+  // 先落盘一个无关 global 目标（没有反向 supersedes）与一个工作区目标。
+  const seed = service.import({ entries: [
+    { id: 'm-bad-unrelated', content: '无关目标', scope: 'global' },
+    { id: 'm-bad-ws-target', content: '其它工作区目标', scope: 'workspace', workspace: WS },
+  ] })
+  assert.equal(seed.repaired, 0)
+  const res = service.import({ entries: [
+    { id: 'm-bad-self', content: '自指条目', scope: 'global', superseded_by: 'm-bad-self' },
+    { id: 'm-bad-cycle-a', content: '环甲', scope: 'global', superseded_by: 'm-bad-cycle-b' },
+    { id: 'm-bad-cycle-b', content: '环乙', scope: 'global', superseded_by: 'm-bad-cycle-a' },
+    { id: 'm-bad-scope', content: 'global 指向别的工作区', scope: 'global', superseded_by: 'm-bad-ws-target' },
+    { id: 'm-bad-unrelated-succ', content: '指向无关既有目标', scope: 'global', superseded_by: 'm-bad-unrelated' },
+  ] })
+  assert.equal(res.repaired, 5, JSON.stringify({ repaired: res.repaired, entries: res.entries?.map((e) => [e.id, e.superseded_by]) }))
+  const all = store.listScope(root, 'global', undefined)
+  for (const id of ['m-bad-self', 'm-bad-cycle-a', 'm-bad-cycle-b', 'm-bad-scope', 'm-bad-unrelated-succ']) {
+    assert.equal(all.find((e) => e.id === id).superseded_by, undefined, `${id} must not stay hidden`)
+  }
+  const visibleIds = service.search({ scope: 'global', limit: 50 }).map((e) => e.id)
+  for (const id of ['m-bad-self', 'm-bad-cycle-a', 'm-bad-cycle-b', 'm-bad-scope', 'm-bad-unrelated-succ']) {
+    assert.ok(visibleIds.includes(id), `${id} visible`)
+  }
+})
+
 test('successful batch import writes all entries and refreshes workspace index', () => {
   const { root, service } = tmpService()
   const res = service.import({

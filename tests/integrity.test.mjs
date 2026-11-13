@@ -32,6 +32,23 @@ test('supersede rejects a target that already has a successor (no chain overwrit
   assert.equal(service.search({ query: '新决定', scope: 'global' }).length, 1)
 })
 
+test('forget cleans supersede references across workspaces (moved global successor deleted elsewhere)', () => {
+  const root = tmpRoot()
+  const service = createMemoryService({ root })
+  const cwdA = 'D:\\proj\\ws-a'
+  const cwdB = 'D:\\proj\\ws-b'
+  // A 工作区里 P 被 S 取代，随后 S 升级为 global；最后在 B 工作区删除 S。
+  const pred = service.save({ content: '跨工作区前驱记忆', scope: 'workspace', workspace: cwdA })
+  const succ = service.save({ content: '跨工作区后继记忆', scope: 'global', workspace: cwdA, supersedes: pred.entry.id })
+  assert.equal(store.findEntry(root, pred.entry.id, cwdA).superseded_by, succ.entry.id)
+  const forgotten = service.forget({ id: succ.entry.id, workspace: cwdB })
+  assert.equal(forgotten.deleted, true)
+  // 旧实现只扫 global＋B 工作区，P 会永久隐藏；现在应恢复可见且无悬垂指针。
+  const visible = service.search({ scope: 'workspace', workspace: cwdA })
+  assert.ok(visible.some((e) => e.id === pred.entry.id), 'predecessor visible after cross-workspace deletion')
+  assert.equal(store.findEntry(root, pred.entry.id, cwdA).superseded_by, undefined)
+})
+
 test('update rejects supersede cycles (A supersedes B, then B supersedes A)', () => {
   const root = tmpRoot()
   const service = createMemoryService({ root })

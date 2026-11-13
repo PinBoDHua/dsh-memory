@@ -3,6 +3,23 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.24.24] - 2026-11-13
+
+### 修复 Fixed（第四轮审计 P1/P2 数据安全批次）
+- **跨工作区取代链清理**：`forget/update/move` 的悬垂指针清理此前只扫 global＋当前 cwd；「A 工作区里 P 被 S 取代 → S 升级为 global → 在 B 工作区删除 S」会让 P 永久隐藏且工具无法修复。现在新增 `store.listEverywhere`（global＋全部工作区目录，返回原文件路径），两处清理统一全作用域扫描并按原路径原子写回。
+- **导入取代链不变量**：导入数据（手工编辑/第三方导出）现在拒绝 ① 自指 ② 批内环（A↔B…）③ 从条目自身作用域不可达的目标（global→workspace、跨工作区）④ 磁盘上已存在但未反向声明 `supersedes` 的无关目标；全部计入 `repaired` 且条目恢复可见。环检测用安全节点反向传播，线性复杂度，不会因大导入退化。
+- **未知异常脱敏**：`writeHandler/readHandler` 只透传已知业务 code；Node 原始错误（EEXIST/ENOTDIR、含本机绝对路径与 `.tmp-` 临时名）统一 `500 {code:'internal', error:'internal error'}`；客户端新增 `errInternal` 本地化文案（中英）。
+- **备份去重名纳入白名单**：`-1/-2` 后缀的备份现在被 `BACKUP_FILE_PATTERN` 识别并参与轮转；备份列表/轮转改为按 mtime 排序（同时间戳按名称），count/lastBackup/24h 节流不再失真。
+- **settings.json 覆盖层并发安全**：`writeOverlay/resetOverlay` 的读-改-写用 `.lock-settings` 跨进程锁包住（≤1s 超时），多窗口/多进程同时改不同键不再互相覆盖丢失。
+- **解析缓存默认上限 8192→32768**：20k 条目库上顺序全量扫描会把 LRU 冲刷到 0 命中（warm≈cold 9–11s）；提高默认上限后大库仍保持高命中（压测环境变量保留）。
+
+### 新增 Added
+- 测试：跨工作区 forget 恢复前驱；导入自指/环/作用域不可达/无关磁盘目标 5 类修复；路由未知异常脱敏（不含 root/.tmp）；settings 双进程并发写不同键不丢；`-1` 后缀备份计数与轮转。
+- live-check：导入不变量 dry-run、持锁设置写返回 internal 且不泄漏路径。
+
+### 验证证据
+- 单元 **280/280**；live **175/175**；真实 GUI **74/74**（数据根快照前后一致）
+
 ## [0.24.23] - 2026-11-13
 
 ### 修复 Fixed（第四轮审计已确认问题 + 0.24.19 回归）

@@ -318,9 +318,9 @@ test('backup refuses quickly (busy, no partial snapshot) while another process h
   assert.ok(ok.file)
 })
 
-test('two backups created in the same millisecond do not overwrite each other', () => {
+test('same-millisecond backups get unique names, are counted and rotated as plugin-owned files', () => {
   const { root, service } = tmpService()
-  service.save({ content: '同毫秒备份', scope: 'global' })
+  service.save({ content: '同毫秒备份统计', scope: 'global' })
   const RealDate = globalThis.Date
   const fixed = RealDate.parse('2026-05-01T12:00:00.000Z')
   globalThis.Date = class extends RealDate {
@@ -333,10 +333,16 @@ test('two backups created in the same millisecond do not overwrite each other', 
   try {
     const a = service.backup()
     const b = service.backup()
-    assert.notEqual(a.file, b.file, 'same-timestamp backups must get unique names')
+    assert.notEqual(a.file, b.file)
     const dir = path.join(root, 'backups')
     assert.ok(fs.existsSync(path.join(dir, a.file)))
     assert.ok(fs.existsSync(path.join(dir, b.file)))
+    // 去重名备份必须是插件自己的文件：计数正确、可被轮转。
+    assert.equal(service.settings().meta.backup.count, 2, 'both unique backups counted')
+    service.updateSettings({ backupRetention: 1 })
+    const c = service.backup()
+    assert.ok(fs.existsSync(path.join(dir, c.file)))
+    assert.equal(service.settings().meta.backup.count, 1, 'retention still applies to suffixed backups')
   } finally {
     globalThis.Date = RealDate
   }

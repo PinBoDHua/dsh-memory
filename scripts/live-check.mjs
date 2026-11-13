@@ -253,6 +253,37 @@ async function main() {
     ok('同 id 输入被分配为不同 id', ids.length === 2 && ids[0] !== ids[1], JSON.stringify(ids))
   })
 
+  await check('导入取代链不变量修复（0.24.24，dry-run）', async () => {
+    const im = await req('POST', '/import', { token, body: { dryRun: true, entries: [
+      { id: 'm-liveinv-self', content: `${RUN} 自指`, scope: 'global', superseded_by: 'm-liveinv-self' },
+      { id: 'm-liveinv-a', content: `${RUN} 环甲`, scope: 'global', superseded_by: 'm-liveinv-b' },
+      { id: 'm-liveinv-b', content: `${RUN} 环乙`, scope: 'global', superseded_by: 'm-liveinv-a' },
+      { id: 'm-liveinv-c', content: `${RUN} 前向引用`, scope: 'global', superseded_by: 'm-liveinv-d' },
+      { id: 'm-liveinv-d', content: `${RUN} 前向目标`, scope: 'global' },
+    ] } })
+    ok('导入不变量 dryRun 200', im.status === 200, `got ${im.status}`)
+    ok('自指+环被修复、批内前向引用保留', im.json?.result?.repaired === 3, JSON.stringify(im.json?.result?.repaired))
+    ok('dryRun 仍回传计划条目', Array.isArray(im.json?.result?.entries) && im.json?.result?.entries.length === 5)
+    ok('自指/环条目指针已清', (im.json?.result?.entries ?? []).every((e) => e.superseded_by !== e.id))
+  })
+
+  await check('未知异常统一 internal 且不泄漏本机路径（0.24.24）', async () => {
+    const lock = path.join(statusRoot, '.lock-settings')
+    try {
+      mkdirSync(lock, { recursive: true })
+      const r = await req('POST', '/settings', { token, body: { autoInject: true } })
+      const body = JSON.stringify(r.json ?? {})
+      ok('持锁设置写返回 500', r.status === 500, `got ${r.status}`)
+      ok('错误码统一 internal', r.json?.code === 'internal', body)
+      ok('错误体不回传数据根路径', !body.includes(statusRoot), body.slice(0, 200))
+      ok('错误体不含锁/临时文件名', !/\.lock-|\.tmp-/.test(body), body.slice(0, 200))
+    } finally {
+      try { rmSync(lock, { recursive: true, force: true }) } catch { /* ignore */ }
+    }
+    const back = await req('GET', '/settings', { token })
+    ok('锁释放后设置可读', back.status === 200, `got ${back.status}`)
+  })
+
   await check('解析缓存不破坏手工编辑即时生效（0.24.3）', async () => {
     const sv = await req('POST', '/save', { token, body: { content: `${RUN} 手工编辑正文`, scope: 'global', origin: 'auto' } })
     const id = sv.json?.result?.entry?.id ?? ''

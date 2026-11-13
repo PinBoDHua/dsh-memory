@@ -137,20 +137,20 @@ This file is the self-iteration ledger for dsh-memory: per-round increments, ver
 
 ### P1（下一轮优先）
 - [ ] **导入同步冻结宿主 + 无进度/幂等**：`service.import` 在锁内同步逐条落盘（5000 条 4.9s、20k 30s，期间宿主事件循环完全冻结）；32MB 上限允许 8.9–22 万条（90–330s）超过客户端 180s；超时后服务端继续写，merge 重试会覆盖用户新编辑。方案：客户端 200–500 条分片顺序 POST + 进度 + 已写入提示；服务端 `importId` 幂等回执 + 写批心跳刷新锁 mtime（需 `withLockAsync` 或 tick 回调）。
-- [ ] **跨工作区取代链清理不完整**：`clearSupersedeReferences/clearSupersededBy` 只扫 global＋当前 cwd；A 的工作区前驱被 global 后继取代、之后在 B 删除后继 → 前驱永久隐藏且工具无法修复（`memory_update` 无清 `superseded_by`）。方案：悬垂清理扫描 global＋全部工作区（新增 `listEverywhere`），或 `moveEntry` 跨 scope 时消解/拒绝跨作用域链。
+- [x] **跨工作区取代链清理不完整**：`clearSupersedeReferences/clearSupersededBy` 只扫 global＋当前 cwd；A 的工作区前驱被 global 后继取代、之后在 B 删除后继 → 前驱永久隐藏且工具无法修复（`memory_update` 无清 `superseded_by`）。方案：悬垂清理扫描 global＋全部工作区（新增 `listEverywhere`），或 `moveEntry` 跨 scope 时消解/拒绝跨作用域链。
 - [ ] **批量删除 = N 次全量扫描**：每条 forget 都 `listAll` 解析以清取代指针（5000 库删 100 条 21.9s）。方案：`/forget` 接受 `ids[]` 批量语义，一次建映射、批量删、单次引用清理、逐项结算。
 
 ### P2
-- [ ] **解析缓存 8192 上限在大库退化**：20k 条目 warm list ≈ cold（9–11s，顺序扫描把 LRU 冲空）；status/save/export/装配同步全量。方案：默认上限提高到 32768 或按库规模自适应（压测入口保留），DETAIL 写明内存上界。
+- [x] **解析缓存上限在大库退化**：20k 条目 warm list ≈ cold（9–11s，顺序扫描把 LRU 冲空）；status/save/export/装配同步全量。方案：默认上限提高到 32768 或按库规模自适应（压测入口保留），DETAIL 写明内存上界。
 - [ ] **/status 与设置响应同步全量**：20k 全 global 库 `/status` 9.5s（解析全部条目；客户端未消费 counts）、设置保存响应含 backup 全量信息 790ms；自动备份定时器冷缓存 9.6s。方案：status counts 改 readdir 计数或省略、storageUsage 签名缓存、首检延后。
-- [ ] **写/读路由未知异常未脱敏**：`writeHandler/readHandler` 把 Node 原始错误（含本机绝对路径、`.tmp-` 名）500 回传面板；import 已脱敏为 `io`。方案：未知 code 统一 `500 {code:'internal'}`，日志留原文；客户端 `errorKeyFor` 映射 internal。
-- [ ] **导入绕过取代链不变量**：自指、A↔B 环、目标仅存在于其它工作区/损坏文件时指针被保留 → 永久隐藏且工具不可修。方案：导入校验自指/同作用域可达/环检测，违规计入 repaired。
+- [x] **写/读路由未知异常未脱敏**：`writeHandler/readHandler` 把 Node 原始错误（含本机绝对路径、`.tmp-` 名）500 回传面板；import 已脱敏为 `io`。方案：未知 code 统一 `500 {code:'internal'}`，日志留原文；客户端 `errorKeyFor` 映射 internal。
+- [x] **导入绕过取代链不变量**：自指、A↔B 环、目标仅存在于其它工作区/损坏文件时指针被保留 → 永久隐藏且工具不可修。方案：导入校验自指/同作用域可达/环检测，违规计入 repaired。
 - [ ] **recall-preview 被 busy 翻转触发**：导出/查重/导入 dry-run 的 busy true→false 各多一次全量 `/recall-preview` 扫描。方案：用显式 `dataVersion` 替代 busy 依赖（写操作成功 +1）。
 - [ ] **三处操作后焦点掉 body**：审计弹窗取代（按钮 disabled 并移除）、保存失败弹窗、取消选择浮栏卸载。方案：回调/卸载后显式聚焦 `.dm_dialog` 或 `.dm_page`。
 
 ### P3
-- [ ] **备份 `-1` 后缀不被白名单识别**：同毫秒去重名永不轮转、count/lastBackup 失真、24h 节流可绕过。方案：正则允许 `(?:-\d{1,3})?`，轮转按 mtime 排序。
-- [ ] **settings.json 覆盖层读-改-写无跨进程锁**：两进程并发 patch 不同键 14/20 轮丢一个键。方案：`withLock(root/.lock-settings)` 包住 read-modify-write。
+- [x] **备份 `-1` 后缀不被白名单识别**（0.24.24：正则允许 `(?:-\d{1,3})?`，备份按 mtime 排序轮转，count/lastBackup 准确）。
+- [x] **settings.json 覆盖层读-改-写无跨进程锁**：两进程并发 patch 不同键 14/20 轮丢一个键。方案：`withLock(root/.lock-settings)` 包住 read-modify-write。
 - [ ] **withLock 长临界区/双释放风险**：临界区超过 staleMs 会被抢占；finally 无条件删锁可删他人锁。方案：写批心跳刷新 mtime、锁内 owner nonce 校验后释放。
 - [ ] **导出静默漏损坏条目**：`export` 跳过不可解析 `.md` 且无 skipped 计数；「全量备份」不完整无告警。方案：返回 `skipped/warnings` 并在面板提示。
 - [ ] **gui-check 中断不清理**（第四轮实测：强杀留下 3 条 `__gui_*` 测试记忆）：无 SIGINT/SIGTERM/异常清理注册表；启动不扫描上次残留。方案：模块级 cleanup 注册表统一 abort（清理→diff 断言→非 0），启动扫描 `__gui_`/`__livecheck_` 标记残留。

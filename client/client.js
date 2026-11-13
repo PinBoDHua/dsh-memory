@@ -178,6 +178,8 @@
     if (msg === 'loopback-only') return 'errLoopback'
     if (msg === 'invalid-json') return 'errInvalidJson'
     if (msg === 'body-too-large') return 'errBodyTooLarge'
+    // 未知异常在宿主端统一为 internal（不回传本机路径/Node 原始错误）。
+    if (msg === 'internal') return 'errInternal'
     if (msg === 'timeout') return 'errTimeout'
     if (msg === 'bad-response') return 'errBadResponse'
     if (err.status === 403) return 'errUnauthorized'
@@ -446,6 +448,7 @@ var IMPORT_TIMEOUT_MS = 180000
     errLoopback: '仅允许本机访问',
     errInvalidJson: '请求数据无效',
     errBodyTooLarge: '文件过大（超过 32 MB），请拆分后导入',
+    errInternal: '操作失败，请稍后重试',
     errRefreshed: '凭证已刷新，请重试',
     errTimeout: '请求超时，请重试',
     errNetwork: '网络异常，请检查连接后重试',
@@ -667,6 +670,7 @@ var IMPORT_TIMEOUT_MS = 180000
     errLoopback: 'Loopback access only',
     errInvalidJson: 'Invalid request data',
     errBodyTooLarge: 'File too large (over 32 MB); split it before importing',
+    errInternal: 'Operation failed; please retry',
     errRefreshed: 'Credentials refreshed; please retry',
     errTimeout: 'Request timed out; please retry',
     errNetwork: 'Network error; check your connection and retry',

@@ -708,13 +708,25 @@ async function main() {
       const secondUndo = await evaluate(`(() => ({ hasAction: document.querySelector('.dm_toast_action') !== null, text: (document.querySelector('.dm_toast_text') || {}).textContent || '' }))()`)
       check('连续删除后仍有撤销入口', secondUndo.hasAction, JSON.stringify(secondUndo))
       await evaluate(`(() => { const btn = document.querySelector('.dm_toast_action'); if (btn) btn.click(); return Boolean(btn) })()`)
-      await sleep(900)
-      const queuedUndo = await evaluate(`(() => ({ hasAction: document.querySelector('.dm_toast_action') !== null, text: (document.querySelector('.dm_toast_text') || {}).textContent || '' }))()`)
+      // 等排队的第一条撤销吐司出现（导入/刷新时序有波动，固定 sleep 会偶发假失败）。
+      let queuedUndo = { hasAction: false, text: '' }
+      for (let i = 0; i < 10; i += 1) {
+        await sleep(300)
+        queuedUndo = await evaluate(`(() => ({ hasAction: document.querySelector('.dm_toast_action') !== null, text: (document.querySelector('.dm_toast_text') || {}).textContent || '' }))()`)
+        if (queuedUndo.hasAction) break
+      }
       check('第一条删除的撤销吐司排队后仍可操作', queuedUndo.hasAction, JSON.stringify(queuedUndo))
-      await evaluate(`(() => { const btn = document.querySelector('.dm_toast_action'); if (btn) btn.click(); return Boolean(btn) })()`)
-      await sleep(1400)
-      const listKL = await apiJson(`/entries?query=${encodeURIComponent(marker)}&scope=global&limit=100&include_superseded=true&include_expired=true&include_archived=true`)
-      const restoredIds = new Set((listKL?.entries || []).map((e) => e.id))
+      if (queuedUndo.hasAction) {
+        await evaluate(`(() => { const btn = document.querySelector('.dm_toast_action'); if (btn) btn.click(); return Boolean(btn) })()`)
+      }
+      // 轮询到两条都恢复（导入落盘与列表刷新异步）。
+      let restoredIds = new Set()
+      for (let i = 0; i < 12; i += 1) {
+        await sleep(300)
+        const listKL = await apiJson(`/entries?query=${encodeURIComponent(marker)}&scope=global&limit=100&include_superseded=true&include_expired=true&include_archived=true`)
+        restoredIds = new Set((listKL?.entries || []).map((e) => e.id))
+        if (restoredIds.has(idK) && restoredIds.has(idL)) break
+      }
       check('连续删除的两条记忆都能撤销恢复', restoredIds.has(idK) && restoredIds.has(idL), JSON.stringify({ idK, idL, restored: [...restoredIds].filter((id) => id === idK || id === idL) }))
     } finally {
       // 清理验收临时记忆（失败路径也要清）。

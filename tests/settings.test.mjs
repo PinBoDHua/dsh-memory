@@ -4,9 +4,11 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import * as settings from '../lib/settings.js'
 
 function tmpRoot() {
@@ -82,4 +84,17 @@ test('writeOverlay merges and persists; resetOverlay removes the file', () => {
   settings.resetOverlay(root)
   assert.ok(!fs.existsSync(file))
   assert.deepEqual(settings.readOverlay(root), {})
+})
+
+test('concurrent process writes to different keys do not lose each other (overlay lock)', () => {
+  const root = tmpRoot()
+  const fixture = fileURLToPath(new URL('./fixtures/settings-worker.mjs', import.meta.url))
+  const run = (key) => spawnSync(process.execPath, [fixture, root, key, '80'], { encoding: 'utf8' })
+  const a = run('autoInject')
+  const b = run('decayEnabled')
+  assert.equal(a.status, 0, a.stderr)
+  assert.equal(b.status, 0, b.stderr)
+  const overlay = settings.readOverlay(root)
+  assert.ok('autoInject' in overlay, 'autoInject key survived concurrent writes')
+  assert.ok('decayEnabled' in overlay, 'decayEnabled key survived concurrent writes')
 })
