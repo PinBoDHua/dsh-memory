@@ -3,6 +3,17 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.24.14] - 2026-11-13
+
+### 修复 Fixed
+- **召回预览与列表刷新解耦**：注入徽章只依赖「已保存设置／条目／当前工作目录」，此前每次筛选/翻页/输入搜索都会重取 `/recall-preview`（一次额外全量扫描），且失败即清空徽章。现在只在初始化、设置保存、工作目录变化与写操作结束（busy 落回）时刷新，失败保留旧值。
+- **默认视图等待 cwd 解析**：`defaultView='workspace'` 此前在 `/cwd` 晚到时已经标记初始化，默认视图永远不生效；现在 `defaultViewSelection` 纯函数在 cwd 未知时返回未解析状态，等 currentCwd 到达后再应用。
+- **解析缓存改为 LRU**：「先全量扫描、再高频访问少量热条目」的工作集不再被插入顺序挤出（热条目命中时提升到队尾）；上限 4096→8192，并支持 `DSH_MEMORY_ENTRY_CACHE_LIMIT` 在测试/压测中调小。
+- **设置页召回预览联动**：常驻 tabpanel 后设置页不再随 tab 切换重挂载，召回预览改为随有效设置变化刷新。
+
+### 新增 Added
+- 单测：`defaultViewSelection`（等待 cwd / 立即生效 / 无需选择）、LRU 命中提升与淘汰顺序（独立模块实例 + 小上限）；GUI 验收新增 2 项（列表筛选不重复请求 recall-preview、设置保存后召回预览刷新），GUI 51→53 项。
+
 ## [0.24.13] - 2026-11-13
 
 ### 修复 Fixed（第二轮审计 P3：宿主边界加固）

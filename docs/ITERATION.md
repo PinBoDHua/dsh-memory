@@ -82,16 +82,18 @@ This file is the self-iteration ledger for dsh-memory: per-round increments, ver
 - [x] 卡片标签点击改为精确 `tag=` 过滤（0.24.11）。
 - [x] 删除/批量删除后焦点丢失、撤销吐司对键盘用户不可达（0.24.12：撤销吐司出现即聚焦动作按钮）。
 - [x] 导入：BOM JSON 解析失败；读文件失败/解析失败/格式错误归因混同；读文件窗口未置 busy（0.24.12：`parseImportText` + 读窗口 busy + 三种错误分开）。
-- [ ] 每次列表刷新都重取 recall-preview（注入徽章失败即清空），可拆分刷新时机并保留旧值。
+- [x] 每次列表刷新都重取 recall-preview（注入徽章失败即清空）（0.24.14：与筛选解耦、失败保留旧值、设置/写操作/工作目录变化时刷新）。
 - [x] ARIA 细节：类别 radiogroup 无方向键；非激活 tab 的 `aria-controls` 指向已卸载面板；吐司关闭按钮读作「取消」（0.24.12）。
+- [x] 注入装配 `selectInjection` 复用后，缓存 FIFO 在条目数 >4096 时退化（0.24.14：LRU + 8192 + 可调上限）。
+- [x] `defaultView='workspace'` 晚到 cwd 不生效（0.24.14：等 cwd 解析后再应用）。
 - [x] 路由收到非对象 JSON（`null`/数组/标量）→ 500 internal，应回 400（0.24.13：`readJsonBody` 只接受 JSON 对象）。
 - [x] move 去重把「已被取代」条目算冲突（与 save 语义不一致）（0.24.13）。
 - [x] `withLock` 大导入临界区可超 `staleMs=10s`；且不支持 async 回调（0.24.13：导入显式 30s/120s；async 回调抛错）。
 - [x] 注入装配 `selectInjection` 被算两遍（0.24.13：复用选择结果）；剩余：缓存 FIFO 在条目数 >4096 时退化（可提高上限或分段淘汰）。
 
 **待验证**
-- [ ] `defaultView='workspace'` 时若 `SessionSummary.cwd` 缺失且 `/cwd` 晚返回，`viewInitialized` 已置 true → 默认视图不生效。
-- [ ] 撤销删除使用列表快照；若删除前条目已被 agent 更新，撤销会回滚为旧内容（需服务端返回被删条目或 trash 语义）。
+- [x] `defaultView='workspace'` 时若 `SessionSummary.cwd` 缺失且 `/cwd` 晚返回，`viewInitialized` 已置 true → 默认视图不生效（0.24.14 已修复：等 cwd 解析后再应用）。
+- [ ] 撤销删除使用列表快照；若删除前条目已被 agent 更新，撤销会回滚为旧内容（已知限制；未来若引入 trash 语义再处理）。
 
 ### 明确不做
 

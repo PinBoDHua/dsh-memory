@@ -324,6 +324,29 @@ async function main() {
     })()`)
     await sleep(1000)
 
+    // 4b) 注入徽章刷新与筛选解耦（0.24.14）：输入搜索只刷新列表，不重复请求 recall-preview
+    const recallBefore = requests.filter((u) => u.includes('/recall-preview')).length
+    await evaluate(`(() => {
+      const input = document.querySelector('input.dm_search')
+      if (!input) return false
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+      setter.call(input, 'zz-gui-recall-probe')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      return true
+    })()`)
+    await sleep(1300)
+    const recallAfter = requests.filter((u) => u.includes('/recall-preview')).length
+    check('列表筛选刷新不重复请求 recall-preview', recallAfter === recallBefore, `${recallBefore} -> ${recallAfter}`)
+    await evaluate(`(() => {
+      const input = document.querySelector('input.dm_search')
+      if (!input) return false
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+      setter.call(input, '')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      return true
+    })()`)
+    await sleep(800)
+
     // 5) 弹窗内下拉：Esc 只关下拉（草稿保留），Tab 归还焦点，最后 Esc 关弹窗
     await evaluate(`(() => { const b = [...document.querySelectorAll('button')].find(el => /新建记忆|New memory/.test((el.textContent || '').trim())); if (b) b.click(); return Boolean(b) })()`)
     await sleep(800)
@@ -676,9 +699,11 @@ async function main() {
       return true
     })()`)
     // 8a) 输入 0：服务端夹取为 1，草稿应回收为 effective（界面值=实际值）。
+    const recallBeforeSettingsSave = requests.filter((u) => u.includes('/recall-preview')).length
     const setZero = await setRetention(0)
     await sleep(1800)
     if (setZero !== true) console.log('  · 设置页保留份数输入框未就绪')
+    check('设置保存后召回预览随之刷新', requests.filter((u) => u.includes('/recall-preview')).length > recallBeforeSettingsSave, `${recallBeforeSettingsSave} -> ${requests.filter((u) => u.includes('/recall-preview')).length}`)
     const clampedValue = await evaluate(`(() => { const input = document.querySelectorAll('.dm_numinput')[0]; return input ? input.value : null })()`)
     const clampedDoc = await apiJson('/settings')
     check('保留份数 0 被夹取为 1 且界面同步', String(clampedValue) === '1' && Number(clampedDoc?.effective?.backupRetention) === 1, `${clampedValue} / ${clampedDoc?.effective?.backupRetention}`)

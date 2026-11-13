@@ -239,6 +239,18 @@ function settingsStatusNext(status, event) {
     return 'saved'
   }
 
+  // 默认视图选择（纯函数）：「当前工作区」默认视图必须等 cwd 解析完成后再应用——
+// 过早标记 initialized 会让晚到的 cwd 永久失效。resolved=false 表示还需等待。
+  function defaultViewSelection(settings, currentCwd) {
+    if (!settings || !settings.effective) return { selection: null, resolved: false }
+    var dv = settings.effective.defaultView
+    if (dv === 'global') return { selection: 'global', resolved: true }
+    if (dv === 'workspace') {
+      return currentCwd ? { selection: currentCwd, resolved: true } : { selection: null, resolved: false }
+    }
+    return { selection: null, resolved: true }
+  }
+
   // 导入文件文本解析（纯函数）：容忍 UTF-8 BOM（记事本/部分编辑器保存会带），
 // 并把「JSON 语法错误」与「不是导出文件」归因分开，便于用户纠正。
   function parseImportText(text) {
@@ -324,7 +336,7 @@ function settingsStatusNext(status, event) {
     return (mb < 10 ? mb.toFixed(1) : Math.round(mb)) + ' MB'
   }
 
-  var helpers = { validateDraft: validateDraft, groupEntries: groupEntries, nextToken: nextToken, entriesParams: entriesParams, buildEntriesQuery: buildEntriesQuery, workspaceOptions: workspaceOptions, errorKeyFor: errorKeyFor, shouldQueueToast: shouldQueueToast, partitionSettled: partitionSettled, parseTags: parseTags, unwrapResult: unwrapResult, settingsStatusNext: settingsStatusNext, savedToastKey: savedToastKey, exportParams: exportParams, parseImportText: parseImportText, validateImportDoc: validateImportDoc, importSummary: importSummary, pageSlice: pageSlice, entryDetailRows: entryDetailRows, relativeTime: relativeTime, formatBytes: formatBytes, isExpired: isExpired, statusOf: statusOf, originOf: originOf, statusQueryFlags: statusQueryFlags }
+  var helpers = { validateDraft: validateDraft, groupEntries: groupEntries, nextToken: nextToken, entriesParams: entriesParams, buildEntriesQuery: buildEntriesQuery, workspaceOptions: workspaceOptions, errorKeyFor: errorKeyFor, shouldQueueToast: shouldQueueToast, partitionSettled: partitionSettled, parseTags: parseTags, unwrapResult: unwrapResult, settingsStatusNext: settingsStatusNext, savedToastKey: savedToastKey, exportParams: exportParams, defaultViewSelection: defaultViewSelection, parseImportText: parseImportText, validateImportDoc: validateImportDoc, importSummary: importSummary, pageSlice: pageSlice, entryDetailRows: entryDetailRows, relativeTime: relativeTime, formatBytes: formatBytes, isExpired: isExpired, statusOf: statusOf, originOf: originOf, statusQueryFlags: statusQueryFlags }
 
   // ===== node 测试导出（CJS） =====
   if (typeof module !== 'undefined' && module.exports) {
@@ -1723,7 +1735,7 @@ function settingsStatusNext(status, event) {
             if (seq === seqRef.current) setBusy(false)
           })
         }
-        useEffect(function () { load() }, [workspace])
+        useEffect(function () { load() }, [workspace, props.refreshKey])
         var summary = data
           ? t('recallSummary').replace('{injected}', String(data.injected)).replace('{omitted}', String(data.omitted)).replace('{used}', String(data.usedChars)).replace('{budget}', String(data.budgetChars))
           : ''
@@ -1778,7 +1790,7 @@ function settingsStatusNext(status, event) {
               h(Toggle, { checked: draft.decayEnabled !== false, onChange: set('decayEnabled'), label: t('decayEnabledLabel'), disabled: props.busy })),
             h(SettingRow, { label: t('budgetLabel'), desc: t('budgetDesc') },
               h(Slider, { min: 0, max: bounds.budgetMax, step: 100, value: draft.injectionBudgetChars, onChange: set('injectionBudgetChars'), label: t('budgetLabel'), disabled: props.busy })),
-            h(RecallPreview, { t: t, api: props.api, workspace: props.workspace }),
+            h(RecallPreview, { t: t, api: props.api, workspace: props.workspace, refreshKey: props.view && props.view.effective }),
             h('div', { className: 'dm_setnote' }, h(Icon, { name: 'info', size: 14, style: { flexShrink: 0, marginTop: 1 } }), t('priorityNote')),
             h('div', { className: 'dm_setnote' }, h(Icon, { name: 'info', size: 14, style: { flexShrink: 0, marginTop: 1 } }), t('enabledNote'))),
           h(SettingsGroup, { icon: 'lock', title: t('groupPrivacy'), style: { color: 'var(--dm-success)', background: 'var(--dm-success-soft)' } },
@@ -2206,13 +2218,11 @@ function settingsStatusNext(status, event) {
           else { scopeParams.scope = 'workspace'; scopeParams.workspace = selection }
           var params = entriesParams(Object.assign({}, scopeParams, { query: query, category: categoryFilter, origin: originFilter, tag: tagFilter, status: statusFilter, limit: pageSize + 1, offset: page * pageSize }))
           var statsParams = Object.assign({}, scopeParams, { query: query })
-          return Promise.all([api.entries(params), api.stats(statsParams), api.recallPreview(currentCwd).catch(function () { return null })]).then(function (results) {
+          return Promise.all([api.entries(params), api.stats(statsParams)]).then(function (results) {
             if (seq !== seqRef.current) return
             var doc = results[0]
             setStats(results[1].stats)
             setHidden(doc.hidden || { total: 0 })
-            var rp = results[2]
-            setInjected(rp && rp.autoInject ? (rp.entries || []).map(function (e) { return e.id }) : [])
             var sliced = pageSlice(doc.entries, pageSize)
             // 当前页被删空（如删掉末页最后一条）→ 自动回退一页，避免误导性空态。
             if (sliced.items.length === 0 && page > 0) { setPage(page - 1); return }
@@ -2283,10 +2293,10 @@ function settingsStatusNext(status, event) {
         // 首次拿到设置且面板就绪时，应用默认视图（workspace → 当前工作区）。
         useEffect(function () {
           if (viewInitialized.current || !settings || phase !== 'ready') return
+          var picked = defaultViewSelection(settings, currentCwd)
+          if (!picked.resolved) return // cwd 尚未解析：等 currentCwd 到达后本 effect 再跑
           viewInitialized.current = true
-          var dv = settings.effective.defaultView
-          if (dv === 'global') setSelection('global')
-          else if (dv === 'workspace' && currentCwd) setSelection(currentCwd)
+          if (picked.selection) setSelection(picked.selection)
         }, [settings, phase, currentCwd])
 
         // 动效开关同步到 body：下拉浮层 portal 到 body，在 .dm_page 之外，
@@ -2374,6 +2384,22 @@ function settingsStatusNext(status, event) {
             return loadSettings()
           }).catch(writeFailure).then(function () { setBusy(false) })
         }
+
+        // 注入徽章（召回预览）只依赖「已保存设置／条目／当前工作目录」，与筛选/翻页无关：
+// 单独刷新，避免每次输入/翻页都多一次全量扫描；失败保留旧徽章（瞬态抖动不清空）。
+        var recallSeq = useRef(0)
+        var refreshRecall = useCallback(function () {
+          var seq = ++recallSeq.current
+          return api.recallPreview(currentCwd).then(function (rp) {
+            if (seq !== recallSeq.current) return
+            setInjected(rp && rp.autoInject ? (rp.entries || []).map(function (e) { return e.id }) : [])
+          }).catch(function () { /* 保留旧值 keep previous badge */ })
+        }, [api, currentCwd])
+
+        useEffect(function () {
+          if (phase !== 'ready' || busy) return
+          refreshRecall()
+        }, [phase, busy, settings, currentCwd, refreshRecall])
 
         // 选择/查询/分类/页码变化 → 刷新列表（查询防抖 300ms）
         useEffect(function () {

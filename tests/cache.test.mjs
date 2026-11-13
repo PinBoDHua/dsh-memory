@@ -94,6 +94,44 @@ test('search/stats hot path share the cache (no double full read)', () => {
   }
 })
 
+test('parsed-entry cache is LRU: hot entry survives eviction pressure', async () => {
+  // 用环境变量把上限调小，再以带 query 的动态 import 拿到独立模块实例（独立缓存）。
+  process.env.DSH_MEMORY_ENTRY_CACHE_LIMIT = '5'
+  let store2
+  try {
+    store2 = await import('../lib/store.js?lru=1')
+  } finally {
+    delete process.env.DSH_MEMORY_ENTRY_CACHE_LIMIT
+  }
+  const root = tmpRoot()
+  store2.clearEntryCache()
+  const ids = []
+  for (let i = 0; i < 8; i += 1) ids.push(store2.saveEntry(root, { content: `LRU 条目 ${i}`, scope: 'global' }).entry.id)
+  store2.clearEntryCache()
+  const original = fs.readFileSync
+  let reads = 0
+  fs.readFileSync = function (file, ...args) {
+    const p = String(file)
+    if (p.startsWith(root) && p.endsWith('.md')) reads += 1
+    return original.call(this, file, ...args)
+  }
+  try {
+    for (let i = 0; i < 5; i += 1) store2.findEntry(root, ids[i], undefined)
+    assert.equal(reads, 5, 'cache filled to the limit')
+    store2.findEntry(root, ids[0], undefined)
+    assert.equal(reads, 5, 'cache hit')
+    for (let i = 5; i < 7; i += 1) store2.findEntry(root, ids[i], undefined)
+    assert.equal(reads, 7, 'two evictions bring in two new files')
+    store2.findEntry(root, ids[0], undefined)
+    assert.equal(reads, 7, 'hot entry survived eviction (LRU, not FIFO)')
+    store2.findEntry(root, ids[1], undefined)
+    assert.equal(reads, 8, 'stale entry was the eviction victim')
+  } finally {
+    fs.readFileSync = original
+    store2.clearEntryCache()
+  }
+})
+
 test('batch import reads each scope once instead of O(N×M)', () => {
   const root = tmpRoot()
   store.clearEntryCache()

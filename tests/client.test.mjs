@@ -7,7 +7,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import helpers from '../client/client.js'
 
-const { validateDraft, groupEntries, nextToken, entriesParams, buildEntriesQuery, workspaceOptions, errorKeyFor, shouldQueueToast, partitionSettled, parseTags, unwrapResult, settingsStatusNext, savedToastKey, exportParams, parseImportText, validateImportDoc, importSummary, pageSlice, entryDetailRows, relativeTime, formatBytes, isExpired, statusOf, originOf, statusQueryFlags } = helpers
+const { validateDraft, groupEntries, nextToken, entriesParams, buildEntriesQuery, workspaceOptions, errorKeyFor, shouldQueueToast, partitionSettled, parseTags, unwrapResult, settingsStatusNext, savedToastKey, exportParams, defaultViewSelection, parseImportText, validateImportDoc, importSummary, pageSlice, entryDetailRows, relativeTime, formatBytes, isExpired, statusOf, originOf, statusQueryFlags } = helpers
 
 test('validateDraft accepts a complete draft and rejects bad ones', () => {
   assert.deepEqual(validateDraft({ content: '一条事实', category: 'fact' }), { ok: true })
@@ -202,6 +202,19 @@ test('savedToastKey prioritizes revived over dedup and similar', () => {
   assert.equal(savedToastKey({ revived: true, deduplicated: true }), 'revivedSaved')
   assert.equal(savedToastKey({ similar: [{ id: 'm-1' }, { id: 'm-2' }] }), 'similarSaved')
   assert.equal(savedToastKey({ deduplicated: false, similar: [] }), 'saved')
+})
+
+test('defaultViewSelection waits for cwd instead of locking the default in', () => {
+  // 设置尚未加载：继续等待。
+  assert.deepEqual(defaultViewSelection(null, 'D:\\proj'), { selection: null, resolved: false })
+  assert.deepEqual(defaultViewSelection({}, 'D:\\proj'), { selection: null, resolved: false })
+  // 默认视图＝全局：立即生效。
+  assert.deepEqual(defaultViewSelection({ effective: { defaultView: 'global' } }, undefined), { selection: 'global', resolved: true })
+  // 默认视图＝当前工作区：cwd 晚到时不能先标记 resolved（否则默认视图永远不生效）。
+  assert.deepEqual(defaultViewSelection({ effective: { defaultView: 'workspace' } }, undefined), { selection: null, resolved: false })
+  assert.deepEqual(defaultViewSelection({ effective: { defaultView: 'workspace' } }, 'D:\\proj'), { selection: 'D:\\proj', resolved: true })
+  // 默认视图＝全部：无需选择。
+  assert.deepEqual(defaultViewSelection({ effective: { defaultView: 'all' } }, undefined), { selection: null, resolved: true })
 })
 
 test('parseImportText tolerates BOM and separates parse vs format errors', () => {
