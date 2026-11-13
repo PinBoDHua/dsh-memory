@@ -21,7 +21,59 @@
     if (content === '') return { ok: false, error: 'empty-content' }
     var category = (draft && draft.category) || 'fact'
     if (['preference', 'fact', 'decision'].indexOf(category) === -1) return { ok: false, error: 'bad-category' }
+    var expires = draft && draft.expires
+    if (expires !== undefined && expires !== null && expires !== '' && !isExpiresDate(expires)) return { ok: false, error: 'bad-expires' }
     return { ok: true }
+  }
+
+  // 过期日必须是真实日历日期（YYYY-MM-DD）；坏日期一律 fail-open，不视为过期。
+  function isExpiresDate(value) {
+    if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
+    var d = new Date(value + 'T00:00:00Z')
+    if (isNaN(d.getTime())) return false
+    return d.getUTCFullYear() === Number(value.slice(0, 4)) && d.getUTCMonth() + 1 === Number(value.slice(5, 7)) && d.getUTCDate() === Number(value.slice(8, 10))
+  }
+
+  // 到期判定按 UTC、当日含（expires=今天仍有效）；now 为毫秒时间戳，缺省当前时间。
+  function isExpired(expires, now) {
+    if (!isExpiresDate(expires)) return false
+    var d = new Date(typeof now === 'number' ? now : Date.now())
+    if (isNaN(d.getTime())) return false
+    var mm = d.getUTCMonth() + 1
+    var dd = d.getUTCDate()
+    var today = d.getUTCFullYear() + '-' + (mm < 10 ? '0' : '') + mm + '-' + (dd < 10 ? '0' : '') + dd
+    return expires < today
+  }
+
+  // 单一状态标签优先级：被取代 > 已过期 > 已归档 > 活跃（pinned 与状态正交）。
+  function statusOf(entry, now) {
+    var e = entry || {}
+    if (e.superseded_by) return 'superseded'
+    if (isExpired(e.expires, now)) return 'expired'
+    if (e.archived) return 'archived'
+    return 'active'
+  }
+
+  function originOf(entry) {
+    return entry && entry.origin === 'auto' ? 'auto' : 'manual'
+  }
+
+  // 选中隐藏态筛选时放宽对应 include_*；active/pinned 不需要服务端参数。
+  function statusQueryFlags(status) {
+    if (status === 'superseded') return { include_superseded: true }
+    if (status === 'expired') return { include_expired: true }
+    if (status === 'archived') return { include_archived: true }
+    return {}
+  }
+
+  // 来源/状态筛选在客户端过滤当前页（服务端仅负责放宽隐藏态）。
+  function matchesFilters(entry, filters, now) {
+    var e = entry || {}
+    var f = filters || {}
+    if (f.status === 'pinned') { if (!e.pinned) return false }
+    else if (f.status && f.status !== 'active' && statusOf(e, now) !== f.status) return false
+    if (f.origin && originOf(e) !== f.origin) return false
+    return true
   }
 
   function groupEntries(entries) {
@@ -48,6 +100,9 @@
     if (p.workspace) parts.push('workspace=' + encodeURIComponent(p.workspace))
     if (p.query) parts.push('query=' + encodeURIComponent(p.query))
     if (p.category) parts.push('category=' + encodeURIComponent(p.category))
+    if (p.include_superseded) parts.push('include_superseded=true')
+    if (p.include_expired) parts.push('include_expired=true')
+    if (p.include_archived) parts.push('include_archived=true')
     if (p.limit) parts.push('limit=' + encodeURIComponent(String(p.limit)))
     if (p.offset) parts.push('offset=' + encodeURIComponent(String(p.offset)))
     return '?' + parts.join('&')
@@ -118,6 +173,12 @@
       { key: 'updatedAt', value: e.updated || '' },
     ]
     if (e.source) rows.push({ key: 'sourceLabel', value: e.source })
+    rows.push({ key: 'originLabel', value: originOf(e) })
+    if (e.expires) rows.push({ key: 'expiresOn', value: e.expires })
+    if (e.last_access) rows.push({ key: 'lastAccessLabel', value: e.last_access })
+    if (typeof e.hit_count === 'number') rows.push({ key: 'hitCountLabel', value: String(e.hit_count) })
+    if (e.supersedes) rows.push({ key: 'supersedesLabel', value: e.supersedes })
+    if (e.superseded_by) rows.push({ key: 'supersededByLabel', value: e.superseded_by })
     return rows
   }
 
@@ -147,7 +208,7 @@
     return (mb < 10 ? mb.toFixed(1) : Math.round(mb)) + ' MB'
   }
 
-  var helpers = { validateDraft: validateDraft, groupEntries: groupEntries, nextToken: nextToken, buildEntriesQuery: buildEntriesQuery, workspaceOptions: workspaceOptions, errorKeyFor: errorKeyFor, validateImportDoc: validateImportDoc, importSummary: importSummary, pageSlice: pageSlice, entryDetailRows: entryDetailRows, relativeTime: relativeTime, formatBytes: formatBytes }
+  var helpers = { validateDraft: validateDraft, groupEntries: groupEntries, nextToken: nextToken, buildEntriesQuery: buildEntriesQuery, workspaceOptions: workspaceOptions, errorKeyFor: errorKeyFor, validateImportDoc: validateImportDoc, importSummary: importSummary, pageSlice: pageSlice, entryDetailRows: entryDetailRows, relativeTime: relativeTime, formatBytes: formatBytes, isExpired: isExpired, statusOf: statusOf, originOf: originOf, statusQueryFlags: statusQueryFlags, matchesFilters: matchesFilters }
 
   // ===== node 测试导出（CJS） =====
   if (typeof module !== 'undefined' && module.exports) {
@@ -235,6 +296,42 @@
     createdAt: '创建于',
     updatedAt: '更新于',
     sourceLabel: '来源会话',
+    originLabel: '来源',
+    originFilterLabel: '来源筛选',
+    originAll: '全部来源',
+    originAuto: '自动',
+    originManual: '手动',
+    statusFilterLabel: '状态筛选',
+    statusActive: '活跃',
+    statusSuperseded: '被取代',
+    statusExpired: '已过期',
+    statusArchived: '已归档',
+    statusPinned: '已钉选',
+    pin: '钉选',
+    unpin: '取消钉选',
+    archive: '归档',
+    restore: '恢复',
+    pinnedMsg: '已钉选，注入时优先',
+    unpinnedMsg: '已取消钉选',
+    archivedMsg: '已归档（默认隐藏，可恢复）',
+    restoredMsg: '已恢复',
+    pinnedLabel: '钉选常驻',
+    pinnedHint: '钉选的记忆在注入预算内最先召回，且不受软衰减影响',
+    expiresLabel: '过期日（可选）',
+    expiresOn: '过期日',
+    expiresHint: '到期后默认隐藏，不删除；留空表示永不过期',
+    expiresClear: '清除',
+    errBadExpires: '过期日需为 YYYY-MM-DD 格式的有效日期',
+    lastAccessLabel: '最近命中',
+    hitCountLabel: '命中次数',
+    supersedesLabel: '取代了',
+    supersededByLabel: '被取代于',
+    viewSuccessor: '查看后继',
+    jumpToSuccessor: '搜索后继记忆',
+    autoExtractHintLabel: '自动提取提示',
+    autoExtractHintDesc: '会话数轮未写入记忆时，提醒 agent 沉淀值得长期保留的内容（零额外模型调用）',
+    decayEnabledLabel: '软衰减排序',
+    decayEnabledDesc: '长期未命中的记忆降低排序权重（永不过滤、不删除，钉选豁免）',
     tagSearch: '按此标签搜索',
     workspaceUnknown: '未知工作区',
     unknownWorkspaceHint: '有工作区路径未知（索引损坏），无法在面板中浏览；可用「导出」查看全部记忆，或手工修复数据目录下的 workspaces/index.json。',
@@ -264,7 +361,7 @@
     autoInjectDesc: '装配系统提示时召回记忆（关闭后工具仍可用）',
     budgetLabel: '注入字符预算',
     budgetDesc: '超出预算的条目改用 memory_search 获取',
-    priorityNote: '注入顺序固定：偏好 → 决策 → 事实（同级新者优先）',
+    priorityNote: '注入顺序：钉选最先，其余 偏好 → 决策 → 事实（同级新者优先，软衰减影响排序）',
     privacyLabel: '机密拦截 · 始终启用',
     privacyDesc: '密码 / 密钥 / token 永不写入记忆，此护栏不可关闭。',
     dataRootLabel: '数据目录',
@@ -369,6 +466,42 @@
     createdAt: 'Created',
     updatedAt: 'Updated',
     sourceLabel: 'Source session',
+    originLabel: 'Origin',
+    originFilterLabel: 'Filter by origin',
+    originAll: 'All origins',
+    originAuto: 'Auto',
+    originManual: 'Manual',
+    statusFilterLabel: 'Filter by status',
+    statusActive: 'Active',
+    statusSuperseded: 'Superseded',
+    statusExpired: 'Expired',
+    statusArchived: 'Archived',
+    statusPinned: 'Pinned',
+    pin: 'Pin',
+    unpin: 'Unpin',
+    archive: 'Archive',
+    restore: 'Restore',
+    pinnedMsg: 'Pinned; recalled first',
+    unpinnedMsg: 'Unpinned',
+    archivedMsg: 'Archived (hidden by default; restorable)',
+    restoredMsg: 'Restored',
+    pinnedLabel: 'Pin to top',
+    pinnedHint: 'Pinned memories are recalled first within the injection budget and ignore soft decay',
+    expiresLabel: 'Expires (optional)',
+    expiresOn: 'Expires on',
+    expiresHint: 'Hidden (not deleted) after this date; empty means never expires',
+    expiresClear: 'Clear',
+    errBadExpires: 'Expires must be a valid date in YYYY-MM-DD format',
+    lastAccessLabel: 'Last hit',
+    hitCountLabel: 'Hit count',
+    supersedesLabel: 'Supersedes',
+    supersededByLabel: 'Superseded by',
+    viewSuccessor: 'View successor',
+    jumpToSuccessor: 'Search for the successor memory',
+    autoExtractHintLabel: 'Auto-extraction hints',
+    autoExtractHintDesc: 'After several turns without a memory write, remind the agent to save durable facts (no extra model calls)',
+    decayEnabledLabel: 'Soft decay ranking',
+    decayEnabledDesc: 'Long-unused memories rank lower (never filtered or deleted; pinned exempt)',
     tagSearch: 'Search by this tag',
     workspaceUnknown: 'Unknown workspace',
     unknownWorkspaceHint: 'Some workspace paths are unknown (corrupt index) and cannot be browsed here. Use Export to see all memories, or repair workspaces/index.json in the data directory by hand.',
@@ -398,7 +531,7 @@
     autoInjectDesc: 'Recall memories when assembling the system prompt (tools still work when off)',
     budgetLabel: 'Injection character budget',
     budgetDesc: 'Entries beyond the budget stay reachable via memory_search',
-    priorityNote: 'Fixed injection order: preference → decision → fact (newest first within a category)',
+    priorityNote: 'Injection order: pinned first, then preference → decision → fact (newest first; soft decay affects ranking)',
     privacyLabel: 'Credential block · always on',
     privacyDesc: 'Passwords / keys / tokens are never stored. This guard cannot be disabled.',
     dataRootLabel: 'Data directory',
@@ -501,7 +634,7 @@
     '.dm_section_title{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:600;color:var(--dm-ink2);letter-spacing:.05em;margin:18px 0 10px;}',
     '.dm_section_n{font-size:11px;font-weight:500;color:var(--dm-ink3);background:var(--dm-line);border-radius:999px;padding:1px 8px;corner-shape:round;}',
     // ---- 记忆卡片 ----
-    '.dm_card{position:relative;display:flex;gap:12px;border:1px solid var(--dm-line);border-radius:14px;padding:14px 14px 12px 12px;margin-bottom:10px;background:var(--dm-surface);box-shadow:var(--dm-shadow);transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease;animation:dm_enter .4s ease backwards;}',
+    '.dm_card{position:relative;display:flex;gap:12px;border:1px solid var(--dm-line);border-radius:14px;padding:14px 14px 12px 12px;margin-bottom:10px;background:var(--dm-surface);box-shadow:var(--dm-shadow);transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease,opacity .18s ease;animation:dm_enter .4s ease backwards;}',
     '.dm_card:hover{transform:translateY(-2px);box-shadow:var(--dm-shadow-hover);border-color:var(--dm-line2);border-color:color-mix(in srgb,var(--dm-cat,var(--dm-primary)) 38%,var(--dm-line2));}',
     '.dm_card_selected{border-color:color-mix(in srgb,var(--dm-primary) 55%,transparent);background:color-mix(in srgb,var(--dm-primary) 5%,var(--dm-surface));}',
     '.dm_rail{position:absolute;left:0;top:12px;bottom:12px;width:3px;border-radius:0 3px 3px 0;background:linear-gradient(180deg,var(--dm-cat,var(--dm-primary)),color-mix(in srgb,var(--dm-cat,var(--dm-primary)) 35%,transparent));}',
@@ -681,6 +814,26 @@
     '.dm_setselect .dm_select_trigger{height:34px;max-width:240px;}',
     '@keyframes dm_pop_in{from{opacity:0;transform:translateY(-4px) scale(.98);}to{opacity:1;transform:translateY(0) scale(1);}}',
     '@keyframes dm_pop_in_up{from{opacity:0;transform:translateY(4px) scale(.98);}to{opacity:1;transform:translateY(0) scale(1);}}',
+    // ---- v2：来源徽章 / 状态装饰 / 钉选归档 / 过期日 ----
+    '.dm_origin{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;font-weight:600;padding:1.5px 8px;border-radius:999px;corner-shape:round;}',
+    '.dm_origin_auto{color:var(--dm-primary2);background:color-mix(in srgb,var(--dm-primary2) 12%,transparent);}',
+    '.dm_origin_manual{color:var(--dm-ink3);background:color-mix(in srgb,var(--dm-ink) 6%,transparent);}',
+    '.dm_status{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;font-weight:600;padding:1.5px 8px;border-radius:999px;corner-shape:round;}',
+    '.dm_status_superseded{color:var(--dm-ink3);background:color-mix(in srgb,var(--dm-ink) 7%,transparent);}',
+    '.dm_status_expired{color:var(--dm-danger);background:var(--dm-danger-soft);}',
+    '.dm_status_archived{color:var(--dm-ink2);background:color-mix(in srgb,var(--dm-ink) 7%,transparent);}',
+    '.dm_successor{display:inline-flex;align-items:center;gap:4px;border:none;background:transparent;color:var(--dm-primary);font:inherit;font-size:10.5px;font-weight:600;padding:1.5px 7px;border-radius:999px;cursor:pointer;corner-shape:round;transition:background .15s;}',
+    '.dm_successor:hover{background:color-mix(in srgb,var(--dm-primary) 10%,transparent);}',
+    '.dm_successor:focus-visible{outline:none;box-shadow:var(--dm-ring);}',
+    '.dm_pinned_mark{display:inline-flex;color:var(--dm-pref);}',
+    '.dm_card_muted{opacity:.72;}',
+    '.dm_card_muted:hover{opacity:1;}',
+    '.dm_btn_pinned{color:var(--dm-pref);}',
+    '.dm_chips_status{margin-top:2px;}',
+    '.dm_expiresrow{display:flex;gap:8px;align-items:center;}',
+    '.dm_dateinput{max-width:220px;color-scheme:light;}',
+    'body[data-ds-dark-theme] .dm_dateinput{color-scheme:dark;}',
+    '.dm_pinrow{display:flex;align-items:center;justify-content:space-between;gap:12px;}',
     // ---- 响应式与动效偏好 ----
     '@media (max-width:720px){.dm_header{flex-direction:column;}.dm_cta{width:100%;justify-content:center;}.dm_stats{gap:12px;padding:12px 14px;}.dm_stats_div{display:none;}.dm_card_actions{flex-direction:row;}.dm_card{flex-wrap:wrap;}.dm_import_tiles{grid-template-columns:repeat(3,1fr);}}',
     '@media (prefers-reduced-motion:reduce){.dm_page *,.dm_page *::before,.dm_page *::after,.dm_toast,.dm_selbar,.dm_overlay,.dm_dialog,.dm_select_pop{animation:none !important;transition:none !important;}}',
@@ -727,6 +880,10 @@
         lock: ['M6 10V8a6 6 0 0 1 12 0v2', 'M5 10h14v10H5z', 'M12 14v3'],
         database: ['M12 8c4.4 0 8-1.3 8-3s-3.6-3-8-3-8 1.3-8 3 3.6 3 8 3z', 'M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5', 'M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3'],
         sliders: ['M4 21v-7', 'M4 10V3', 'M12 21v-9', 'M12 8V3', 'M20 21v-5', 'M20 12V3', 'M1 14h6', 'M9 8h6', 'M17 16h6'],
+        pin: ['M12 17v5', 'M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z'],
+        archive: ['M21 8v13H3V8', 'M1 3h22v5H1z', 'M10 12h4'],
+        zap: ['M13 2L3 14h9l-1 8 10-12h-9l1-8z'],
+        link: ['M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71', 'M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71'],
       }
 
       function Icon(props) {
@@ -745,6 +902,16 @@
         fact: { icon: 'info', cat: 'var(--dm-fact)', soft: 'var(--dm-fact-soft)', label: 'catFact' },
         decision: { icon: 'checkCircle', cat: 'var(--dm-dec)', soft: 'var(--dm-dec-soft)', label: 'catDecision' },
       }
+
+      var STATUS_CHIPS = [
+        { key: 'active', icon: 'checkCircle', c: 'var(--dm-primary)', label: 'statusActive' },
+        { key: 'superseded', icon: 'link', c: 'var(--dm-ink3)', label: 'statusSuperseded' },
+        { key: 'expired', icon: 'clock', c: 'var(--dm-danger)', label: 'statusExpired' },
+        { key: 'archived', icon: 'archive', c: 'var(--dm-ink2)', label: 'statusArchived' },
+        { key: 'pinned', icon: 'pin', c: 'var(--dm-pref)', label: 'statusPinned' },
+      ]
+      // 详情行中按原文展示（不做时间格式化）的 key；originLabel 单独走文案映射。
+      var DETAIL_TEXT_KEYS = { sourceLabel: 1, expiresOn: 1, hitCountLabel: 1, supersedesLabel: 1, supersededByLabel: 1 }
 
       function catVars(category) {
         var meta = CATEGORY_META[category] || CATEGORY_META.fact
@@ -821,6 +988,7 @@
         return {
           status: function () { return request(API_BASE + '/status') },
           workspaces: function () { return request(API_BASE + '/workspaces') },
+          cwd: function (sessionId) { return request(API_BASE + '/cwd?sessionId=' + encodeURIComponent(sessionId || '')) },
           entries: function (params) { return request(API_BASE + '/entries' + buildEntriesQuery(params)) },
           stats: function (params) { return request(API_BASE + '/stats' + buildEntriesQuery(params)) },
           export: function () { return request(API_BASE + '/export') },
@@ -892,6 +1060,8 @@
         var entry = props.entry
         var t = props.t
         var meta = CATEGORY_META[entry.category] || CATEGORY_META.fact
+        var origin = originOf(entry)
+        var status = statusOf(entry)
         var expandedState = useState(false)
         var expanded = expandedState[0]; var setExpanded = expandedState[1]
         function toggle() { setExpanded(!expanded) }
@@ -900,7 +1070,7 @@
         }
         var checked = props.selected
         return h('div', {
-          className: 'dm_card' + (checked ? ' dm_card_selected' : ''),
+          className: 'dm_card' + (checked ? ' dm_card_selected' : '') + (status !== 'active' ? ' dm_card_muted' : ''),
           style: Object.assign({}, catVars(entry.category), { animationDelay: (props.index % 10) * 35 + 'ms' }),
         },
           h('div', { className: 'dm_rail' }),
@@ -913,6 +1083,19 @@
           h('div', { className: 'dm_card_main' },
             h('div', { className: 'dm_card_top' },
               h(Badge, { category: entry.category, t: t }),
+              h('span', { className: 'dm_origin dm_origin_' + origin, title: t('originLabel') + ': ' + t(origin === 'auto' ? 'originAuto' : 'originManual') },
+                h(Icon, { name: origin === 'auto' ? 'zap' : 'edit', size: 10, strokeWidth: 2.2 }),
+                t(origin === 'auto' ? 'originAuto' : 'originManual')),
+              status !== 'active' ? h('span', { className: 'dm_status dm_status_' + status },
+                h(Icon, { name: status === 'superseded' ? 'link' : status === 'expired' ? 'clock' : 'archive', size: 10, strokeWidth: 2.2 }),
+                t(status === 'superseded' ? 'statusSuperseded' : status === 'expired' ? 'statusExpired' : 'statusArchived'),
+                status === 'expired' && entry.expires ? ' · ' + entry.expires : null) : null,
+              status === 'superseded' && entry.superseded_by ? h('button', {
+                className: 'dm_successor', title: t('jumpToSuccessor') + ': ' + entry.superseded_by,
+                onClick: function () { props.onJumpTo(entry.superseded_by) },
+              }, h(Icon, { name: 'chevR', size: 11, strokeWidth: 2.2 }), t('viewSuccessor')) : null,
+              entry.pinned && status === 'active' ? h('span', { className: 'dm_pinned_mark', title: t('pinnedLabel') },
+                h(Icon, { name: 'pin', size: 12, style: { fill: 'currentColor' } })) : null,
               h('span', { className: 'dm_scope_chip' },
                 h(Icon, { name: entry.scope === 'global' ? 'globe' : 'folder', size: 12 }),
                 entry.scope === 'global' ? t('scopeGlobal') : t('scopeWorkspace')),
@@ -931,9 +1114,11 @@
             expanded
               ? h('div', { className: 'dm_details' },
                 entryDetailRows(entry).map(function (row) {
+                  var text = row.key === 'originLabel' ? t(row.value === 'auto' ? 'originAuto' : 'originManual')
+                    : DETAIL_TEXT_KEYS[row.key] ? row.value : formatTime(row.value)
                   return h('div', { className: 'dm_details_row', key: row.key },
                     h('span', { className: 'dm_details_k' }, t(row.key) + ':'),
-                    h('span', { className: 'dm_details_v' }, row.key === 'sourceLabel' ? row.value : formatTime(row.value)))
+                    h('span', { className: 'dm_details_v' }, text))
                 }),
                 h('div', null, h('button', { className: 'dm_btn dm_btn_mini', onClick: copyId }, h(Icon, { name: 'copy', size: 12 }), t('copyId'))))
               : null,
@@ -946,6 +1131,12 @@
               }),
               h('span', { className: 'dm_id' }, entry.id))),
           h('div', { className: 'dm_card_actions' },
+            h('button', {
+              className: 'dm_btn' + (entry.pinned ? ' dm_btn_pinned' : ''), 'aria-pressed': !!entry.pinned,
+              onClick: function () { props.onTogglePin(entry) },
+            }, h(Icon, { name: 'pin', size: 13, style: entry.pinned ? { fill: 'currentColor' } : null }), entry.pinned ? t('unpin') : t('pin')),
+            h('button', { className: 'dm_btn', onClick: function () { props.onToggleArchive(entry) } },
+              h(Icon, { name: 'archive', size: 13 }), entry.archived ? t('restore') : t('archive')),
             h('button', { className: 'dm_btn', onClick: function () { props.onEdit(entry) } }, h(Icon, { name: 'edit', size: 13 }), t('edit')),
             h('button', { className: 'dm_btn dm_btn_danger', onClick: function () { props.onDelete(entry) } }, h(Icon, { name: 'trash', size: 13 }), t('del'))))
       }
@@ -1048,6 +1239,23 @@
           h('div', { className: 'dm_field' },
             h('label', { className: 'dm_label', htmlFor: 'dm-tags' }, h(Icon, { name: 'tag', size: 13 }), t('tagsLabel')),
             h('input', { id: 'dm-tags', className: 'dm_input', disabled: props.busy, value: draft.tags, onChange: function (e) { field('tags', e.target.value) }, onKeyDown: onKeySave })),
+          h('div', { className: 'dm_field' },
+            h('label', { className: 'dm_label', htmlFor: 'dm-expires' }, h(Icon, { name: 'clock', size: 13 }), t('expiresLabel')),
+            h('div', { className: 'dm_expiresrow' },
+              h('input', {
+                id: 'dm-expires', className: 'dm_input dm_dateinput', type: 'date', disabled: props.busy,
+                value: draft.expires || '', onChange: function (e) { field('expires', e.target.value) },
+              }),
+              draft.expires
+                ? h('button', { type: 'button', className: 'dm_btn dm_btn_mini', disabled: props.busy, onClick: function () { field('expires', '') } },
+                  h(Icon, { name: 'x', size: 12, strokeWidth: 2.2 }), t('expiresClear'))
+                : null),
+            h('div', { className: 'dm_hint', style: { marginTop: 4 } }, t('expiresHint'))),
+          h('div', { className: 'dm_field' },
+            h('span', { className: 'dm_label' }, h(Icon, { name: 'pin', size: 13 }), t('pinnedLabel')),
+            h('div', { className: 'dm_pinrow' },
+              h('span', { className: 'dm_hint' }, t('pinnedHint')),
+              h(Toggle, { checked: !!draft.pinned, onChange: function (v) { field('pinned', v) }, label: t('pinnedLabel'), disabled: props.busy }))),
           h('div', { className: 'dm_dialog_footer' },
             h('span', { className: 'dm_hint' }, t('editorHint')),
             h('button', { className: 'dm_btn', onClick: props.onClose, disabled: props.busy }, t('cancel')),
@@ -1167,6 +1375,10 @@
           h(SettingsGroup, { icon: 'layers', title: t('groupInjection'), style: { color: 'var(--dm-primary)', background: 'color-mix(in srgb,var(--dm-primary) 12%,transparent)' } },
             h(SettingRow, { label: t('autoInjectLabel'), desc: t('autoInjectDesc') },
               h(Toggle, { checked: draft.autoInject, onChange: set('autoInject'), label: t('autoInjectLabel'), disabled: props.busy })),
+            h(SettingRow, { label: t('autoExtractHintLabel'), desc: t('autoExtractHintDesc') },
+              h(Toggle, { checked: draft.autoExtractHint !== false, onChange: set('autoExtractHint'), label: t('autoExtractHintLabel'), disabled: props.busy })),
+            h(SettingRow, { label: t('decayEnabledLabel'), desc: t('decayEnabledDesc') },
+              h(Toggle, { checked: draft.decayEnabled !== false, onChange: set('decayEnabled'), label: t('decayEnabledLabel'), disabled: props.busy })),
             h(SettingRow, { label: t('budgetLabel'), desc: t('budgetDesc') },
               h(Slider, { min: 0, max: bounds.budgetMax, step: 100, value: draft.injectionBudgetChars, onChange: set('injectionBudgetChars'), label: t('budgetLabel'), disabled: props.busy })),
             h('div', { className: 'dm_setnote' }, h(Icon, { name: 'info', size: 14, style: { flexShrink: 0, marginTop: 1 } }), t('priorityNote')),
@@ -1399,17 +1611,17 @@
         return h(React.Fragment, null, trigger, ReactDOM.createPortal(pop, document.body))
       }
 
-      function currentSessionCwd(ctx) {
+      function currentSessionRef(ctx) {
         try {
           var sessions = ctx.get('sessions')
           var snap = sessions && sessions.list && sessions.list.getSnapshot ? sessions.list.getSnapshot() : null
-          var rows = snap && snap.byId ? Object.keys(snap.byId).map(function (k) { return snap.byId[k] }) : []
-          for (var i = 0; i < rows.length; i++) {
-            var row = rows[i]
-            if (row && row.retainedBy && (row.retainedBy.mainView || 0) > 0 && typeof row.cwd === 'string' && row.cwd !== '') return row.cwd
+          var keys = snap && snap.byId ? Object.keys(snap.byId) : []
+          for (var i = 0; i < keys.length; i++) {
+            var row = snap.byId[keys[i]]
+            if (row && row.retainedBy && (row.retainedBy.mainView || 0) > 0 && typeof row.cwd === 'string' && row.cwd !== '') return { id: keys[i], cwd: row.cwd }
           }
         } catch { /* sessions 服务不可用时忽略 optional */ }
-        return undefined
+        return { id: undefined, cwd: undefined }
       }
 
       function MemoryPage(props) {
@@ -1439,6 +1651,10 @@
         var query = queryState[0]; var setQuery = queryState[1]
         var categoryState = useState('')
         var categoryFilter = categoryState[0]; var setCategoryFilter = categoryState[1]
+        var originState = useState('')
+        var originFilter = originState[0]; var setOriginFilter = originState[1]
+        var statusState = useState('active')
+        var statusFilter = statusState[0]; var setStatusFilter = statusState[1]
         var pageState = useState(0)
         var page = pageState[0]; var setPage = pageState[1]
         var hasMoreState = useState(false)
@@ -1498,7 +1714,7 @@
           if (selection === 'global') scopeParams.scope = 'global'
           else if (selection === 'all') { scopeParams.scope = 'all'; scopeParams.workspace = currentCwd }
           else { scopeParams.scope = 'workspace'; scopeParams.workspace = selection }
-          var params = Object.assign({}, scopeParams, { query: query, category: categoryFilter, limit: pageSize + 1, offset: page * pageSize })
+          var params = Object.assign({}, scopeParams, { query: query, category: categoryFilter, limit: pageSize + 1, offset: page * pageSize }, statusQueryFlags(statusFilter))
           var statsParams = Object.assign({}, scopeParams, { query: query })
           return Promise.all([api.entries(params), api.stats(statsParams)]).then(function (results) {
             if (seq !== seqRef.current) return
@@ -1507,14 +1723,15 @@
             var sliced = pageSlice(doc.entries, pageSize)
             // 当前页被删空（如删掉末页最后一条）→ 自动回退一页，避免误导性空态。
             if (sliced.items.length === 0 && page > 0) { setPage(page - 1); return }
-            setEntries(sliced.items)
+            // 来源/状态筛选在客户端过滤当前页（服务端仅按 include_* 放宽隐藏态）。
+            setEntries(sliced.items.filter(function (e) { return matchesFilters(e, { status: statusFilter, origin: originFilter }) }))
             setHasMore(sliced.hasMore)
             setListError('')
           }).catch(function (err) {
             if (seq !== seqRef.current) return
             setListError(errorText(err, t))
           })
-        }, [api, query, categoryFilter, page, pageSize, selection, currentCwd, t])
+        }, [api, query, categoryFilter, originFilter, statusFilter, page, pageSize, selection, currentCwd, t])
 
         // 写入完成回调可能捕获旧的 refreshEntries（busy 期间过滤条件可变）；
         // 一律经 ref 调用最新版本，避免陈旧过滤结果覆盖列表。
@@ -1531,7 +1748,14 @@
             return api.workspaces()
           }).then(function (doc) {
             setWorkspaces(doc.workspaces || [])
-            setCurrentCwd(currentSessionCwd(ctx))
+            var ref = currentSessionRef(ctx)
+            setCurrentCwd(ref.cwd)
+            // 对齐会话有效目录（跟随 cd，与 agent 工具一致）；失败回退初始目录。
+            if (ref.id) {
+              api.cwd(ref.id).then(function (c) {
+                if (c && typeof c.cwd === 'string' && c.cwd !== '') setCurrentCwd(c.cwd)
+              }).catch(function () {})
+            }
             setPhase('ready')
           }).catch(function (err) {
             setErrorText(errorText(err, t))
@@ -1623,7 +1847,7 @@
           if (phase !== 'ready') return undefined
           var timer = setTimeout(function () { refreshEntries() }, query ? 300 : 0)
           return function () { clearTimeout(timer) }
-        }, [phase, query, categoryFilter, page, selection, currentCwd, refreshEntries])
+        }, [phase, query, categoryFilter, originFilter, statusFilter, page, selection, currentCwd, refreshEntries])
 
         // toast 自动消失（时长按 toast 自带 duration）
         useEffect(function () {
@@ -1656,6 +1880,11 @@
         function changeQuery(value) { setQuery(value); setPage(0); setSelected([]) }
         function changeSelection(value) { setSelection(value); setPage(0); setSelected([]) }
         function changeCategory(value) { setCategoryFilter(value); setPage(0); setSelected([]) }
+        function changeOrigin(value) { setOriginFilter(value); setPage(0); setSelected([]) }
+        function changeStatus(value) { setStatusFilter(value); setPage(0); setSelected([]) }
+        function clearAllFilters() { setQuery(''); setCategoryFilter(''); setOriginFilter(''); setStatusFilter('active'); setPage(0); setSelected([]) }
+        // 被取代条目的「查看后继」：按 id 搜索（host query 匹配 id），回到活跃视图。
+        function jumpToEntry(id) { setStatusFilter('active'); setOriginFilter(''); setCategoryFilter(''); setPage(0); setSelected([]); setQuery(String(id || '')) }
         function changePage(value) { setPage(value); setSelected([]) }
         function toggleSelect(id) {
           setSelected(function (prev) { return prev.indexOf(id) === -1 ? prev.concat([id]) : prev.filter(function (x) { return x !== id }) })
@@ -1663,11 +1892,11 @@
 
         function openCreate() {
           if (busy) return
-          setEditor({ mode: 'create', content: '', category: 'fact', tags: '', scope: workspaceTarget && selection !== 'global' ? 'workspace' : 'global' })
+          setEditor({ mode: 'create', content: '', category: 'fact', tags: '', scope: workspaceTarget && selection !== 'global' ? 'workspace' : 'global', pinned: false, expires: '' })
         }
         function openEdit(entry) {
           if (busy) return
-          setEditor({ mode: 'edit', id: entry.id, content: entry.content, category: entry.category, tags: (entry.tags || []).join(', '), scope: entry.scope })
+          setEditor({ mode: 'edit', id: entry.id, content: entry.content, category: entry.category, tags: (entry.tags || []).join(', '), scope: entry.scope, pinned: !!entry.pinned, expires: entry.expires || '' })
         }
         function openDelete(entry) {
           if (busy) return
@@ -1678,6 +1907,26 @@
           var chosen = entries.filter(function (e) { return selected.indexOf(e.id) !== -1 })
           if (chosen.length === 0) return
           setConfirm({ entries: chosen })
+        }
+
+        // 钉选/归档快捷操作：POST update 单字段 → 刷新；归档吐司复用撤销基建。
+        function quickUpdate(entry, patch, okKey, action) {
+          if (busy) return
+          setBusy(true)
+          api.update(Object.assign({ id: entry.id, workspace: entry.scope === 'workspace' ? workspaceTarget : undefined }, patch)).then(function () {
+            showToast('ok', t(okKey), action)
+            return refreshRef.current()
+          }).catch(writeFailure).then(function () { setBusy(false) })
+        }
+        function togglePin(entry) {
+          quickUpdate(entry, { pinned: !entry.pinned }, entry.pinned ? 'unpinnedMsg' : 'pinnedMsg')
+        }
+        function toggleArchive(entry) {
+          var restoring = !!entry.archived
+          quickUpdate(entry, { archived: !restoring }, restoring ? 'restoredMsg' : 'archivedMsg', restoring ? undefined : {
+            label: t('undo'),
+            run: function () { quickUpdate(entry, { archived: false }, 'restoredMsg') },
+          })
         }
 
         function writeFailure(err) {
@@ -1696,7 +1945,8 @@
           if (busy) return
           var check = validateDraft(editor)
           if (!check.ok) {
-            showToast('error', t(check.error === 'empty-content' ? 'errEmptyContent' : 'errBadCategory'))
+            var errKey = check.error === 'empty-content' ? 'errEmptyContent' : check.error === 'bad-expires' ? 'errBadExpires' : 'errBadCategory'
+            showToast('error', t(errKey))
             return
           }
           var started = editor
@@ -1710,9 +1960,12 @@
               scope: editor.scope,
               workspace: editor.scope === 'workspace' ? workspaceTarget : undefined,
               tags: tags,
+              origin: 'manual',
+              pinned: !!editor.pinned,
+              expires: editor.expires || undefined,
             })
           } else {
-            promise = api.update({ id: editor.id, content: editor.content.trim(), category: editor.category, tags: tags, scope: editor.scope, workspace: workspaceTarget })
+            promise = api.update({ id: editor.id, content: editor.content.trim(), category: editor.category, tags: tags, scope: editor.scope, workspace: workspaceTarget, pinned: !!editor.pinned, expires: editor.expires || '' })
           }
           promise.then(function (payload) {
             if (editorRef.current === started) setEditor(null)
@@ -1755,6 +2008,9 @@
               id: e.id, content: e.content, category: e.category, scope: e.scope,
               tags: e.tags || [], created: e.created, updated: e.updated, source: e.source || '',
               workspace: e.scope === 'workspace' ? wsTarget : null,
+              // v2 元数据随撤销原样恢复（host import 无损保留；缺省字段经 JSON 序列化自动省略）。
+              origin: e.origin, pinned: e.pinned, expires: e.expires, archived: e.archived,
+              supersedes: e.supersedes, superseded_by: e.superseded_by, last_access: e.last_access, hit_count: e.hit_count,
             }
           })
           api.import({ entries: payloadEntries }).then(function (payload) {
@@ -1855,6 +2111,16 @@
                     onClick: function () { changeCategory(categoryFilter === cat ? '' : cat) },
                   }, h(Icon, { name: meta.icon, size: 13, strokeWidth: 2 }), t(meta.label),
                     h('span', { className: 'dm_chip_n' }, stats ? String(stats.byCategory[cat] || 0) : '…'))
+                })),
+              h('div', { className: 'dm_chips dm_chips_status', role: 'group', 'aria-label': t('statusFilterLabel') },
+                STATUS_CHIPS.map(function (s) {
+                  var n = stats && stats.byStatus ? (stats.byStatus[s.key] || 0) : null
+                  return h('button', {
+                    key: s.key, className: 'dm_chip', 'aria-pressed': statusFilter === s.key,
+                    style: { '--dm-chip-c': s.c, '--dm-chip-soft': 'color-mix(in srgb,' + s.c + ' 12%,transparent)' },
+                    onClick: function () { changeStatus(s.key) },
+                  }, h(Icon, { name: s.icon, size: 13, strokeWidth: 2 }), t(s.label),
+                    h('span', { className: 'dm_chip_n' }, n === null ? '…' : String(n)))
                 }))),
             stats && selection === 'all'
               ? h('div', { className: 'dm_stats_scope' }, t('statsScope').replace('{g}', String(stats.byScope.global || 0)).replace('{w}', String(stats.byScope.workspace || 0)))
@@ -1873,14 +2139,14 @@
               h('button', { className: 'dm_btn', style: { marginTop: 12 }, onClick: function () { refreshEntries() } }, h(Icon, { name: 'undo', size: 13 }), t('retry')))
           }
           if (entries.length === 0) {
-            var filtered = !!(query || categoryFilter)
+            var filtered = !!(query || categoryFilter || originFilter || statusFilter !== 'active')
             return h('div', null,
               h('div', { className: 'dm_empty' },
                 h(ConstellationArt, { small: filtered }),
                 h('div', { className: 'dm_empty_title' }, filtered ? t('noResults') : t('emptyTitle')),
                 h('div', { className: 'dm_empty_hint' }, filtered ? t('noResultsHint') : t('emptyHint')),
                 filtered
-                  ? h('button', { className: 'dm_btn', style: { marginTop: 14 }, onClick: function () { changeQuery(''); changeCategory('') } }, h(Icon, { name: 'x', size: 13 }), t('clearFilters'))
+                  ? h('button', { className: 'dm_btn', style: { marginTop: 14 }, onClick: clearAllFilters }, h(Icon, { name: 'x', size: 13 }), t('clearFilters'))
                   : page === 0 ? h('button', { className: 'dm_btn dm_btn_primary', style: { marginTop: 14 }, onClick: openCreate }, h(Icon, { name: 'plus', size: 14, strokeWidth: 2.2 }), t('newMemory')) : null),
               pager)
           }
@@ -1892,6 +2158,7 @@
                 useRelative: !settings || settings.effective.relativeTime,
                 onToggleSelect: toggleSelect,
                 onEdit: openEdit, onDelete: openDelete,
+                onTogglePin: togglePin, onToggleArchive: toggleArchive, onJumpTo: jumpToEntry,
                 onTagClick: changeQuery,
                 onToast: function (text, kind) { showToast(kind, text) },
               })
@@ -1944,6 +2211,14 @@
                     }).concat(unknownWorkspaces.map(function (w) {
                       return { value: 'unknown-' + w.key, label: t('workspaceUnknown') + ' (' + String(w.key).slice(0, 8) + '…)', icon: 'folder', disabled: true }
                     })),
+                  }),
+                  h(Select, {
+                    ariaLabel: t('originFilterLabel'), value: originFilter, minWidth: 150, onChange: changeOrigin,
+                    options: [
+                      { value: '', label: t('originAll'), icon: 'layers' },
+                      { value: 'auto', label: t('originAuto'), icon: 'zap' },
+                      { value: 'manual', label: t('originManual'), icon: 'edit' },
+                    ],
                   }),
                   h('div', { className: 'dm_searchwrap' },
                     h('span', { className: 'dm_search_icon' }, h(Icon, { name: 'search', size: 15 })),

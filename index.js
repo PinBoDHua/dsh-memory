@@ -7,6 +7,7 @@
  * - ctx.tools.register(...)：4 个记忆工具（纯对象定义＋原始 JSON Schema）。
  * - ctx.systemPrompt.section(...)：每次装配实时重读记忆文件，把全局＋
  *   当前工作区记忆在预算内注入系统提示；interpolate: false 保护用户内容。
+ * - ctx.systemPrompt.context(...)：自动提取动态提示（特性检测，缺失则跳过）。
  * - ctx.webServer 命名路由 /plugins/dsh-memory/*：Web 管理面板的数据面，
  *   进程级 token + 回环检查（与 dsh-time-machine 同一模式）。
  * - 数据：~/.dsh/.dsh-memory/ 下 Markdown + frontmatter，一事一文件。
@@ -53,6 +54,10 @@ function dataRoot() {
   return path.join(home, '.dsh-memory')
 }
 
+/** 自动提取提示阈值：距上次记忆写入的装配评估次数（活动代理量）。 */
+const HINT_THRESHOLD = 3
+const HINT_TEXT = '本会话已有一段时间未写入记忆。若出现了值得长期保留的新稳定偏好/项目事实/决策（且非代码可推导、非短期任务指令），请用 memory_save 沉淀（主动沉淀传 origin=auto）；信息变化可用 supersedes 取代旧条目。若无则忽略此提示。'
+
 export function apply(ctx, rawConfig) {
   const config = resolveConfig(rawConfig)
   if (!config.enabled) return
@@ -87,9 +92,19 @@ export function apply(ctx, rawConfig) {
   }
   const sessionOf = (exec) => exec?.agent?.session
 
+  // 自动提取提示的每会话簿记：evals=装配评估累计，lastWriteEval=上次记忆写入时的 evals。
+  const hintState = new Map()
+  const noteWrite = (session) => {
+    const sid = session?.id
+    if (!sid) return
+    const st = hintState.get(sid) ?? { evals: 0, lastWriteEval: 0 }
+    st.lastWriteEval = st.evals
+    hintState.set(sid, st)
+  }
+
   const saveTool = {
     name: 'memory_save',
-    description: '把一条值得长期记住的事实写入跨会话记忆（一事一条）。用户偏好→scope=global，项目事实/决策→scope=workspace。密码/密钥/token 会被拒绝。Save one durable fact to cross-session memory (one fact per entry); credentials are rejected.',
+    description: '把一条值得长期记住的事实写入跨会话记忆（一事一条）。用户偏好→scope=global，项目事实/决策→scope=workspace。主动沉淀传 origin=auto；信息变化可 supersedes=旧id 取代（保留历史）。密码/密钥/token 会被拒绝。Save one durable fact to cross-session memory; credentials are rejected.',
     parameters: {
       type: 'object',
       properties: {
@@ -97,6 +112,10 @@ export function apply(ctx, rawConfig) {
         category: { type: 'string', enum: ['preference', 'fact', 'decision'], description: '分类：preference=用户偏好 fact=事实 decision=决策（默认 fact）' },
         scope: { type: 'string', enum: ['global', 'workspace'], description: 'global=用户级，跨项目共享；workspace=仅当前工作区（默认 workspace）' },
         tags: { type: 'array', items: { type: 'string' }, description: '可选检索关键词 Optional search keywords' },
+        origin: { type: 'string', enum: ['manual', 'auto'], description: '来源：manual=用户显式要求（默认）；auto=你主动沉淀（便于用户审阅撤销）' },
+        supersedes: { type: 'string', description: '可选：要取代的旧记忆 id；旧记忆标记被取代、默认隐藏，历史保留 Optional id of the memory this supersedes' },
+        expires: { type: 'string', description: '可选过期日 YYYY-MM-DD（UTC、当日含；到期隐藏不删除、可恢复）Optional expiry date' },
+        pinned: { type: 'boolean', description: '可选：钉选常驻（预算内优先注入、免衰减）Optional pin for always-inject' },
       },
       required: ['content'],
       additionalProperties: false,
@@ -108,6 +127,7 @@ export function apply(ctx, rawConfig) {
           id: { type: 'string' },
           scope: { type: 'string' },
           category: { type: 'string' },
+          origin: { type: 'string' },
           deduplicated: { type: 'boolean' },
         },
         required: ['id', 'scope', 'category', 'deduplicated'],
@@ -116,7 +136,7 @@ export function apply(ctx, rawConfig) {
         type: 'text',
         text: value.deduplicated
           ? `已有相同记忆，未重复写入：${value.id} (duplicate; existing memory kept)`
-          : `已记录记忆 ${value.id} [${value.category}/${value.scope}] (memory saved)`,
+          : `已记录记忆 ${value.id} [${value.category}/${value.scope}${value.origin === 'auto' ? '/auto' : ''}] (memory saved)`,
       }],
     },
     isConcurrencySafe: () => false,
@@ -127,16 +147,21 @@ export function apply(ctx, rawConfig) {
         category: args.category ?? 'fact',
         scope: args.scope ?? 'workspace',
         tags: args.tags ?? [],
+        origin: args.origin,
+        supersedes: args.supersedes,
+        expires: args.expires,
+        pinned: args.pinned,
         workspace: cwdOf(session),
         source: session?.id,
       })
-      return { id: entry.id, scope: entry.scope, category: entry.category, deduplicated }
+      if (!deduplicated) noteWrite(session)
+      return { id: entry.id, scope: entry.scope, category: entry.category, origin: entry.origin, deduplicated }
     },
   }
 
   const searchTool = {
     name: 'memory_search',
-    description: '检索跨会话记忆：关键词大小写不敏感、多词须全部命中，非空查询按相关度排序；空查询＝按更新时间列出。Search cross-session memory (case-insensitive, all terms must match, ranked by relevance; empty query lists recent memories).',
+    description: '检索跨会话记忆：关键词大小写不敏感、多词须全部命中（中文支持模糊），非空查询按相关度×新近度排序；空查询＝按更新时间列出。默认隐藏被取代/已过期/已归档条目，可用 include_* 找回。Search cross-session memory; hidden (superseded/expired/archived) entries excluded by default.',
     parameters: {
       type: 'object',
       properties: {
@@ -144,6 +169,9 @@ export function apply(ctx, rawConfig) {
         scope: { type: 'string', enum: ['global', 'workspace', 'all'], description: '检索范围（默认 all=全局+当前工作区）' },
         category: { type: 'string', enum: ['preference', 'fact', 'decision'], description: '按分类过滤 Optional category filter' },
         limit: { type: 'integer', description: '最多返回条数（默认 20）Max results (default 20)' },
+        include_superseded: { type: 'boolean', description: '包含被取代的历史条目（默认 false）Include superseded history' },
+        include_expired: { type: 'boolean', description: '包含已过期条目（默认 false）Include expired' },
+        include_archived: { type: 'boolean', description: '包含已归档条目（默认 false）Include archived' },
       },
       additionalProperties: false,
     },
@@ -159,6 +187,11 @@ export function apply(ctx, rawConfig) {
             content: { type: 'string' },
             tags: { type: 'array', items: { type: 'string' } },
             updated: { type: 'string' },
+            origin: { type: 'string' },
+            pinned: { type: 'boolean' },
+            expires: { type: 'string' },
+            archived: { type: 'boolean' },
+            superseded_by: { type: 'string' },
           },
           required: ['id', 'scope', 'category', 'content'],
         },
@@ -167,7 +200,10 @@ export function apply(ctx, rawConfig) {
         type: 'text',
         text: entries.length === 0
           ? '没有匹配的记忆 (no matching memories)'
-          : entries.map((e) => `- [${e.category}/${e.scope}] ${e.content} (id: ${e.id}, updated: ${e.updated})`).join('\n'),
+          : entries.map((e) => {
+            const marks = [e.pinned ? 'pinned' : '', e.archived ? 'archived' : '', e.superseded_by ? `superseded→${e.superseded_by}` : '', e.expires ? `expires ${e.expires}` : ''].filter(Boolean).join(', ')
+            return `- [${e.category}/${e.scope}${marks ? `; ${marks}` : ''}] ${e.content} (id: ${e.id}, updated: ${e.updated})`
+          }).join('\n'),
       }],
     },
     isConcurrencySafe: () => true,
@@ -178,14 +214,20 @@ export function apply(ctx, rawConfig) {
         category: args.category,
         workspace: cwdOf(sessionOf(exec)),
         limit: args.limit ?? 20,
+        includeSuperseded: args.include_superseded ?? false,
+        includeExpired: args.include_expired ?? false,
+        includeArchived: args.include_archived ?? false,
       })
-      return entries.map((e) => ({ id: e.id, scope: e.scope, category: e.category, content: e.content, tags: e.tags, updated: e.updated }))
+      return entries.map((e) => ({
+        id: e.id, scope: e.scope, category: e.category, content: e.content, tags: e.tags, updated: e.updated,
+        origin: e.origin, pinned: e.pinned, expires: e.expires, archived: e.archived, superseded_by: e.superseded_by,
+      }))
     },
   }
 
   const updateTool = {
     name: 'memory_update',
-    description: '按 id 更新一条记忆（新覆旧）：信息变化时原地更新，而不是新增重复条目；可选 scope 在 global 与当前工作区之间移动。Update a memory by id (newer supersedes older) instead of adding a duplicate; optional scope moves it between global and the current workspace.',
+    description: '按 id 更新一条记忆（新覆旧）：信息变化时原地更新，而不是新增重复条目；可选 scope 在 global 与当前工作区之间移动；可 supersedes 取代另一条、archived 归档/恢复、expires 设过期日（空串清除）、pinned 钉选。Update a memory by id; optional supersede/archive/expire/pin.',
     parameters: {
       type: 'object',
       properties: {
@@ -193,7 +235,11 @@ export function apply(ctx, rawConfig) {
         content: { type: 'string', description: '新内容（可选）New content' },
         category: { type: 'string', enum: ['preference', 'fact', 'decision'], description: '新分类（可选）New category' },
         tags: { type: 'array', items: { type: 'string' }, description: '新标签列表，整体替换（可选）Replacement tags' },
-        scope: { type: 'string', enum: ['global', 'workspace'], description: '可选：移动到新作用域（workspace 以当前会话工作目录为目标）；目标已有相同内容会被拒绝 Optional: move to a new scope; identical content in the target is rejected' },
+        scope: { type: 'string', enum: ['global', 'workspace'], description: '可选：移动到新作用域（workspace 以当前会话工作目录为目标）；目标已有相同内容会被拒绝 Optional: move to a new scope' },
+        supersedes: { type: 'string', description: '可选：本条取代的另一条记忆 id Optional id this entry supersedes' },
+        expires: { type: 'string', description: '可选过期日 YYYY-MM-DD；空串清除 Optional expiry; empty string clears' },
+        pinned: { type: 'boolean', description: '可选：钉选/取消钉选 Optional pin/unpin' },
+        archived: { type: 'boolean', description: '可选：true 归档（默认隐藏）/false 恢复 Optional archive/restore' },
       },
       required: ['id'],
       additionalProperties: false,
@@ -208,14 +254,20 @@ export function apply(ctx, rawConfig) {
     },
     isConcurrencySafe: () => false,
     execute(args, exec) {
+      const session = sessionOf(exec)
       const entry = service.update({
         id: args.id,
         content: args.content,
         category: args.category,
         tags: args.tags,
         scope: args.scope,
-        workspace: cwdOf(sessionOf(exec)),
+        supersedes: args.supersedes,
+        expires: args.expires,
+        pinned: args.pinned,
+        archived: args.archived,
+        workspace: cwdOf(session),
       })
+      noteWrite(session)
       return { id: entry.id, updated: entry.updated, scope: entry.scope }
     },
   }
@@ -255,9 +307,31 @@ export function apply(ctx, rawConfig) {
       return renderSection(entries, {
         autoInject: recall.autoInject,
         budgetChars: recall.injectionBudgetChars,
+        decayEnabled: recall.decayEnabled,
       })
     } catch {
       return GUIDANCE
+    }
+  }
+
+  // 自动提取动态提示：context provider 每次装配/准入重读，按会话累计活动量，
+  // 距上次记忆写入达阈值则给出静态提示（写入后清零）。特性检测：宿主无此 API
+  // 则静默跳过（GUIDANCE 仍生效）。零额外模型调用。
+  const hintProvider = (assembly) => {
+    try {
+      const sid = assembly?.agent?.session?.id
+      if (!sid) return ''
+      if (!service.recallConfig().autoExtractHint) return ''
+      const st = hintState.get(sid) ?? { evals: 0, lastWriteEval: 0 }
+      st.evals += 1
+      hintState.set(sid, st)
+      if (hintState.size > 500) {
+        const oldest = hintState.keys().next().value
+        hintState.delete(oldest)
+      }
+      return st.evals - st.lastWriteEval >= HINT_THRESHOLD ? HINT_TEXT : ''
+    } catch {
+      return ''
     }
   }
 
@@ -269,6 +343,11 @@ export function apply(ctx, rawConfig) {
       ctx.tools.register(updateTool),
       ctx.tools.register(forgetTool),
     ]
+    if (typeof ctx.systemPrompt?.context === 'function') {
+      try {
+        disposers.push(ctx.systemPrompt.context({ name: 'dsh-memory-extract', order: 9600, interpolate: false, text: hintProvider }))
+      } catch { /* 特性缺失或注册失败：静默跳过，GUIDANCE 仍生效 */ }
+    }
     // 自动备份：启动 5 秒后首检，此后每小时检查一次（开启且超 24h 才落盘）。
     const startupTimer = setTimeout(() => {
       try { service.maybeAutoBackup() } catch { /* best-effort */ }
@@ -279,6 +358,7 @@ export function apply(ctx, rawConfig) {
     return () => {
       clearTimeout(startupTimer)
       clearInterval(backupTimer)
+      hintState.clear()
       for (const dispose of disposers.reverse()) {
         try {
           dispose()
@@ -288,9 +368,20 @@ export function apply(ctx, rawConfig) {
   })
 
   // Web 管理面板的数据面：webServer 可选挂载，缺失时工具与注入仍可用。
+  // resolveCwd：按 sessionId 返回会话有效目录（workingDirectory 权威，跟随 cd），
+  // 供面板「当前工作区」与工具口径对齐；服务缺失时回退 undefined（面板用初始目录）。
+  const resolveCwd = (sessionId) => {
+    if (!sessionId) return undefined
+    try {
+      const sessions = ctx.get('sessions')
+      return cwdOf(sessions?.get?.(sessionId))
+    } catch {
+      return undefined
+    }
+  }
   try {
     ctx.inject(['webServer'], (webCtx) => {
-      webCtx.effect(() => attachRoutes({ webCtx, service, token: controlToken, version: liveVersion }))
+      webCtx.effect(() => attachRoutes({ webCtx, service, token: controlToken, version: liveVersion, resolveCwd }))
     })
   } catch (error) {
     ctx.logger?.warn?.('dsh-memory: 无法挂载 Web 面板接口（没有 webServer 服务）', error)

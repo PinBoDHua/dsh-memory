@@ -3,6 +3,32 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.9.0] - 2026-11-13
+
+### 新增 Added
+- **取代链（supersede）**：`memory_save`/`memory_update` 可声明 `supersedes=旧id`；旧记忆标记 `superseded_by`/`superseded_at`，默认隐藏、历史保留可查（`include_superseded` 找回）。信息变化不再产生并存矛盾。
+- **可选过期日（expires）**：`YYYY-MM-DD`（UTC、当日含），到期默认隐藏不删除、可恢复（`include_expired`）；坏日期 fail-open。
+- **钉选常驻（pinned）**：钉选记忆在注入预算内最先注入、免衰减。
+- **归档（archived）**：`memory_update` `archived=true` 归档（默认隐藏）/`false` 恢复（`include_archived`）。
+- **软衰减排序＋命中反馈**：检索/注入命中簿记 `last_access`/`hit_count`（节流 ≤1 次/小时）；相关度×衰减乘子 `clamp(1.5−0.15×闲置周数, 0.3, 1.5)`，永不过滤、pinned 豁免、`decayEnabled` 可关回退现状。
+- **自动提取动态提示**：`ctx.systemPrompt.context()` 按会话活动量周期性提醒主 agent 沉淀记忆（`origin=auto` 标记），写入后清除；特性检测缺失则静默跳过；零额外模型调用；`autoExtractHint` 可关。
+- **中文检索增强**：CJK bigram 模糊匹配（覆盖率 ≥0.6），提升中文召回；保留 AND 语义与精确子串命中。
+- **来源标记（origin）**：manual/auto；面板徽章＋筛选，自动记忆可审阅撤销。
+- 面板：状态筛选（活跃/被取代/已过期/已归档/已钉选）＋`byStatus` 计数、钉选/归档快捷操作、编辑弹窗钉选开关与过期日输入、详情展开 origin/last_access/hit_count/取代链。
+- 设置新增 `autoExtractHint`、`decayEnabled` 开关（注入与召回组）。
+- live 验证脚本 `scripts/live-check.mjs`（回环 API 端到端＋客户端分发 rev 实证）。
+
+### 变更 Changed
+- **schemaVersion 1→2**：新字段全部可选、稀疏存储，旧文件无需改写（懒缺省）；加载时旧 v1 数据强制备份一次再升级 meta 锚点，旧记忆零丢失。
+- **检索/注入默认语义**：默认隐藏被取代/已过期/已归档条目（`include_*` 可找回）；工具描述与面板明示。
+- 注入排序：钉选最先→分类优先→类内衰减乘子倒序（同分按更新时间）。
+- 去重只针对未取代条目（允许「save 新＋supersedes 旧」修正流）。
+- guard 机密模式扩充：Bearer 令牌、带口令连接串。
+- 导出/导入保留 v2 可选字段（无损往返）。
+
+### 修复 Fixed
+- 面板「当前工作区」与会话有效目录口径对齐：新增只读 `/cwd` 路由（workingDirectory 服务，跟随 cd），面板初始目录基础上异步刷新，cd 后不再与 agent 工具错位；服务不可用时回退初始目录。
+
 ## [0.8.1] - 2026-11-13
 
 ### 修复 Fixed

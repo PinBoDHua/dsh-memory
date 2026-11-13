@@ -247,13 +247,13 @@ test('update/move validation errors carry code invalid / no-workspace', () => {
   assert.throws(() => store.moveEntry(root, entry.id, 'workspace', undefined), (err) => err.code === 'no-workspace')
 })
 
-test('meta.json: created on first write, schemaVersion 1, tolerant of corruption', () => {
+test('meta.json: created on first write, schemaVersion 2, tolerant of corruption', () => {
   const root = tmpRoot()
   assert.ok(!fs.existsSync(path.join(root, 'meta.json')))
   store.saveEntry(root, { content: '第一条', scope: 'global' })
   const meta = JSON.parse(fs.readFileSync(path.join(root, 'meta.json'), 'utf8'))
   assert.equal(meta.plugin, 'dsh-memory')
-  assert.equal(meta.schemaVersion, 1)
+  assert.equal(meta.schemaVersion, 2)
   assert.ok(meta.createdAt)
   const createdAt = meta.createdAt
   store.saveEntry(root, { content: '第二条', scope: 'global' })
@@ -262,7 +262,7 @@ test('meta.json: created on first write, schemaVersion 1, tolerant of corruption
   fs.writeFileSync(path.join(root, 'meta.json'), '{corrupt', 'utf8')
   store.saveEntry(root, { content: '第三条', scope: 'global' })
   const meta3 = JSON.parse(fs.readFileSync(path.join(root, 'meta.json'), 'utf8'))
-  assert.equal(meta3.schemaVersion, 1, 'corrupt meta rebuilt')
+  assert.equal(meta3.schemaVersion, 2, 'corrupt meta rebuilt')
 })
 
 test('workspaces listing ignores non-hash directories (lock dirs)', () => {

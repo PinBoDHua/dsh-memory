@@ -133,7 +133,7 @@ test('status reports root, schemaVersion and counts', () => {
   service.save({ content: '工作区一', scope: 'workspace', workspace: 'D:\\proj\\alpha' })
   const status = service.status()
   assert.equal(status.root, root)
-  assert.equal(status.schemaVersion, 1)
+  assert.equal(status.schemaVersion, 2)
   assert.deepEqual(status.counts, { global: 2, workspaces: 1 })
 })
 
@@ -182,12 +182,12 @@ test('settings view exposes defaults/base/overlay/effective, privacy always-on, 
 test('baseConfig is the base layer; overlay overrides; recallConfig reflects live', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-memory-svc-base-'))
   const service = createMemoryService({ root, baseConfig: { autoInject: false, injectionBudgetChars: 1234 } })
-  assert.deepEqual(service.recallConfig(), { autoInject: false, injectionBudgetChars: 1234 })
+  assert.deepEqual(service.recallConfig(), { autoInject: false, injectionBudgetChars: 1234, decayEnabled: true })
   service.updateSettings({ autoInject: true, injectionBudgetChars: 8000, pageSize: 20 })
-  assert.deepEqual(service.recallConfig(), { autoInject: true, injectionBudgetChars: 8000 })
+  assert.deepEqual(service.recallConfig(), { autoInject: true, injectionBudgetChars: 8000, decayEnabled: true })
   assert.equal(service.settings().effective.pageSize, 20)
   service.resetSettings()
-  assert.deepEqual(service.recallConfig(), { autoInject: false, injectionBudgetChars: 1234 })
+  assert.deepEqual(service.recallConfig(), { autoInject: false, injectionBudgetChars: 1234, decayEnabled: true })
   assert.equal(service.settings().effective.pageSize, 50)
 })
 
