@@ -3,6 +3,15 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.16.0] - 2026-11-13
+
+### 新增 Added
+- **取代链双向导航**：条目详情中的「取代了 / 被取代」id 现为可点击链接，跳转到对应记忆（此前仅卡片顶部「查看后继」单向按钮）。
+- **全部状态筛选**：状态 chips 新增「全部状态」（all），一次放宽 include_superseded/include_expired/include_archived，可一览含隐藏态的全部记忆（此前只能按单一隐藏态筛选）。
+
+### 修复 Fixed
+- 跳转到被取代/已归档/已过期的目标不再被「活跃」过滤遮罩成死路：`jumpToEntry` 改用 all 状态，揭示任意状态的目标记忆。
+
 ## [0.15.0] - 2026-11-13
 
 ### 新增 Added
@@ -197,6 +206,7 @@ All notable changes to this project are documented here. Format follows Keep a C
 - 系统提示注入：指引＋字符预算内召回（`interpolate: false` 保护用户内容）。
 - 隐私护栏：密码/密钥/token 规则检测硬拒写。
 
+[0.16.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.12.0...v0.13.0

@@ -60,11 +60,11 @@ async function main() {
 
   // 1. status：版本与 schema
   let token = ''
-  await check('status 报告 version=0.15.0 / schemaVersion=2 并下发 token', async () => {
+  await check('status 报告 version=0.16.0 / schemaVersion=2 并下发 token', async () => {
     const { status, json } = await req('GET', '/status')
     ok('status HTTP 200', status === 200, `got ${status}`)
     ok('status.ok', json?.ok === true)
-    ok('version === 0.15.0', json?.version === '0.15.0', `got ${json?.version}`)
+    ok('version === 0.16.0', json?.version === '0.16.0', `got ${json?.version}`)
     ok('schemaVersion === 2', json?.schemaVersion === 2, `got ${json?.schemaVersion}`)
     ok('token 非空', typeof json?.key === 'string' && json.key.length > 0)
     token = json?.key ?? ''
@@ -210,6 +210,7 @@ async function main() {
     ok('bundle 含 0.11.0 新文案 similarSaved', code.includes('similarSaved'))
     ok('bundle 含 0.12.0 新文案 auditTitle', code.includes('auditTitle'))
     ok('bundle 含 0.14.0 新文案 recallTitle', code.includes('recallTitle'))
+    ok('bundle 含 0.16.0 新文案 statusAll/jumpToEntry', code.includes('statusAll') && code.includes('jumpToEntry'))
   })
 
   // 7. 清理测试条目

@@ -60,6 +60,7 @@
 
   // 选中隐藏态筛选时放宽对应 include_*；active/pinned 不需要服务端参数。
   function statusQueryFlags(status) {
+    if (status === 'all') return { include_superseded: true, include_expired: true, include_archived: true }
     if (status === 'superseded') return { include_superseded: true }
     if (status === 'expired') return { include_expired: true }
     if (status === 'archived') return { include_archived: true }
@@ -71,7 +72,7 @@
     var e = entry || {}
     var f = filters || {}
     if (f.status === 'pinned') { if (!e.pinned) return false }
-    else if (f.status && f.status !== 'active' && statusOf(e, now) !== f.status) return false
+    else if (f.status && f.status !== 'active' && f.status !== 'all' && statusOf(e, now) !== f.status) return false
     if (f.origin && originOf(e) !== f.origin) return false
     return true
   }
@@ -309,6 +310,7 @@
     statusExpired: '已过期',
     statusArchived: '已归档',
     statusPinned: '已钉选',
+    statusAll: '全部状态',
     pin: '钉选',
     unpin: '取消钉选',
     archive: '归档',
@@ -330,6 +332,7 @@
     supersededByLabel: '被取代于',
     viewSuccessor: '查看后继',
     jumpToSuccessor: '搜索后继记忆',
+    jumpToEntry: '跳转到该记忆',
     autoExtractHintLabel: '自动提取提示',
     autoExtractHintDesc: '会话数轮未写入记忆时，提醒 agent 沉淀值得长期保留的内容（零额外模型调用）',
     decayEnabledLabel: '软衰减排序',
@@ -498,6 +501,7 @@
     statusExpired: 'Expired',
     statusArchived: 'Archived',
     statusPinned: 'Pinned',
+    statusAll: 'All statuses',
     pin: 'Pin',
     unpin: 'Unpin',
     archive: 'Archive',
@@ -519,6 +523,7 @@
     supersededByLabel: 'Superseded by',
     viewSuccessor: 'View successor',
     jumpToSuccessor: 'Search for the successor memory',
+    jumpToEntry: 'Jump to this memory',
     autoExtractHintLabel: 'Auto-extraction hints',
     autoExtractHintDesc: 'After several turns without a memory write, remind the agent to save durable facts (no extra model calls)',
     decayEnabledLabel: 'Soft decay ranking',
@@ -693,6 +698,8 @@
     '.dm_details_row{display:flex;gap:6px;align-items:baseline;}',
     '.dm_details_k{color:var(--dm-ink3);flex-shrink:0;}',
     '.dm_details_v{word-break:break-all;}',
+    '.dm_details_link{display:inline-flex;align-items:center;gap:3px;border:none;background:none;padding:0;font:inherit;color:var(--dm-primary);cursor:pointer;word-break:break-all;text-decoration:underline;text-underline-offset:2px;}',
+    '.dm_details_link:hover{color:var(--dm-primary2);}',
     '.dm_card_foot{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:2px;}',
     '.dm_tag{border:1px solid var(--dm-line2);background:transparent;color:var(--dm-ink2);font:inherit;font-size:11px;padding:1.5px 9px;border-radius:999px;cursor:pointer;corner-shape:round;transition:all .15s;}',
     '.dm_tag:hover{color:var(--dm-primary);border-color:color-mix(in srgb,var(--dm-primary) 50%,var(--dm-line2));background:color-mix(in srgb,var(--dm-primary) 8%,transparent);}',
@@ -956,6 +963,7 @@
       }
 
       var STATUS_CHIPS = [
+        { key: 'all', icon: 'layers', c: 'var(--dm-ink2)', label: 'statusAll' },
         { key: 'active', icon: 'checkCircle', c: 'var(--dm-primary)', label: 'statusActive' },
         { key: 'superseded', icon: 'link', c: 'var(--dm-ink3)', label: 'statusSuperseded' },
         { key: 'expired', icon: 'clock', c: 'var(--dm-danger)', label: 'statusExpired' },
@@ -1170,9 +1178,12 @@
                 entryDetailRows(entry).map(function (row) {
                   var text = row.key === 'originLabel' ? t(row.value === 'auto' ? 'originAuto' : 'originManual')
                     : DETAIL_TEXT_KEYS[row.key] ? row.value : formatTime(row.value)
+                  var isLink = row.key === 'supersedesLabel' || row.key === 'supersededByLabel'
                   return h('div', { className: 'dm_details_row', key: row.key },
                     h('span', { className: 'dm_details_k' }, t(row.key) + ':'),
-                    h('span', { className: 'dm_details_v' }, text))
+                    isLink
+                      ? h('button', { className: 'dm_details_link', title: t('jumpToEntry') + ': ' + row.value, onClick: function () { props.onJumpTo(row.value) } }, text, h(Icon, { name: 'chevR', size: 11, strokeWidth: 2.2 }))
+                      : h('span', { className: 'dm_details_v' }, text))
                 }),
                 h('div', null, h('button', { className: 'dm_btn dm_btn_mini', onClick: copyId }, h(Icon, { name: 'copy', size: 12 }), t('copyId'))))
               : null,
@@ -2022,7 +2033,7 @@
         function changeStatus(value) { setStatusFilter(value); setPage(0); setSelected([]) }
         function clearAllFilters() { setQuery(''); setCategoryFilter(''); setOriginFilter(''); setStatusFilter('active'); setPage(0); setSelected([]) }
         // 被取代条目的「查看后继」：按 id 搜索（host query 匹配 id），回到活跃视图。
-        function jumpToEntry(id) { setStatusFilter('active'); setOriginFilter(''); setCategoryFilter(''); setPage(0); setSelected([]); setQuery(String(id || '')) }
+        function jumpToEntry(id) { setStatusFilter('all'); setOriginFilter(''); setCategoryFilter(''); setPage(0); setSelected([]); setQuery(String(id || '')) }
         function changePage(value) { setPage(value); setSelected([]) }
         function toggleSelect(id) {
           setSelected(function (prev) { return prev.indexOf(id) === -1 ? prev.concat([id]) : prev.filter(function (x) { return x !== id }) })
@@ -2284,7 +2295,7 @@
                 })),
               h('div', { className: 'dm_chips dm_chips_status', role: 'group', 'aria-label': t('statusFilterLabel') },
                 STATUS_CHIPS.map(function (s) {
-                  var n = stats && stats.byStatus ? (stats.byStatus[s.key] || 0) : null
+                  var n = stats && stats.byStatus ? (s.key === 'all' ? (stats.byStatus.active || 0) + (stats.byStatus.superseded || 0) + (stats.byStatus.expired || 0) + (stats.byStatus.archived || 0) : (stats.byStatus[s.key] || 0)) : null
                   return h('button', {
                     key: s.key, className: 'dm_chip', 'aria-pressed': statusFilter === s.key,
                     style: { '--dm-chip-c': s.c, '--dm-chip-soft': 'color-mix(in srgb,' + s.c + ' 12%,transparent)' },

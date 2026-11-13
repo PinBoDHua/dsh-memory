@@ -238,3 +238,21 @@ test('matchesFilters combines status and origin filters', () => {
   assert.equal(matchesFilters(pinned, { status: 'pinned', origin: 'manual' }, now), false)
   assert.equal(matchesFilters(null, {}, now), true)
 })
+
+test('statusQueryFlags: all reveals every hidden state', () => {
+  assert.deepEqual(statusQueryFlags('all'), { include_superseded: true, include_expired: true, include_archived: true })
+})
+
+test('matchesFilters: all status passes every entry regardless of state', () => {
+  const now = Date.parse('2026-11-13T12:00:00Z')
+  const entries = [
+    { id: 'a' },
+    { id: 'd', superseded_by: 'x' },
+    { id: 'e', archived: true },
+    { id: 'f', expires: '2020-01-01' },
+    { id: 'c', pinned: true },
+  ]
+  for (const e of entries) assert.equal(matchesFilters(e, { status: 'all' }, now), true)
+  assert.equal(matchesFilters({ id: 'g', origin: 'auto' }, { status: 'all', origin: 'manual' }, now), false)
+  assert.equal(matchesFilters({ id: 'h', origin: 'manual' }, { status: 'all', origin: 'manual' }, now), true)
+})
