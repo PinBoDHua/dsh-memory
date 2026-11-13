@@ -24,10 +24,10 @@ This file is the self-iteration ledger for dsh-memory: per-round increments, ver
 | `tests/*.test.mjs` | 纯逻辑/服务/路由/存储/锁/设置/守卫/客户端纯函数 | `node --test tests/*.test.mjs` |
 | `scripts/live-check.mjs` | 运行中宿主回环 API 全链路＋客户端 bundle rev | `--port=` 或 `DSH_MEMORY_PORT`；测试条目/设置/备份自动恢复，`--fail-at=<子串>` 失败注入验证异常清理，运行前后数据根快照 diff=0 自检 |
 | `scripts/gui-check.mjs` | 真实浏览器面板：过滤请求参数、下拉键盘、弹窗 Esc 草稿 | `--url=`；Edge headless + CDP（端口默认随机，可用 `--cdp-port=` 固定）；cookie 由 `<DSH_HOME>/.credentials.yaml` 自签；临时记忆清理，设置/备份用例前后快照恢复，运行前后数据根快照 diff=0 自检；中断安全（清理注册表 + SIGINT/SIGTERM/异常统一 abort；`--abort-after=<ms>` 注入验证） |
-| `scripts/data-snapshot.mjs` | live/gui 共用的数据根快照/差异纯函数 | 条目内容 sha256、backups 内容 sha256、settings/meta；junk 清单（`.tmp-*`、`.lock-*`、非预期文件）；刻意排除 access.json/index.json；`tests/data-snapshot.test.mjs` 覆盖 |
+| `scripts/data-snapshot.mjs` | live/gui 共用的数据根快照/差异纯函数 | 条目内容 sha256、backups 内容 sha256、settings/meta；junk 清单（`.tmp-*`、`.lock-*`、非预期文件）；刻意排除 access.json/index.json 与派生 `.cache/`；`tests/data-snapshot.test.mjs` 覆盖 |
 | `scripts/verify-lock.mjs` | 验证脚本互斥锁 | 数据根 `.lock-verify`（data-snapshot 忽略其存在）；并发第二个脚本码 `busy` 快速退出；陈旧锁按 mtime 自愈、owner 死 PID 立即自愈；`tests/verify-lock.test.mjs` 覆盖 |
 | `scripts/watchdog.mjs` | live/gui 强杀看门狗 | 父进程启动时写清理 manifest（root/测试标记/settings 原始内容/backups 基线），detached 子进程每 1.5s 检查父存活；被 taskkill/CI 超时杀死后自动删测试条目、恢复 settings、删除新增备份与残留锁；正常结束由 cleanup 注册表停掉；`tests/watchdog.test.mjs` 覆盖，真实 `taskkill /F` 实测通过 |
-| `scripts/bench.mjs` | 大库性能基准 | `--entries=30000 --dir=<临时根> --regen`；合成 global+workspace 数据根，输出冷/热 listAll、status、export、recallPreview、search、forgetOne 毫秒数（JSON） |
+| `scripts/bench.mjs` | 大库性能基准 | `--entries=30000 [--dir=<临时根>] [--regen] [--force]`；默认复用已存在数据根，只有带 `.bench-root` marker 或目录名为 `dsh-memory-bench-*` 的目录才允许 `--regen` 删除（否则拒绝，需显式 `--force`）；输出冷/热 listAll、`indexColdListMs`（从持久化索引进程冷启动）、status、export、recallPreview、search、forgetOne 毫秒数（JSON）；`tests/bench.test.mjs` 覆盖删除决策 |
 
 环境注意：GUI 端口每次启动不同，以运行时上下文为准；PowerShell 5.1 输出中文需 `[Console]::OutputEncoding=[Text.Encoding]::UTF8`；`git push` 的 stderr 进度可能被 PS 报 NonZeroExit，需看内容判断。
 
@@ -139,7 +139,7 @@ This file is the self-iteration ledger for dsh-memory: per-round increments, ver
 > 三个只读审计员（宿主 / 面板 / 运维文档）的合并清单，按轮次逐项消化；0.24.23 已修项见 CHANGELOG。
 
 ### P1（下一轮优先）
-- [ ] **导入同步冻结宿主 + 无进度/幂等**：客户端分片（≤300 条/片）+ 进度 + 部分失败提示已完成（0.24.25，320 条实测 2 次请求）；**剩余**：服务端 `importId` 幂等回执（merge 重试仍可能覆盖首次完成后被用户改过的条目）与写批 `setImmediate`/锁心跳（单片已足够小，跨进程 stale 风险降低但未消除）。
+- [x] **导入同步冻结宿主 + 无进度/幂等**（0.24.25 客户端分片+进度+部分失败；0.24.30 服务端 importId 幂等回执/单请求 1000 上限；0.24.34 停止按钮。剩余：回执仅进程内存，宿主重启后 merge 重放仍可能回滚用户编辑——见第六轮 P2）。
 - [x] **跨工作区取代链清理不完整**：`clearSupersedeReferences/clearSupersededBy` 只扫 global＋当前 cwd；A 的工作区前驱被 global 后继取代、之后在 B 删除后继 → 前驱永久隐藏且工具无法修复（`memory_update` 无清 `superseded_by`）。方案：悬垂清理扫描 global＋全部工作区（新增 `listEverywhere`），或 `moveEntry` 跨 scope 时消解/拒绝跨作用域链。
 - [x] **批量删除 = N 次全量扫描**（0.24.25：`/forget ids[]` 单请求、一次扫描/一次取代指针清理；GUI 断言只发 1 个请求、可一次撤销恢复多条）。
 
@@ -172,7 +172,8 @@ dreaming/后台 LLM 提取、向量/图检索、完整 bi-temporal 四时间戳�
 > 三个只读审计员（宿主 / 面板 / 运维文档）的合并清单。0.24.29 已修项：分片导入按取代链分量打包（P1 数据损坏）、部分成功导入刷新 dataVersion、导出 skipped UI 提示、frontmatter 换行注入防护、busy 不粘滞 backupError、GUI profile 回收（实测回收 85 目录/9.7GB）、verify-lock 死 PID 自愈、settings 真并发测试、skipped 导入往返测试。
 
 #### P1
-- [x] **30k 库全量遍历同步冻结宿主（热路径）**（0.24.33：≥1024 文件的目录缓存解析结果数组，靠「本进程写路径同步打补丁 + fs.watch 递归增量重读单文件 + watcher 不可用退化为不缓存」三路维护；30k 合成库实测 warm listAll **1450→约 50ms**、export **1466→86ms**、recallPreview **1568→152ms**、search→91ms、单条 forget **1594→75ms**；小目录/测试库保持逐文件 stat 的严格语义。冷启动首次解析仍 ~15.4s，下一步单独优化）。
+- [x] **30k 库全量遍历同步冻结宿主（热路径）**（0.24.33：≥1024 文件的目录缓存解析结果数组，靠「本进程写路径同步打补丁 + fs.watch 递归增量重读单文件 + watcher 不可用退化为不缓存」三路维护；30k 合成库实测 warm listAll **1450→约 50ms**、export **1466→86ms**、recallPreview **1568→152ms**、search→91ms、单条 forget **1594→75ms**；小目录/测试库保持逐文件 stat 的严格语义。冷启动首次解析已由 0.24.36 持久化索引解决：索引冷启动 1.72–1.76s，首次建索引为一次性 19–23s）。
+- [x] **30k 库冷启动解析 19–23s**（0.24.36：持久化解析索引 `<root>/.cache/entries-v1.json`——进程重启只 stat 校验签名，未变化条目复用解析结果，30k 冷启动实测 **1.72–1.76s**；新增/变更/删除按签名重读，索引缺失/损坏回退全量；`.cache` 属派生数据被快照忽略；`DSH_MEMORY_INDEX=0` 可禁用）。
 - [x] **/import 单请求无条数上限**（0.24.30：>1000 条 400 invalid，dryRun 同样；客户端整档预演分片 dry-run 聚合，确认仍 ≤300/片）。
 - [x] **importId 幂等回执**（0.24.30：内存 LRU 200（importId+chunkIndex），重放返回 `{cached:true}` 不写盘；客户端稳定 runId + 部分失败保留弹窗重试，merge 重试不再回滚用户编辑）。
 - [x] **导入取代关系物化**（0.24.30：`supersedes` 自动补齐批内/磁盘目标的反向 `superseded_by`，磁盘目标随同一原子批次写；`superseded_by` 补齐批内目标 `supersedes`；冲突/未声明反向丢弃计 repaired；环检测含物化反向边）。
@@ -183,7 +184,7 @@ dreaming/后台 LLM 提取、向量/图检索、完整 bi-temporal 四时间戳�
 - [x] **moveEntry 无回滚**（0.24.34：旧文件删除失败时回滚刚写入的新文件并抛 `code=io`，同 id 不再双作用域并存；测试 patch `fs.rmSync` 抛 EBUSY 验证零变更）。
 - [x] **withLock 陈旧自愈 check-then-rm 双持有**（0.24.34：陈旧锁改为 `rename` 到 owner nonce 认领目录（只有一个进程能成功），认领后复核 mtime 仍陈旧才删除；若误抢到新锁则 rename 放回并继续等待。锁超时错误带 `code=busy`）。
 - [x] **settings 锁争用映射**（0.24.34：`resetOverlay` 不再吞锁超时，`withLock` 超时统一 `code=busy` → 路由 503；测试断言 write/reset 争用时均抛 busy、释放后恢复）。
-- [ ] **settings 错误提示文案**：面板对 503 busy 显示「另一个进程正在写入，请稍后重试」（已有 errBusy 映射），无需额外代码，保留待验证。
+- [x] **settings 错误提示文案**（0.24.34：503 busy 走 `errBusy` 映射，GUI/live 已断言；文案无需额外代码）。
 - [x] **面板归档撤销在 busy 窗口被静默丢弃**（0.24.32：撤销类动作 `quickUpdate({force:true})` 绕过 busy 守卫；GUI 用 1.5s 延迟注入「归档→toast 出现→刷新 busy 中撤销」断言最终未归档）。
 - [x] **分类 chip 计数失真**（0.24.32：`categoryChipCount` 在分类筛选时隐藏其它分类数字，仅保留「全部」与当前分类；GUI 断言筛选后只有 2 个数字）。
 - [x] **分片导入不可取消**（0.24.34：busy 时导出弹窗提供唯一可点的「停止导入」；当前片结算后不再发后续片，已落盘片保留并提示「已停止：已写入 d/t」；GUI 用 620 条 + 延迟注入验证只提交首片、后续片未落盘）。
@@ -191,9 +192,6 @@ dreaming/后台 LLM 提取、向量/图检索、完整 bi-temporal 四时间戳�
 - [x] **空态/错误态按钮卸载后焦点掉 body**（0.24.32：`focusPage()` 用于清除筛选、列表/面板/设置重试；GUI 断言清除筛选后焦点回 `.dm_page`）。
 - [x] **dataVersion 写路径缺正向断言**（0.24.32：GUI 断言归档成功→召回预览 +1、撤销归档→再 +1；失败路径沿用「不刷新」语义）。
 - [ ] **dataVersion 失败路径正向断言**：保存/删除失败时不得 +1（低优先，当前负例覆盖主要回归面）。
-- [x] **撤销 toast 无条件抢焦点**（0.24.32：见上，已修）。
-- [x] **空态/错误态按钮卸载后焦点掉 body**（0.24.32：见上，已修）。
-- [x] **dataVersion 写路径缺正向断言**（0.24.32：见上，已修）。
 - [ ] **分片导入失败/重试路径无自动化覆盖**。方案：mock fetch 第 2 片 500 → 提示已写入 d/t、重试不重复、最终全落盘。
 
 #### P3
@@ -203,3 +201,33 @@ dreaming/后台 LLM 提取、向量/图检索、完整 bi-temporal 四时间戳�
 - [ ] **导出/备份沿用 15s 超时**（大库可能误报超时且备份已成功）。方案：export/backup 独立 timeout（如 120s）+ 进行中文案。
 - [x] **engines.dsh 严格 semver 不满足预发布宿主**（0.24.35：README 安装节写明 Node ≥22.6 / DSH ≥0.2.0-rc.2 与预发布语义；`engines.dsh` 保持 `>=0.2.0-rc.2`，link 安装在 0.2.2-alpha.3 实测可用。若宿主启用硬校验且不做 includePrerelease 再按宿主语义调整）。
 - [ ] **设置重载与在途保存**：reset 不等待 in-flight save（窄窗口），可持 in-flight promise 串行化。
+
+
+### 第六轮双端审计 backlog（2026-11-14，工作树 0.24.36）
+
+> 三个只读审计（宿主 / 面板 / 运维文档）的合并清单。**0.24.36 已修**：持久化索引冷启动装 watcher / 索引形状校验 / 库删空或低于阈值时删除索引（隐私正文不残留）/ 索引加载前装 watcher；forget 文件删不掉时不再谎报 deleted（单条 busy 503、批量 failed）；bench --regen 拒绝删除非基准目录；相对时间 45–59s「0 分钟前」；toast 焦点只接管卡片动作按钮（不再抢复选框/输入）；导入停止按钮只在真实写盘阶段出现；分片预演 rejected 下标重定位；停止/中断文案与 dataVersion 使用真实写入数（imported+updated）；errJoin/labelSep 收口；禁用态 hover 视觉。
+
+#### P1
+- [x] **索引残留已忘内容**（0.24.36：total<1024 时删除索引文件 + forget 后立即重写；清空/缩容不再留正文副本）。
+- [x] **forget 文件占用仍报 deleted:true**（0.24.36：只计真正 unlink 成功的 id；单条 code=busy 503、批量返回 failed；测试用 EBUSY patch 覆盖）。
+
+#### P2
+- [ ] **/similar 候选对无上限且超高频特征整段跳过**：8000 条 8 簇实测同步 3.76s、RSS +954MB；5000 条近似重复返回 0 对。方案：路由 limit 透传+夹取、top-K 最小堆、每条目候选上限、超高频特征按步长抽样。
+- [ ] **取代关系不可撤销**：`supersedes:''` 被静默忽略、`superseded_by` 无清除入口；误取代/导入物化后无法修复。方案：`supersedes:''` 清除本条目并全作用域清目标反向指针；`superseded_by:''` 作为悬垂修复后门。
+- [ ] **save 去重命中时静默丢弃显式 supersedes；revive 忽略 pinned/expires/category/tags**。方案：应用到既有条目或 400 提示改用 update；revive 应用显式字段。
+- [ ] **importId 回执仅进程内存**：宿主重启/插件重载后同 importId merge 重放会回滚失败窗口内用户编辑（跨实例 PoC 复现）。方案：回执持久化到 .cache/import-receipts.json（含每片内容哈希）或 merge 时 updated 晚于回执则跳过；至少文档限定「同一宿主进程内」并补跨实例测试。
+- [ ] **verify-lock 陈旧锁 check-then-rm + watchdog 无条件删锁**：放大调度窗口后 2/3 轮双持有；watchdog 会删 owner 仍存活的 .lock-verify。方案：verify-lock 复用 lib/lock.js 的 rename 认领+owner nonce；watchdog 删锁前校验 owner PID 存活。
+- [ ] **索引写入放大**：单条写入 5s 后 14MB 全量同步重写（stringify 79ms+写 33ms）；forget 路径内同步重写。方案：按目录分片只重写 dirty 目录，或降低重写频率/在空闲期分批。
+- [ ] **导入预演无进度、预演期不可取消**：首次 dry-run 期间无弹窗（只有工具栏禁用），改模式时停止按钮不显示（0.24.36 已只在写盘阶段显示，但预演期仍无进度/取消）。方案：预演分片上报「正在预演 d/t」并支持取消 ref。
+
+#### P3
+- [ ] **settings storageUsage 全树 stat**：30k 实测 493ms 同步阻塞、5s 缓存，且不含 .cache/backups。方案：大库用目录缓存签名 size 汇总或 TTL 60s；标注统计范围。
+- [ ] **search/entries limit 无上限**：limit=1e6 返回 29,998 条/9.4MB。方案：schema maximum + 服务层夹取（工具 200、路由 ≤1000）。
+- [ ] **索引加载窗口顺序**（0.24.36 已把 watcher 提前到 stat 循环之前，残余窗口仍待时序构造验证）。
+- [ ] **导出/备份沿用 15s 超时**（大库冷启动/首次导出可能假失败且备份已写盘）。方案：export/backup 120s + 进行中文案。
+- [ ] **列表无外部写入刷新路径**：切回记忆 tab/窗口聚焦不刷新，agent 在其它会话写入后看不到新条目。方案：工具栏刷新按钮 + focus/visibilitychange 节流刷新（seq 防乱序、保留滚动）。
+- [ ] **禁用态 hover 已视觉修复（0.24.36），缺 GUI 计算样式断言**。
+- [ ] **关键异步状态缺 live region**：导入进度/列表与设置加载失败/保存状态加 role=status/alert。
+- [ ] **origin=auto 徽章浅色对比度 3.64:1**（WCAG AA 需 4.5:1）；方案：浅色文字改 #6d28d9。
+- [ ] **超大取代链分量 >1000** 会被服务端上限拒绝（极难出现，标记待验证）。
+- [ ] **last_access 详情行按原始 ISO 展示**，与 created/updated 本地化不一致。

@@ -61,6 +61,8 @@ function collectJunk(root) {
       const rel = relative ? `${relative}/${ent.name}` : ent.name
       if (ent.isDirectory()) {
         if (ent.name === VERIFY_LOCK_NAME) continue
+        // .cache 是大库的派生解析索引（可随时删除/重建），不属于用户数据。
+        if (ent.name === '.cache') continue
         if (ent.name.startsWith('.lock')) { junk.add(rel); continue }
         const childMode = ent.name === 'workspaces' ? 'workspaces'
           : ent.name === 'backups' ? 'backups'

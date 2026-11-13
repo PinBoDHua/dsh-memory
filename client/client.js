@@ -417,7 +417,7 @@ function shouldFocusToastAction(info) {
   var i = info || {}
   if (i.hasModal) return false
   if (i.isBody || !i.isConnected) return true
-  if (i.inCard) return true // 卡片上的归档/钉选按钮刷新后会卸载，接管到撤销按钮是安全且必要的
+  if (i.inCardAction) return true // 卡片动作按钮刷新后会卸载，接管到撤销按钮是安全且必要的
   var tag = String(i.tagName || '').toLowerCase()
   if (tag === 'input' || tag === 'textarea' || tag === 'select' || i.isContentEditable) return false
   return i.isPage === true
@@ -437,6 +437,25 @@ function pageSlice(entries, size) {
     var list = Array.isArray(entries) ? entries : []
     var n = Math.max(1, Number(size) || 1)
     return { items: list.slice(0, n), hasMore: list.length > n }
+  }
+
+  /** 真实写入条数（imported+updated）；被判重复/拒绝的条目不算「已写入」。 */
+  function importWriteCount(totals) {
+    var t = totals || {}
+    return (Number(t.imported) || 0) + (Number(t.updated) || 0)
+  }
+
+  /**
+   * 分片预演的 rejected.index 是「片内下标」，聚合后需重定位为原始文件位置；
+   * chunkEntriesPreservingLinks 只切数组不改对象，用条目对象引用反查原始下标。
+   */
+  function rebaseRejectedIndexes(rejected, chunk, indexByEntry) {
+    var list = Array.isArray(rejected) ? rejected : []
+    return list.map(function (r) {
+      var item = chunk && chunk[r && r.index]
+      var original = item !== undefined && indexByEntry && indexByEntry.get(item)
+      return Object.assign({}, r, { index: original === undefined ? r.index : original })
+    })
   }
 
   function entryDetailRows(entry) {
@@ -470,11 +489,10 @@ function pageSlice(entries, size) {
     // 未来时间（时钟偏差/手工改时间）不做「刚刚」夹取，直接显示日期，避免误导。
     if (then > nowMs + 60_000) return dateLabel(then)
     var diff = Math.max(0, nowMs - then)
-    var sec = Math.floor(diff / 1000)
-    var min = Math.floor(sec / 60)
+    var min = Math.floor(diff / 60_000)
+    if (min < 1) return zh ? '刚刚' : 'just now'
     var hr = Math.floor(min / 60)
     var day = Math.floor(hr / 24)
-    if (sec < 45) return zh ? '刚刚' : 'just now'
     if (min < 60) return zh ? min + ' 分钟前' : min + ' min ago'
     if (hr < 24) return zh ? hr + ' 小时前' : hr + ' h ago'
     if (day < 7) return zh ? day + ' 天前' : day + ' d ago'
@@ -490,7 +508,7 @@ function pageSlice(entries, size) {
     return (mb < 10 ? mb.toFixed(1) : Math.round(mb)) + ' MB'
   }
 
-  var helpers = { validateDraft: validateDraft, groupEntries: groupEntries, nextToken: nextToken, entriesParams: entriesParams, buildEntriesQuery: buildEntriesQuery, workspaceOptions: workspaceOptions, errorKeyFor: errorKeyFor, shouldQueueToast: shouldQueueToast, partitionSettled: partitionSettled, parseTags: parseTags, unwrapResult: unwrapResult, settingsStatusNext: settingsStatusNext, savedToastKey: savedToastKey, exportParams: exportParams, defaultViewSelection: defaultViewSelection, sectionCountsExact: sectionCountsExact, chunkEntries: chunkEntries, chunkEntriesPreservingLinks: chunkEntriesPreservingLinks, parseImportText: parseImportText, validateImportDoc: validateImportDoc, importSummary: importSummary, aggregateImportPlans: aggregateImportPlans, shouldFocusToastAction: shouldFocusToastAction, categoryChipCount: categoryChipCount, importRejectText: importRejectText, pageSlice: pageSlice, entryDetailRows: entryDetailRows, relativeTime: relativeTime, formatBytes: formatBytes, isExpired: isExpired, statusOf: statusOf, originOf: originOf, statusQueryFlags: statusQueryFlags }
+  var helpers = { validateDraft: validateDraft, groupEntries: groupEntries, nextToken: nextToken, entriesParams: entriesParams, buildEntriesQuery: buildEntriesQuery, workspaceOptions: workspaceOptions, errorKeyFor: errorKeyFor, shouldQueueToast: shouldQueueToast, partitionSettled: partitionSettled, parseTags: parseTags, unwrapResult: unwrapResult, settingsStatusNext: settingsStatusNext, savedToastKey: savedToastKey, exportParams: exportParams, defaultViewSelection: defaultViewSelection, sectionCountsExact: sectionCountsExact, chunkEntries: chunkEntries, chunkEntriesPreservingLinks: chunkEntriesPreservingLinks, parseImportText: parseImportText, validateImportDoc: validateImportDoc, importSummary: importSummary, importWriteCount: importWriteCount, rebaseRejectedIndexes: rebaseRejectedIndexes, aggregateImportPlans: aggregateImportPlans, shouldFocusToastAction: shouldFocusToastAction, categoryChipCount: categoryChipCount, importRejectText: importRejectText, pageSlice: pageSlice, entryDetailRows: entryDetailRows, relativeTime: relativeTime, formatBytes: formatBytes, isExpired: isExpired, statusOf: statusOf, originOf: originOf, statusQueryFlags: statusQueryFlags }
 
   // ===== node 测试导出（CJS） =====
   if (typeof module !== 'undefined' && module.exports) {
@@ -599,6 +617,7 @@ function newImportRunId() {
     errBodyTooLarge: '文件过大（超过 32 MB），请拆分后导入',
     errInternal: '操作失败，请稍后重试',
     errJoin: '：',
+    labelSep: '：',
     errRefreshed: '凭证已刷新，请重试',
     errTimeout: '请求超时，请重试',
     errNetwork: '网络异常，请检查连接后重试',
@@ -828,6 +847,7 @@ function newImportRunId() {
     errBodyTooLarge: 'File too large (over 32 MB); split it before importing',
     errInternal: 'Operation failed; please retry',
     errJoin: ': ',
+    labelSep: ': ',
     errRefreshed: 'Credentials refreshed; please retry',
     errTimeout: 'Request timed out; please retry',
     errNetwork: 'Network error; check your connection and retry',
@@ -1279,6 +1299,10 @@ function newImportRunId() {
     '@media (max-width:720px){.dm_header{flex-direction:column;}.dm_cta{width:100%;justify-content:center;}.dm_stats{gap:12px;padding:12px 14px;}.dm_stats_div{display:none;}.dm_card_actions{flex-direction:row;}.dm_card{flex-wrap:wrap;}.dm_import_tiles{grid-template-columns:repeat(2,1fr);}}',
     '@media (prefers-reduced-motion:reduce){.dm_page *,.dm_page *::before,.dm_page *::after,.dm_toast,.dm_selbar,.dm_overlay,.dm_dialog,.dm_select_pop{animation:none !important;transition:none !important;}}',
     'body.dm-no-anim .dm_select_pop{animation:none !important;}',
+    // 禁用态必须压过 :hover 的浮起/提亮/变色（busy 时主按钮不应显得可点）。
+    '.dm_btn:disabled:hover{transform:none;filter:none;}',
+    '.dm_btn_primary:disabled:hover,.dm_btn_danger_solid:disabled:hover{filter:none;transform:none;}',
+    '.dm_select_disabled:hover{border-color:var(--dm-line2);background:transparent;}',
   ].join('\n')
 
   global.__ModuleLoader__.load({
@@ -1550,7 +1574,7 @@ function newImportRunId() {
           h('div', { className: 'dm_card_main' },
             h('div', { className: 'dm_card_top' },
               h(Badge, { category: entry.category, t: t }),
-              h('span', { className: 'dm_origin dm_origin_' + origin, title: t('originLabel') + ': ' + t(origin === 'auto' ? 'originAuto' : 'originManual') },
+              h('span', { className: 'dm_origin dm_origin_' + origin, title: t('originLabel') + t('labelSep') + t(origin === 'auto' ? 'originAuto' : 'originManual') },
                 h(Icon, { name: origin === 'auto' ? 'zap' : 'edit', size: 10, strokeWidth: 2.2 }),
                 t(origin === 'auto' ? 'originAuto' : 'originManual')),
               status !== 'active' ? h('span', { className: 'dm_status dm_status_' + status },
@@ -1558,7 +1582,7 @@ function newImportRunId() {
                 t(status === 'superseded' ? 'statusSuperseded' : status === 'expired' ? 'statusExpired' : 'statusArchived'),
                 status === 'expired' && entry.expires ? ' · ' + entry.expires : null) : null,
               status === 'superseded' && entry.superseded_by ? h('button', {
-                className: 'dm_successor', title: t('jumpToSuccessor') + ': ' + entry.superseded_by,
+                className: 'dm_successor', title: t('jumpToSuccessor') + t('labelSep') + entry.superseded_by,
                 onClick: function () { props.onJumpTo(entry.superseded_by) },
               }, h(Icon, { name: 'chevR', size: 11, strokeWidth: 2.2 }), t('viewSuccessor')) : null,
               entry.pinned && status === 'active' ? h('span', { className: 'dm_pinned_mark', title: t('pinnedLabel') },
@@ -1587,9 +1611,9 @@ function newImportRunId() {
                     : DETAIL_TEXT_KEYS[row.key] ? row.value : formatTime(row.value)
                   var isLink = row.key === 'supersedesLabel' || row.key === 'supersededByLabel'
                   return h('div', { className: 'dm_details_row', key: row.key },
-                    h('span', { className: 'dm_details_k' }, t(row.key) + ':'),
+                    h('span', { className: 'dm_details_k' }, t(row.key) + t('labelSep')),
                     isLink
-                      ? h('button', { className: 'dm_details_link', title: t('jumpToEntry') + ': ' + row.value, onClick: function () { props.onJumpTo(row.value) } }, text, h(Icon, { name: 'chevR', size: 11, strokeWidth: 2.2 }))
+                      ? h('button', { className: 'dm_details_link', title: t('jumpToEntry') + t('labelSep') + row.value, onClick: function () { props.onJumpTo(row.value) } }, text, h(Icon, { name: 'chevR', size: 11, strokeWidth: 2.2 }))
                       : h('span', { className: 'dm_details_v' }, text))
                 }),
                 h('div', null, h('button', { className: 'dm_btn dm_btn_mini', onClick: copyId }, h(Icon, { name: 'copy', size: 12 }), t('copyId'))))
@@ -1746,7 +1770,7 @@ function newImportRunId() {
               ].filter(Boolean),
             }),
             draft.scope === 'workspace' && workspaceTarget
-              ? h('div', { className: 'dm_hint', style: { marginTop: 4 } }, t('workspaceTarget') + ': ' + workspaceTarget)
+              ? h('div', { className: 'dm_hint', style: { marginTop: 4 } }, t('workspaceTarget') + t('labelSep') + workspaceTarget)
               : null),
           !isCreate ? h('div', { className: 'dm_field' },
             h('label', { className: 'dm_label', htmlFor: 'dm-origin' }, h(Icon, { name: 'zap', size: 13 }), t('originLabel')),
@@ -1846,7 +1870,7 @@ function newImportRunId() {
               ? h('span', { className: 'dm_hint' }, t('importingProgress').replace('{d}', String(props.progress.done)).replace('{t}', String(props.progress.total)))
               : null,
             h('button', { className: 'dm_btn', onClick: props.onClose, disabled: props.busy }, t('cancel')),
-            props.busy && props.onStop ? h('button', { className: 'dm_linkbtn', onClick: props.onStop }, t('stopImport')) : null,
+            props.busy && props.confirming && props.onStop ? h('button', { className: 'dm_btn dm_btn_mini dm_linkbtn', onClick: props.onStop }, t('stopImport')) : null,
             h('button', { className: 'dm_btn dm_btn_primary', onClick: props.onConfirm, disabled: props.busy || (summary.imported === 0 && summary.updated === 0) }, h(Icon, { name: 'check', size: 14, strokeWidth: 2.2 }), t('importConfirm'))))
       }
 
@@ -2013,7 +2037,7 @@ function newImportRunId() {
           if (props.error) {
             return h('div', { className: 'dm_empty' },
               h(Icon, { name: 'alert', size: 28, style: { color: 'var(--dm-danger)', marginBottom: 10 } }),
-              h('div', null, t('loadError') + ': ' + props.error),
+              h('div', null, t('loadError') + t('labelSep') + props.error),
               h('button', { className: 'dm_btn', style: { marginTop: 12 }, onClick: props.onRetry }, h(Icon, { name: 'undo', size: 13 }), t('retry')))
           }
           return h(Skeletons)
@@ -2065,7 +2089,7 @@ function newImportRunId() {
                 },
               })),
             h('div', { className: 'dm_backupmeta' },
-              h('span', null, t('lastBackupLabel') + ': ' + (meta.backup.lastBackup ? formatTime(meta.backup.lastBackup) : t('neverBackup'))),
+              h('span', null, t('lastBackupLabel') + t('labelSep') + (meta.backup.lastBackup ? formatTime(meta.backup.lastBackup) : t('neverBackup'))),
               h('span', null, t('backupCount').replace('{n}', String(meta.backup.count))),
               h('button', { className: 'dm_btn dm_btn_mini', onClick: props.onBackup, disabled: props.busy || (props.status && props.status.saving) }, h(Icon, { name: 'export', size: 12 }), t('backupNow')))),
           h(SettingsGroup, { icon: 'sliders', title: t('groupPanel'), style: { color: 'var(--dm-pref)', background: 'var(--dm-pref-soft)' } },
@@ -2356,6 +2380,9 @@ function newImportRunId() {
         var importPlan = importState[0]; var setImportPlan = importState[1]
         var importProgressState = useState(null)
         var importProgress = importProgressState[0]; var setImportProgress = importProgressState[1]
+        // 「停止导入」只对真实写盘阶段有效：dry-run 预演期不显示（否则是空转按钮）。
+        var importConfirmingState = useState(false)
+        var importConfirming = importConfirmingState[0]; var setImportConfirming = importConfirmingState[1]
         // 写操作成功计数：召回预览只随「数据真的变了」刷新，导出/查重/导入预演的 busy
         // 翻转不再各触发一次全量 /recall-preview 扫描。
         var dataVersionState = useState(0)
@@ -2454,7 +2481,7 @@ function newImportRunId() {
             tagName: active ? active.tagName : '',
             isContentEditable: !!(active && active.isContentEditable),
             isPage: !!(active && active.classList && active.classList.contains('dm_page')),
-            inCard: !!(active && active.closest && active.closest('.dm_card')),
+            inCardAction: !!(active && active.closest && active.closest('.dm_card_actions')),
           }
           // 0.24.32：仅在焦点已丢失时接管，避免打断输入/被键盘回车误触撤销。
           if (!shouldFocusToastAction(descriptor)) return
@@ -2981,7 +3008,7 @@ function newImportRunId() {
           }).then(function () {
             return refreshWorkspaces()
           }).catch(function (err) {
-            showToast('error', t('undoFailed') + ': ' + errorText(err, t))
+            showToast('error', t('undoFailed') + t('labelSep') + errorText(err, t))
           })
         }
 
@@ -3006,12 +3033,16 @@ function newImportRunId() {
         // 整档 dry-run 超过服务端单请求上限（1000 条）时分片预览并聚合计数。
         function previewImport(entries, mode) {
           var chunks = chunkEntriesPreservingLinks(entries, IMPORT_PREVIEW_CHUNK)
+          // 分片会重排条目顺序：保留「条目对象 → 原始文件下标」映射，用于 rejected 重定位。
+          var indexByEntry = new Map()
+          for (var ei = 0; ei < entries.length; ei++) indexByEntry.set(entries[ei], ei)
           var plans = []
           var chain = Promise.resolve()
           chunks.forEach(function (chunk) {
             chain = chain.then(function () {
               return api.import({ entries: chunk, dryRun: true, mode: mode }).then(function (payload) {
-                plans.push((payload && payload.result) || {})
+                var plan = (payload && payload.result) || {}
+                plans.push(Object.assign({}, plan, { rejected: rebaseRejectedIndexes(plan.rejected, chunk, indexByEntry) }))
               })
             })
           })
@@ -3040,7 +3071,7 @@ function newImportRunId() {
             })
           }).catch(function (err) {
             if (err && err.code) writeFailure(err)
-            else showToast('error', t('errReadFile') + ': ' + errorText(err, t))
+            else showToast('error', t('errReadFile') + t('labelSep') + errorText(err, t))
           }).then(function () { setBusy(false) })
         }
 
@@ -3055,12 +3086,14 @@ function newImportRunId() {
         function confirmImport() {
           if (busy || !importPlan) return
           setBusy(true)
+          setImportConfirming(true)
           importStopRef.current = false
           var entries = importPlan.entries
           var mode = importPlan.mode
           var chunks = chunkEntriesPreservingLinks(entries, IMPORT_CHUNK_SIZE)
           var totals = { imported: 0, updated: 0, deduplicated: 0, repaired: 0, rejected: [] }
           var written = 0
+          var writeActual = 0
           var runId = importPlan.runId || newImportRunId()
           setImportProgress({ done: 0, total: entries.length })
           var chain = Promise.resolve()
@@ -3075,6 +3108,7 @@ function newImportRunId() {
                 totals.deduplicated += r.deduplicated || 0
                 totals.repaired += r.repaired || 0
                 if (Array.isArray(r.rejected)) totals.rejected = totals.rejected.concat(r.rejected)
+                writeActual += (Number(r.imported) || 0) + (Number(r.updated) || 0)
                 written += chunk.length
                 setImportProgress({ done: written, total: entries.length })
               })
@@ -3082,15 +3116,16 @@ function newImportRunId() {
           })
           chain.then(function () {
             var stopped = importStopRef.current && written < entries.length
+            setImportConfirming(false)
             setImportPlan(null)
             setImportProgress(null)
             if (stopped) {
-              if (written > 0) bumpDataVersion()
-              showToast('ok', t('importStopped').replace('{d}', String(written)).replace('{t}', String(entries.length)))
+              if (writeActual > 0 || Number(totals.repaired) > 0) bumpDataVersion()
+              showToast('ok', t('importStopped').replace('{d}', String(writeActual)).replace('{t}', String(entries.length)))
               setPage(0)
               return refreshRef.current()
             }
-            bumpDataVersion()
+            if (writeActual > 0 || Number(totals.repaired) > 0) bumpDataVersion()
             var summary = importSummary(totals)
             var repairedNote = summary.repaired > 0 ? ' · ' + t('importRepaired').replace('{n}', String(summary.repaired)) : ''
             showToast('ok', t('imported') + ' · ' + t('importNew') + ' ' + summary.imported + ' / ' + t('importUpdated') + ' ' + summary.updated + ' / ' + t('importDup') + ' ' + summary.deduplicated + ' / ' + t('importRej') + ' ' + summary.rejected + repairedNote)
@@ -3099,8 +3134,9 @@ function newImportRunId() {
           }).catch(function (err) {
             // 分片导入中途失败：已提交的片是完整的；保留弹窗，用户可用同一 runId 重试，
             // 已成功的片由服务端幂等回执直接返回、不会二次写盘。
-            if (written > 0) bumpDataVersion()
-            var text = t('importPartialFail').replace('{d}', String(written)).replace('{t}', String(entries.length)) + t('errJoin') + errorText(err, t)
+            setImportConfirming(false)
+            if (writeActual > 0 || Number(totals.repaired) > 0) bumpDataVersion()
+            var text = t('importPartialFail').replace('{d}', String(writeActual)).replace('{t}', String(entries.length)) + t('errJoin') + errorText(err, t)
             showToast('error', text)
             setImportProgress(null)
             return refreshRef.current()
@@ -3156,7 +3192,7 @@ function newImportRunId() {
                   return h('div', {
                     key: cat, className: 'dm_dist_seg dm_dist_seg_' + cat,
                     style: { flexGrow: n },
-                    title: t(CATEGORY_META[cat].label) + ': ' + n,
+                    title: t(CATEGORY_META[cat].label) + t('labelSep') + n,
                   })
                 }) : null),
               h('div', { className: 'dm_chips', role: 'group', 'aria-label': t('categoryLabel') },
@@ -3207,7 +3243,7 @@ function newImportRunId() {
           if (listError) {
             return h('div', { className: 'dm_empty' },
               h(Icon, { name: 'alert', size: 28, style: { color: 'var(--dm-danger)', marginBottom: 10 } }),
-              h('div', null, t('listError') + ': ' + listError),
+              h('div', null, t('listError') + t('labelSep') + listError),
               h('button', { className: 'dm_btn', style: { marginTop: 12 }, onClick: function () { focusPage(); refreshEntries() } }, h(Icon, { name: 'undo', size: 13 }), t('retry')))
           }
           if (entries.length === 0) {
@@ -3334,7 +3370,7 @@ function newImportRunId() {
               phase === 'loading' ? h(Skeletons)
                 : phase === 'error' ? h('div', { className: 'dm_empty' },
                   h(Icon, { name: 'alert', size: 28, style: { color: 'var(--dm-danger)', marginBottom: 10 } }),
-                  h('div', null, t('loadError') + ': ' + errorTextState),
+                  h('div', null, t('loadError') + t('labelSep') + errorTextState),
                   h('button', { className: 'dm_btn', style: { marginTop: 12 }, onClick: function () { focusPage(); loadInitial() } }, h(Icon, { name: 'undo', size: 13 }), t('retry')))
                   : renderList()),
           h('div', { id: 'dm-panel-settings', role: 'tabpanel', 'aria-labelledby': 'dm-tab-settings', hidden: tab !== 'settings' },
@@ -3346,7 +3382,7 @@ function newImportRunId() {
             })),
           editor ? h(EditorModal, { draft: editor, setDraft: setEditor, t: t, workspaceTarget: workspaceTarget, busy: busy, onSave: handleSave, onClose: function () { if (!busy) setEditor(null) } }) : null,
           confirm ? h(ConfirmModal, { entries: confirm.entries, t: t, busy: busy, onConfirm: handleDelete, onClose: function () { if (!busy) setConfirm(null) } }) : null,
-          importPlan ? h(ImportModal, { plan: importPlan.plan, mode: importPlan.mode, progress: importProgress, t: t, busy: busy, onStop: function () { importStopRef.current = true }, onConfirm: confirmImport, onModeChange: changeImportMode, onClose: function () { if (!busy) setImportPlan(null) } }) : null,
+          importPlan ? h(ImportModal, { plan: importPlan.plan, mode: importPlan.mode, progress: importProgress, confirming: importConfirming, t: t, busy: busy, onStop: function () { importStopRef.current = true }, onConfirm: confirmImport, onModeChange: changeImportMode, onClose: function () { if (!busy) setImportPlan(null) } }) : null,
           audit ? h(AuditModal, { pairs: audit.pairs, t: t, busy: busy, onSupersede: handleSupersedePair, onDismiss: dismissPair, onClose: function () { if (!busy) setAudit(null) } }) : null,
           toast ? h(Toast, { key: toast.id, toast: toast, t: t, raised: selected.length > 0, onClose: dismissToast, actionRef: toastActionRef, onPause: pauseToast, onResume: resumeToast }) : null)
       }

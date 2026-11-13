@@ -8,6 +8,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import * as store from '../lib/store.js'
+import { createMemoryService } from '../lib/service.js'
 import { detectSecret } from '../lib/guard.js'
 import { GUIDANCE, renderSection } from '../lib/render.js'
 
@@ -329,6 +330,51 @@ test('move: superseded duplicate in target scope does not block the move', () =>
   // 活跃同内容仍然拒绝。
   const { entry: activeDup } = store.saveEntry(root, { content: '后继内容', scope: 'global' })
   assert.throws(() => store.moveEntry(root, activeDup.id, 'workspace', CWD_A), (err) => err.code === 'duplicate')
+})
+
+test('forget: locked file must not be reported as deleted', () => {
+  const root = tmpRoot()
+  const { entry } = store.saveEntry(root, { content: '被占用的待删条目', scope: 'global' })
+  const file = path.join(root, 'global', `${entry.id}.md`)
+  const realRm = fs.rmSync
+  fs.rmSync = function (target, opts) {
+    if (String(target) === file) throw Object.assign(new Error('EBUSY: file in use'), { code: 'EBUSY' })
+    return realRm.call(fs, target, opts)
+  }
+  try {
+    const service = createMemoryService({ root })
+    assert.throws(() => service.forget({ id: entry.id }), (err) => err.code === 'busy')
+  } finally {
+    fs.rmSync = realRm
+  }
+  assert.ok(fs.existsSync(file), 'locked file must remain on disk')
+  // 释放占用后重试成功。
+  createMemoryService({ root }).forget({ id: entry.id })
+  assert.ok(!fs.existsSync(file))
+})
+
+test('forgetMany reports partially failed deletions instead of counting them as deleted', () => {
+  const root = tmpRoot()
+  const a = store.saveEntry(root, { content: '可删除条目', scope: 'global' })
+  const b = store.saveEntry(root, { content: '被占用条目', scope: 'global' })
+  const lockedFile = path.join(root, 'global', `${b.entry.id}.md`)
+  const realRm = fs.rmSync
+  fs.rmSync = function (target, opts) {
+    if (String(target) === lockedFile) throw Object.assign(new Error('EBUSY'), { code: 'EBUSY' })
+    return realRm.call(fs, target, opts)
+  }
+  let result
+  try {
+    result = createMemoryService({ root }).forgetMany({ ids: [a.entry.id, b.entry.id] })
+  } finally {
+    fs.rmSync = realRm
+  }
+  assert.equal(result.deleted, 1)
+  assert.deepEqual(result.ids, [a.entry.id])
+  assert.deepEqual(result.failed, [b.entry.id])
+  assert.ok(fs.existsSync(lockedFile))
+  createMemoryService({ root }).forget({ id: b.entry.id })
+  assert.ok(!fs.existsSync(lockedFile))
 })
 
 test('move: failure to remove the source file rolls back the new copy (no dual-scope duplicate)', () => {

@@ -67,6 +67,14 @@ test('diffSnapshots detects entry edits/additions/removals, settings, backup cha
   assert.ok(changes.some((c) => c.includes('垃圾文件新增 global/scratch-note.json')), JSON.stringify(changes))
 })
 
+test('snapshot ignores the derived .cache index directory', () => {
+  const root = makeRoot()
+  fs.mkdirSync(path.join(root, '.cache'), { recursive: true })
+  fs.writeFileSync(path.join(root, '.cache', 'entries-v1.json'), '{"indexVersion":1}', 'utf8')
+  const snap = snapshotDataRoot(root)
+  assert.deepEqual(snap.junk, [], '.cache is derived data, not junk')
+})
+
 test('snapshot ignores the verification lock directory but detects other locks', () => {
   const root = makeRoot()
   fs.mkdirSync(path.join(root, '.lock-verify'))

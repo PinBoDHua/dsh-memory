@@ -8,7 +8,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import helpers from '../client/client.js'
 
-const { validateDraft, groupEntries, nextToken, entriesParams, buildEntriesQuery, workspaceOptions, errorKeyFor, shouldQueueToast, partitionSettled, parseTags, unwrapResult, settingsStatusNext, savedToastKey, exportParams, defaultViewSelection, sectionCountsExact, chunkEntries, chunkEntriesPreservingLinks, aggregateImportPlans, shouldFocusToastAction, categoryChipCount, importRejectText, parseImportText, validateImportDoc, importSummary, pageSlice, entryDetailRows, relativeTime, formatBytes, isExpired, statusOf, originOf, statusQueryFlags } = helpers
+const { validateDraft, groupEntries, nextToken, entriesParams, buildEntriesQuery, workspaceOptions, errorKeyFor, shouldQueueToast, partitionSettled, parseTags, unwrapResult, settingsStatusNext, savedToastKey, exportParams, defaultViewSelection, sectionCountsExact, chunkEntries, chunkEntriesPreservingLinks, aggregateImportPlans, shouldFocusToastAction, categoryChipCount, importRejectText, importWriteCount, rebaseRejectedIndexes, parseImportText, validateImportDoc, importSummary, pageSlice, entryDetailRows, relativeTime, formatBytes, isExpired, statusOf, originOf, statusQueryFlags } = helpers
 
 test('validateDraft accepts a complete draft and rejects bad ones', () => {
   assert.deepEqual(validateDraft({ content: '一条事实', category: 'fact' }), { ok: true })
@@ -95,6 +95,10 @@ test('relativeTime renders zh/en buckets and falls back to a date', () => {
   const at = (ms) => new Date(now - ms).toISOString()
   assert.equal(relativeTime(at(10_000), now, 'zh'), '刚刚')
   assert.equal(relativeTime(at(10_000), now, 'en'), 'just now')
+  // 45–59s 不得显示「0 分钟前」（旧实现 sec<45 与 min<60 之间有盲区）。
+  assert.equal(relativeTime(at(45_000), now, 'zh'), '刚刚')
+  assert.equal(relativeTime(at(59_000), now, 'en'), 'just now')
+  assert.equal(relativeTime(at(60_000), now, 'zh'), '1 分钟前')
   assert.equal(relativeTime(at(5 * 60_000), now, 'zh'), '5 分钟前')
   assert.equal(relativeTime(at(5 * 60_000), now, 'en'), '5 min ago')
   assert.equal(relativeTime(at(3 * 3_600_000), now, 'zh'), '3 小时前')
@@ -262,7 +266,10 @@ test('shouldFocusToastAction only takes focus when the user lost it', () => {
   assert.equal(shouldFocusToastAction({ isBody: true }), true)
   assert.equal(shouldFocusToastAction({ isConnected: false }), true)
   assert.equal(shouldFocusToastAction({ isPage: true, isConnected: true }), true)
-  assert.equal(shouldFocusToastAction({ inCard: true, isConnected: true, tagName: 'BUTTON' }), true)
+  assert.equal(shouldFocusToastAction({ inCardAction: true, isConnected: true, tagName: 'BUTTON' }), true)
+  // 卡片内非动作按钮（复选框/标签/正文）不抢焦点；输入类判断优先。
+  assert.equal(shouldFocusToastAction({ inCardAction: false, tagName: 'INPUT', isConnected: true }), false)
+  assert.equal(shouldFocusToastAction({ inCardAction: false, tagName: 'DIV', isConnected: true }), false)
   // 输入中/有弹窗/其它控件上不抢焦点（排队撤销吐司展示时会打断输入，回车可能误触）。
   assert.equal(shouldFocusToastAction({ hasModal: true, isBody: true }), false)
   assert.equal(shouldFocusToastAction({ tagName: 'INPUT', isConnected: true }), false)
@@ -279,6 +286,25 @@ test('categoryChipCount hides misleading zero counts while category-filtered', (
   assert.equal(categoryChipCount(stats, 'preference', 'fact'), undefined, 'other categories hidden, not "0"')
   assert.equal(categoryChipCount(null, 'fact', ''), null)
   assert.equal(categoryChipCount({}, 'fact', ''), null)
+})
+
+test('importWriteCount counts real writes only (dedup/rejected excluded)', () => {
+  assert.equal(importWriteCount({ imported: 3, updated: 2, deduplicated: 10, repaired: 1, rejected: [{}, {}] }), 5)
+  assert.equal(importWriteCount({ deduplicated: 7, rejected: [{}, {}] }), 0)
+  assert.equal(importWriteCount(null), 0)
+})
+
+test('rebaseRejectedIndexes maps chunk-local rejected indexes back to original file positions', () => {
+  const entries = Array.from({ length: 5 }, (_, i) => ({ id: `m-r-${i}` }))
+  const indexByEntry = new Map(entries.map((e, i) => [e, i]))
+  // 模拟分片重排：chunk = [entry4, entry1]，chunk 内 rejected index 1 → 原始位置 1。
+  const chunk = [entries[4], entries[1]]
+  const rebased = rebaseRejectedIndexes([{ index: 1, code: 'invalid' }], chunk, indexByEntry)
+  assert.equal(rebased[0].index, 1)
+  assert.equal(rebased[0].code, 'invalid')
+  assert.equal(rebased.length, 1)
+  // 未知条目回退片内下标，不丢信息。
+  assert.equal(rebaseRejectedIndexes([{ index: 0 }], [{ id: 'x' }], new Map())[0].index, 0)
 })
 
 test('aggregateImportPlans sums sharded dry-run previews', () => {

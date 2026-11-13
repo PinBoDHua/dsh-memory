@@ -3,6 +3,34 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.24.36] - 2026-11-14
+
+### 性能 Performance（30k 库冷启动：19–23s → 1.76s）
+- **持久化解析索引**：大库（≥1024 条目）的目录缓存（条目 + 每文件签名）写入 `~/.dsh/.dsh-memory/.cache/entries-v1.json`（原子写、5 秒去抖后台刷新、定时器 unref）。下次进程启动只 `statSync` 每个文件校验签名（30k 约 1.3s），未变化的条目直接复用解析结果；新增/变更/删除的文件才读+解析。
+- **语义不变**：签名含 mtime/ctime/size/ino/birthtime，与进程内解析缓存同一判据——外部手改、其它进程原子写、删除都会失效重建；索引缺失/损坏/版本不符一律回退全量解析（不丢数据）；`DSH_MEMORY_INDEX=0` 可禁用（测试/排障）。
+- **派生数据隔离**：`.cache/` 被数据根快照（data-snapshot）忽略，不属于用户数据；备份/导出/status 均不读取索引。
+- 新增 `flushSnapshotIndex(root)` 供测试/bench 立即落盘；`scripts/bench.mjs` 增加「清空进程内缓存后从索引冷启动」指标。
+- 测试：索引冷启动零 markdown 读取、外部改/删/增按签名检测、索引损坏回退全量、data-snapshot 忽略 `.cache`。
+
+### 修复 Fixed（第六轮审计：索引生命周期 / 删除语义 / 面板细节）
+- **索引冷启动正确性**：索引命中后立即安装 root watcher（否则跨进程/手工修改永久不可见）；watcher 不可用则丢弃索引缓存退回逐文件 stat 严格路径；加载时校验记录形状（id/scope/content/tags 与文件名、目录一致），损坏记录回读 Markdown；安装 watcher 提前到签名比对之前。
+- **索引隐私与生命周期**：库删空/低于 1024 条时删除 `.cache/entries-v1.json`（此前会永久保留已「忘记」的正文副本）；`forget` 删除后立即重写索引；无变更冷启动不再重写索引。
+- **`forget` 不再谎报已删除**：文件被占用（Windows 编辑器/AV/同步盘）时只计真正 unlink 成功的 id——单条返回 `code=busy`（503，可重试），批量返回 `failed` 列表；此前会返回 deleted:true 但文件仍在且仍可检索。
+- **bench 安全**：`--regen` 只允许删除带 `.bench-root` marker 或名为 `dsh-memory-bench-*` 的目录（否则拒绝，需显式 `--force`）；`--keep` 语义修正为默认复用已存在数据根。
+- **面板细节**：45–59 秒不再显示「0 分钟前」；撤销 toast 只接管卡片动作按钮焦点（不再抢复选框/输入/正文）；「停止导入」仅在真实写盘阶段出现；分片预演的 rejected 下标重定位为原始文件位置；停止/中断文案与 dataVersion 使用真实写入数 imported+updated（重复/拒绝不算写入）；`errJoin`/`labelSep` 收口全部硬编码冒号；禁用态 hover 不再浮起/变色。
+
+### 新增测试
+- 索引冷启动后外部改/删可见、watcher 不可用回退严格路径、无变更不重写、删空后索引文件消失且正文不残留、非法缓存记录回退 Markdown。
+- forget EBUSY 不谎报、批量失败项 `failed`；bench 删除决策安全；客户端 importWriteCount / rebaseRejectedIndexes / 焦点描述符 / 相对时间 45–59s。
+
+### 实测（30k 同步数据根，审计并发负载下）
+- 首次全量解析（建索引）：约 19–23s（一次性）
+- **索引冷启动：1.72–1.76s**（容量 30k 全量一致）
+- warm `listAll` 52–56ms；`export` 75ms；`recallPreview` 137ms；`search` 78ms；`forgetOne` 88ms
+
+### 验证证据
+- 单元 **346/346**；live **192/192**；真实 GUI **91/91**；数据根快照一致、零残留。
+
 ## [0.24.35] - 2026-11-14
 
 ### 修复 Fixed（第五轮审计 P3 收尾）
