@@ -152,6 +152,74 @@ test('import sanitizes newline-bearing frontmatter fields (no field injection)',
   assert.equal(service.search({ scope: 'global' }).some((e) => e.id === 'm-inject-src'), true, 'entry remains visible')
 })
 
+test('import enforces per-request entry cap (1000)', () => {
+  const { service } = tmpService()
+  const entries = Array.from({ length: 1001 }, (_, i) => ({ id: `m-cap-${i}`, content: `上限 ${i}`, scope: 'global' }))
+  assert.throws(() => service.import({ entries, dryRun: true }), (err) => err.code === 'invalid' && /1000/.test(err.message))
+})
+
+test('importId replay returns the first receipt and never re-writes (merge retry safety)', () => {
+  const { service } = tmpService()
+  const entries = [{ id: 'm-idem-a', content: '幂等初始内容', scope: 'global' }]
+  const first = service.import({ entries, importId: 'run-idem-1', chunkIndex: 0 })
+  assert.equal(first.imported, 1)
+  service.update({ id: 'm-idem-a', content: '用户重试窗口内新写入的内容' })
+  const replay = service.import({ entries, importId: 'run-idem-1', chunkIndex: 0 })
+  assert.equal(replay.cached, true)
+  assert.equal(replay.imported, 1, 'receipt reports original result')
+  const current = service.list({ scope: 'global' }).find((e) => e.id === 'm-idem-a')
+  assert.equal(current.content, '用户重试窗口内新写入的内容', 'user edit must not be rolled back by replay')
+})
+
+test('import receipts are LRU-bounded', () => {
+  const { service } = tmpService()
+  for (let i = 0; i < 205; i++) {
+    service.import({ entries: [{ id: `m-recout-${i}`, content: `回执 ${i}`, scope: 'global' }], importId: `run-out-${i}`, chunkIndex: 0 })
+  }
+  const replay = service.import({ entries: [{ id: 'm-recout-0', content: '回执 0', scope: 'global' }], importId: 'run-out-0', chunkIndex: 0 })
+  assert.notEqual(replay.cached, true, 'oldest receipt evicted, replay re-executes')
+})
+
+test('import materializes supersede relations in the same atomic batch', () => {
+  const { service } = tmpService()
+  // 批内前向：新条目 supersedes 旧条目，旧条目自动补 superseded_by。
+  const forward = service.import({ entries: [
+    { id: 'm-mat-p', content: '批内前驱', scope: 'global' },
+    { id: 'm-mat-s', content: '批内后继', scope: 'global', supersedes: 'm-mat-p' },
+  ] })
+  assert.equal(forward.repaired, 0)
+  const p = service.search({ scope: 'global', includeSuperseded: true, limit: 50 }).find((e) => e.id === 'm-mat-p')
+  assert.equal(p.superseded_by, 'm-mat-s')
+  assert.ok(!service.search({ scope: 'global', limit: 50 }).some((e) => e.id === 'm-mat-p'), 'predecessor hidden')
+  // 磁盘既有目标：导入的后继取代它时，目标文件补写反向指针（同批原子写）。
+  service.import({ entries: [{ id: 'm-mat-disk-p', content: '磁盘前驱', scope: 'global' }] })
+  const diskSucc = service.import({ entries: [{ id: 'm-mat-disk-s', content: '磁盘后继', scope: 'global', supersedes: 'm-mat-disk-p' }] })
+  assert.equal(diskSucc.repaired, 0)
+  const diskP = service.search({ scope: 'global', includeSuperseded: true, limit: 50 }).find((e) => e.id === 'm-mat-disk-p')
+  assert.equal(diskP.superseded_by, 'm-mat-disk-s')
+  assert.ok(!service.search({ scope: 'global', limit: 50 }).some((e) => e.id === 'm-mat-disk-p'))
+})
+
+test('import drops a supersede claim when the disk target already has a different successor', () => {
+  const { service } = tmpService()
+  const p = service.save({ content: '已被取代的磁盘目标', scope: 'global' })
+  service.save({ content: '已有后继', scope: 'global', supersedes: p.entry.id })
+  const res = service.import({ entries: [{ id: 'm-mat-conflict', content: '冲突后继', scope: 'global', supersedes: p.entry.id }] })
+  assert.equal(res.repaired, 1)
+  const imported = service.search({ scope: 'global', includeSuperseded: true, limit: 50 }).find((e) => e.id === 'm-mat-conflict')
+  assert.equal(imported.supersedes, undefined, 'conflicting claim dropped instead of overwriting chain')
+})
+
+test('merge import cannot create duplicate content in the same scope', () => {
+  const { service } = tmpService()
+  const a = service.save({ content: '内容 X', scope: 'global' })
+  service.save({ content: '内容 Y', scope: 'global' })
+  const res = service.import({ mode: 'merge', entries: [{ id: a.entry.id, content: '内容 Y', scope: 'global' }] })
+  assert.equal(res.updated, 0)
+  assert.equal(res.deduplicated, 1)
+  assert.equal(service.list({ scope: 'global' }).filter((e) => e.content === '内容 Y').length, 1)
+})
+
 test('successful batch import writes all entries and refreshes workspace index', () => {
   const { root, service } = tmpService()
   const res = service.import({

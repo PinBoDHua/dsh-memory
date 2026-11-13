@@ -381,6 +381,23 @@ function settingsStatusNext(status, event) {
     return chunks
   }
 
+  /**
+ * 聚合多片 dry-run 预览（服务端单请求上限 1000 条，整档预演需分片）。
+ */
+  function aggregateImportPlans(plans) {
+    var totals = { imported: 0, updated: 0, deduplicated: 0, repaired: 0, rejected: [] }
+    var list = Array.isArray(plans) ? plans : []
+    for (var i = 0; i < list.length; i++) {
+      var p = list[i] || {}
+      totals.imported += Number(p.imported) || 0
+      totals.updated += Number(p.updated) || 0
+      totals.deduplicated += Number(p.deduplicated) || 0
+      totals.repaired += Number(p.repaired) || 0
+      if (Array.isArray(p.rejected)) totals.rejected = totals.rejected.concat(p.rejected)
+    }
+    return totals
+  }
+
   function pageSlice(entries, size) {
     var list = Array.isArray(entries) ? entries : []
     var n = Math.max(1, Number(size) || 1)
@@ -429,7 +446,7 @@ function settingsStatusNext(status, event) {
     return (mb < 10 ? mb.toFixed(1) : Math.round(mb)) + ' MB'
   }
 
-  var helpers = { validateDraft: validateDraft, groupEntries: groupEntries, nextToken: nextToken, entriesParams: entriesParams, buildEntriesQuery: buildEntriesQuery, workspaceOptions: workspaceOptions, errorKeyFor: errorKeyFor, shouldQueueToast: shouldQueueToast, partitionSettled: partitionSettled, parseTags: parseTags, unwrapResult: unwrapResult, settingsStatusNext: settingsStatusNext, savedToastKey: savedToastKey, exportParams: exportParams, defaultViewSelection: defaultViewSelection, sectionCountsExact: sectionCountsExact, chunkEntries: chunkEntries, chunkEntriesPreservingLinks: chunkEntriesPreservingLinks, parseImportText: parseImportText, validateImportDoc: validateImportDoc, importSummary: importSummary, pageSlice: pageSlice, entryDetailRows: entryDetailRows, relativeTime: relativeTime, formatBytes: formatBytes, isExpired: isExpired, statusOf: statusOf, originOf: originOf, statusQueryFlags: statusQueryFlags }
+  var helpers = { validateDraft: validateDraft, groupEntries: groupEntries, nextToken: nextToken, entriesParams: entriesParams, buildEntriesQuery: buildEntriesQuery, workspaceOptions: workspaceOptions, errorKeyFor: errorKeyFor, shouldQueueToast: shouldQueueToast, partitionSettled: partitionSettled, parseTags: parseTags, unwrapResult: unwrapResult, settingsStatusNext: settingsStatusNext, savedToastKey: savedToastKey, exportParams: exportParams, defaultViewSelection: defaultViewSelection, sectionCountsExact: sectionCountsExact, chunkEntries: chunkEntries, chunkEntriesPreservingLinks: chunkEntriesPreservingLinks, parseImportText: parseImportText, validateImportDoc: validateImportDoc, importSummary: importSummary, aggregateImportPlans: aggregateImportPlans, pageSlice: pageSlice, entryDetailRows: entryDetailRows, relativeTime: relativeTime, formatBytes: formatBytes, isExpired: isExpired, statusOf: statusOf, originOf: originOf, statusQueryFlags: statusQueryFlags }
 
   // ===== node 测试导出（CJS） =====
   if (typeof module !== 'undefined' && module.exports) {
@@ -450,6 +467,11 @@ function settingsStatusNext(status, event) {
 var IMPORT_MAX_BYTES = 32 * 1024 * 1024
 var IMPORT_TIMEOUT_MS = 180000
   var IMPORT_CHUNK_SIZE = 300
+var IMPORT_PREVIEW_CHUNK = 800
+
+function newImportRunId() {
+  return 'imp-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10)
+}
 
   var TOAST_QUEUE_MAX = 3
 
@@ -2911,6 +2933,21 @@ var IMPORT_TIMEOUT_MS = 180000
           }).catch(writeFailure).then(function () { setBusy(false) })
         }
 
+        // 整档 dry-run 超过服务端单请求上限（1000 条）时分片预览并聚合计数。
+        function previewImport(entries, mode) {
+          var chunks = chunkEntriesPreservingLinks(entries, IMPORT_PREVIEW_CHUNK)
+          var plans = []
+          var chain = Promise.resolve()
+          chunks.forEach(function (chunk) {
+            chain = chain.then(function () {
+              return api.import({ entries: chunk, dryRun: true, mode: mode }).then(function (payload) {
+                plans.push((payload && payload.result) || {})
+              })
+            })
+          })
+          return chain.then(function () { return aggregateImportPlans(plans) })
+        }
+
         function handleImportFile(e) {
           var file = e.target.files && e.target.files[0]
           e.target.value = ''
@@ -2928,8 +2965,8 @@ var IMPORT_TIMEOUT_MS = 180000
               showToast('error', t(parsed.errorKey))
               return undefined
             }
-            return api.import({ entries: parsed.doc.entries, dryRun: true }).then(function (payload) {
-              setImportPlan({ entries: parsed.doc.entries, plan: payload.result, mode: 'skip' })
+            return previewImport(parsed.doc.entries, 'skip').then(function (plan) {
+              setImportPlan({ entries: parsed.doc.entries, plan: plan, mode: 'skip', runId: newImportRunId() })
             })
           }).catch(function (err) {
             if (err && err.code) writeFailure(err)
@@ -2940,8 +2977,8 @@ var IMPORT_TIMEOUT_MS = 180000
         function changeImportMode(mode) {
           if (busy || !importPlan) return
           setBusy(true)
-          api.import({ entries: importPlan.entries, dryRun: true, mode: mode }).then(function (payload) {
-            setImportPlan({ entries: importPlan.entries, plan: payload.result, mode: mode })
+          previewImport(importPlan.entries, mode).then(function (plan) {
+            setImportPlan({ entries: importPlan.entries, plan: plan, mode: mode, runId: importPlan.runId })
           }).catch(writeFailure).then(function () { setBusy(false) })
         }
 
@@ -2953,11 +2990,12 @@ var IMPORT_TIMEOUT_MS = 180000
           var chunks = chunkEntriesPreservingLinks(entries, IMPORT_CHUNK_SIZE)
           var totals = { imported: 0, updated: 0, deduplicated: 0, repaired: 0, rejected: [] }
           var written = 0
+          var runId = importPlan.runId || newImportRunId()
           setImportProgress({ done: 0, total: entries.length })
           var chain = Promise.resolve()
-          chunks.forEach(function (chunk) {
+          chunks.forEach(function (chunk, chunkIndex) {
             chain = chain.then(function () {
-              return api.import({ entries: chunk, mode: mode }).then(function (payload) {
+              return api.import({ entries: chunk, mode: mode, importId: runId, chunkIndex: chunkIndex }).then(function (payload) {
                 var r = (payload && payload.result) || {}
                 totals.imported += r.imported || 0
                 totals.updated += r.updated || 0
@@ -2979,11 +3017,11 @@ var IMPORT_TIMEOUT_MS = 180000
             setPage(0)
             return refreshRef.current()
           }).catch(function (err) {
-            // 分片导入中途失败：已提交的片是完整的，报告进度并提示重试（重试由内容去重吸收）。
+            // 分片导入中途失败：已提交的片是完整的；保留弹窗，用户可用同一 runId 重试，
+            // 已成功的片由服务端幂等回执直接返回、不会二次写盘。
             if (written > 0) bumpDataVersion()
             var text = t('importPartialFail').replace('{d}', String(written)).replace('{t}', String(entries.length)) + '：' + errorText(err, t)
             showToast('error', text)
-            setImportPlan(null)
             setImportProgress(null)
             return refreshRef.current()
           }).then(function () {

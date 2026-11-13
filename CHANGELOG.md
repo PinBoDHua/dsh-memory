@@ -3,6 +3,20 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.24.30] - 2026-11-13
+
+### 修复 Fixed（第五轮审计 P1：/import 契约收口）
+- **单请求条数上限**：`service.import` 拒绝 >1000 条（dryRun 同样，`code=invalid`），避免 32MB body 同步规划+写盘冻结宿主数秒；客户端整档预演改为分片 dry-run 并聚合计数（≤800/片），导入确认仍按保留取代链的 ≤300/片。
+- **`importId` 幂等回执**：service 内存 LRU（200 条，键 `importId+chunkIndex`）缓存首次落盘结果；重试命中直接返回 `{cached:true}` 不再规划/写盘。客户端每次打开导入弹窗生成稳定 `runId`，分片部分失败时**保留弹窗**，用户重试复用同一 runId——已成功片由回执直接返回，不会二次写盘，也不会把用户在失败窗口内改过的内容回滚成备份旧值。
+- **导入取代关系物化（此前方向判反丢合法链）**：`supersedes` 指向批内/磁盘目标时自动补齐目标的反向 `superseded_by/superseded_at`（磁盘目标更新随同一原子批次落盘）；`superseded_by` 指向批内目标时补齐其 `supersedes`；目标已有不同后继/未声明反向时丢弃该指针计 `repaired`，不覆盖既有链。环检测覆盖物化出的反向边（磁盘目标取消物化）。
+- **merge 导入同内容去重**：merge 把条目改成与同作用域另一条相同内容时计入 `deduplicated` 并跳过，不再绕过 save 的去重不变量产生重复记忆。
+
+### 新增测试
+- 导入上限 1001 条拒绝、importId 重放返回缓存且不回滚用户编辑、回执 LRU 淘汰、批内/磁盘目标取代关系物化、冲突后继丢弃、merge 同内容去重、客户端 `aggregateImportPlans` 分片预览聚合。
+
+### 验证证据
+- 单元 **311/311**；live **192/192**；真实 GUI **84/84**（数据根快照一致、零残留）。
+
 ## [0.24.29] - 2026-11-13
 
 ### 修复 Fixed（第四轮审计 P3：锁长临界区/双释放）

@@ -8,7 +8,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import helpers from '../client/client.js'
 
-const { validateDraft, groupEntries, nextToken, entriesParams, buildEntriesQuery, workspaceOptions, errorKeyFor, shouldQueueToast, partitionSettled, parseTags, unwrapResult, settingsStatusNext, savedToastKey, exportParams, defaultViewSelection, sectionCountsExact, chunkEntries, chunkEntriesPreservingLinks, parseImportText, validateImportDoc, importSummary, pageSlice, entryDetailRows, relativeTime, formatBytes, isExpired, statusOf, originOf, statusQueryFlags } = helpers
+const { validateDraft, groupEntries, nextToken, entriesParams, buildEntriesQuery, workspaceOptions, errorKeyFor, shouldQueueToast, partitionSettled, parseTags, unwrapResult, settingsStatusNext, savedToastKey, exportParams, defaultViewSelection, sectionCountsExact, chunkEntries, chunkEntriesPreservingLinks, aggregateImportPlans, parseImportText, validateImportDoc, importSummary, pageSlice, entryDetailRows, relativeTime, formatBytes, isExpired, statusOf, originOf, statusQueryFlags } = helpers
 
 test('validateDraft accepts a complete draft and rejects bad ones', () => {
   assert.deepEqual(validateDraft({ content: '一条事实', category: 'fact' }), { ok: true })
@@ -241,6 +241,15 @@ test('chunkEntries splits import payloads into bounded atomic batches', () => {
   assert.equal(chunks[0].length, 300)
   assert.equal(chunks[1].length, 20)
   assert.equal(chunkEntries(items, 0).length, 320, 'invalid size falls back to 1 per chunk')
+})
+
+test('aggregateImportPlans sums sharded dry-run previews', () => {
+  const total = aggregateImportPlans([
+    { imported: 2, updated: 1, deduplicated: 3, repaired: 1, rejected: [{ index: 0 }] },
+    { imported: 4, updated: 0, deduplicated: 1, repaired: 2, rejected: [] },
+  ])
+  assert.deepEqual(total, { imported: 6, updated: 1, deduplicated: 4, repaired: 3, rejected: [{ index: 0 }] })
+  assert.deepEqual(aggregateImportPlans(null), { imported: 0, updated: 0, deduplicated: 0, repaired: 0, rejected: [] })
 })
 
 test('chunkEntriesPreservingLinks keeps supersede pairs in the same atomic batch', () => {

@@ -689,6 +689,26 @@ async function main() {
     }
   })
 
+  await check('导入 importId 幂等回执（0.24.30）', async () => {
+    const payload = [{ id: 'm-live-idem-1', content: `${RUN} 幂等初版`, scope: 'global' }]
+    const first = await req('POST', '/import', { token, body: { entries: payload, importId: 'live-idem-run', chunkIndex: 0 } })
+    ok('首次导入 200 且 imported=1', first.status === 200 && first.json?.result?.imported === 1, JSON.stringify(first.json?.result))
+    const upd = await req('POST', '/update', { token, body: { id: 'm-live-idem-1', content: `${RUN} 用户新内容` } })
+    ok('update 成功', upd.status === 200, `got ${upd.status}`)
+    const replay = await req('POST', '/import', { token, body: { entries: payload, importId: 'live-idem-run', chunkIndex: 0 } })
+    ok('重放返回缓存回执', replay.json?.result?.cached === true, JSON.stringify(replay.json?.result))
+    const entries = await req('GET', `/entries?query=${encodeURIComponent(`${RUN} 用户新内容`)}&scope=global`)
+    ok('用户新内容未被回滚', (entries.json?.entries ?? []).some((e) => e.id === 'm-live-idem-1'))
+    created.push('m-live-idem-1')
+  })
+
+  await check('单请求导入条数上限（0.24.30）', async () => {
+    const many = Array.from({ length: 1001 }, (_, i) => ({ id: `m-live-cap-${i}`, content: `${RUN} 上限 ${i}`, scope: 'global' }))
+    const r = await req('POST', '/import', { token, body: { entries: many, dryRun: true } })
+    ok('1001 条导入 HTTP 400', r.status === 400, `got ${r.status}`)
+    ok('错误码 invalid（提示分片）', r.json?.code === 'invalid', JSON.stringify(r.json))
+  })
+
   await check('620 条导入落盘与批量清理（0.24.25）', async () => {
     const entries = Array.from({ length: 620 }, (_, i) => ({
       id: `m-live-shard-${String(i).padStart(4, '0')}`,

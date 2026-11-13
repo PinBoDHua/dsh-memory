@@ -171,13 +171,13 @@ dreaming/后台 LLM 提取、向量/图检索、完整 bi-temporal 四时间戳�
 
 #### P1
 - [ ] **30k 库全量遍历同步冻结宿主**：冷启动首次装配/list ~18s，热态 listAll/stats/export/recall ~1.45s，单条 forget ~1.6s；瓶颈是每条 statSync（29k 文件 1.25s）。方案：根级快照缓存（fs.watch + 写失效）或 ≤1s TTL＋写失效（需同步修改「手改立即生效」口径），装配层 sectionText 短 TTL 缓存。
-- [ ] **/import 单请求无条数上限**：32MB body 可装数万条，同步规划+写盘 5000 条 5.9s 冻结；dryRun 同样。方案：单请求 entries ≤1000（超出 400 invalid），客户端预演改分片汇总；可选 async writeEntryBatch 每 N 条 setImmediate。
-- [ ] **importId 幂等回执**：merge 重试会把用户新编辑回滚成备份旧内容。方案：service 内存 LRU（importId+chunkIndex → 结果）直接返回旧回执；客户端每片生成稳定 importId 重试复用。
-- [ ] **导入取代关系物化**：磁盘已存在目标方向判反（targetAllowed 对 supersedes 要求 diskTarget.supersedes === 本 id），合法链被 repaired 丢弃；批内只有前向 supersedes 时不补反向 superseded_by → 新旧结论并存/旧结论仍可见。方案：统一物化 planned 目标反向指针，磁盘目标按作用域可达校验后追加进同一 writeEntryBatch；targetAllowed 只校验作用域/自指/环。
+- [x] **/import 单请求无条数上限**（0.24.30：>1000 条 400 invalid，dryRun 同样；客户端整档预演分片 dry-run 聚合，确认仍 ≤300/片）。
+- [x] **importId 幂等回执**（0.24.30：内存 LRU 200（importId+chunkIndex），重放返回 `{cached:true}` 不写盘；客户端稳定 runId + 部分失败保留弹窗重试，merge 重试不再回滚用户编辑）。
+- [x] **导入取代关系物化**（0.24.30：`supersedes` 自动补齐批内/磁盘目标的反向 `superseded_by`，磁盘目标随同一原子批次写；`superseded_by` 补齐批内目标 `supersedes`；冲突/未声明反向丢弃计 repaired；环检测含物化反向边）。
 - [ ] **验证脚本临时条目改专用 workspaceKey**：强杀后 global 测试记忆会被系统提示注入（实测已发生）；专用不可达 cwd 的 workspace 条目不会进注入。live/gui 的临时条目与清理需同步改造。
 
 #### P2
-- [ ] **merge 导入可产生同作用域重复内容**：更新为目标已有内容时绕过 dedupeMap 不变量。方案：merge 更新前先查 normalizeContent 去重表。
+- [x] **merge 导入可产生同作用域重复内容**（0.24.30：merge 更新前查同内容去重表，命中即计 deduplicated 跳过）。
 - [ ] **moveEntry 无回滚**：新文件写成后旧文件删除失败 → 同 id 双作用域并存。方案：删旧失败则回滚新文件并抛 io。
 - [ ] **withLock 陈旧自愈 check-then-rm 双持有**：两个等待者同时判陈旧时可在 stat→rm 窗口双持有。方案：rename 原子认领（失败者重试），或 rm 前紧邻二次 stat+owner 复核。
 - [ ] **settings 锁争用映射**：POST /settings 争用 500 internal、/settings/reset 吞超时仍 200。方案：转 code=busy（503），reset 不吞错。
