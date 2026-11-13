@@ -58,6 +58,17 @@ function dataRoot() {
 const HINT_THRESHOLD = 3
 const HINT_TEXT = '本会话已有一段时间未写入记忆。若出现了值得长期保留的新稳定偏好/项目事实/决策（且非代码可推导、非短期任务指令），请用 memory_save 沉淀（origin 必填：主动沉淀=auto）；信息变化可用 supersedes 取代旧条目。若无则忽略此提示。'
 
+/** 检索输出条目：稀疏字段仅在存在时附加，避免 undefined 被 JSON.stringify 丢弃而破坏工具输出的 lossless JSON 校验。 */
+export function searchResultEntry(e) {
+  const item = { id: e.id, scope: e.scope, category: e.category, content: e.content, tags: e.tags ?? [], updated: e.updated }
+  if (e.origin !== undefined) item.origin = e.origin
+  if (e.pinned !== undefined) item.pinned = e.pinned
+  if (e.expires !== undefined) item.expires = e.expires
+  if (e.archived !== undefined) item.archived = e.archived
+  if (e.superseded_by !== undefined) item.superseded_by = e.superseded_by
+  return item
+}
+
 export function apply(ctx, rawConfig) {
   const config = resolveConfig(rawConfig)
   if (!config.enabled) return
@@ -172,7 +183,7 @@ export function apply(ctx, rawConfig) {
 
   const searchTool = {
     name: 'memory_search',
-    description: '检索跨会话记忆：关键词大小写不敏感、多词须全部命中（中文支持模糊），非空查询按相关度×新近度排序；空查询＝按更新时间列出。默认隐藏被取代/已过期/已归档条目，可用 include_* 找回。Search cross-session memory; hidden (superseded/expired/archived) entries excluded by default.',
+    description: '检索跨会话记忆：关键词大小写不敏感、多词须全部命中（中文支持模糊），非空查询按相关度×新近度排序；空查询＝按更新时间列出。默认隐藏被取代/已过期/已归档条目，可用 include_* 找回。返回 {entries, hidden}：hidden 统计被隐藏的匹配数（提示可用 include_* 找回的历史）；offset 分页。Search cross-session memory; returns {entries, hidden} with hidden-match counts; hidden (superseded/expired/archived) entries excluded by default; offset paginates.',
     parameters: {
       type: 'object',
       properties: {
@@ -180,6 +191,7 @@ export function apply(ctx, rawConfig) {
         scope: { type: 'string', enum: ['global', 'workspace', 'all'], description: '检索范围（默认 all=全局+当前工作区）' },
         category: { type: 'string', enum: ['preference', 'fact', 'decision'], description: '按分类过滤 Optional category filter' },
         limit: { type: 'integer', description: '最多返回条数（默认 20）Max results (default 20)' },
+        offset: { type: 'integer', description: '分页偏移，跳过前 N 条（默认 0）Pagination offset (default 0)' },
         include_superseded: { type: 'boolean', description: '包含被取代的历史条目（默认 false）Include superseded history' },
         include_expired: { type: 'boolean', description: '包含已过期条目（默认 false）Include expired' },
         include_archived: { type: 'boolean', description: '包含已归档条目（默认 false）Include archived' },
@@ -188,51 +200,73 @@ export function apply(ctx, rawConfig) {
     },
     output: {
       schema: {
-        type: 'array',
-        items: {
-          type: 'object',
-          properties: {
-            id: { type: 'string' },
-            scope: { type: 'string' },
-            category: { type: 'string' },
-            content: { type: 'string' },
-            tags: { type: 'array', items: { type: 'string' } },
-            updated: { type: 'string' },
-            origin: { type: 'string' },
-            pinned: { type: 'boolean' },
-            expires: { type: 'string' },
-            archived: { type: 'boolean' },
-            superseded_by: { type: 'string' },
+        type: 'object',
+        properties: {
+          entries: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                id: { type: 'string' },
+                scope: { type: 'string' },
+                category: { type: 'string' },
+                content: { type: 'string' },
+                tags: { type: 'array', items: { type: 'string' } },
+                updated: { type: 'string' },
+                origin: { type: 'string' },
+                pinned: { type: 'boolean' },
+                expires: { type: 'string' },
+                archived: { type: 'boolean' },
+                superseded_by: { type: 'string' },
+              },
+              required: ['id', 'scope', 'category', 'content'],
+            },
           },
-          required: ['id', 'scope', 'category', 'content'],
+          hidden: {
+            type: 'object',
+            properties: {
+              superseded: { type: 'integer' },
+              expired: { type: 'integer' },
+              archived: { type: 'integer' },
+              total: { type: 'integer' },
+            },
+            required: ['total'],
+          },
         },
+        required: ['entries', 'hidden'],
       },
-      render: (_args, entries) => [{
-        type: 'text',
-        text: entries.length === 0
-          ? '没有匹配的记忆 (no matching memories)'
+      render: (_args, value) => {
+        const entries = value.entries ?? []
+        const hidden = value.hidden ?? { total: 0 }
+        const list = entries.length === 0
+          ? (hidden.total > 0 ? '没有可见的匹配记忆 (no visible matches)' : '没有匹配的记忆 (no matching memories)')
           : entries.map((e) => {
             const marks = [e.pinned ? 'pinned' : '', e.archived ? 'archived' : '', e.superseded_by ? `superseded→${e.superseded_by}` : '', e.expires ? `expires ${e.expires}` : ''].filter(Boolean).join(', ')
             return `- [${e.category}/${e.scope}${marks ? `; ${marks}` : ''}] ${e.content} (id: ${e.id}, updated: ${e.updated})`
-          }).join('\n'),
-      }],
+          }).join('\n')
+        const note = hidden.total > 0
+          ? `\n另有 ${hidden.total} 条匹配被隐藏（被取代 ${hidden.superseded} / 已过期 ${hidden.expired} / 已归档 ${hidden.archived}），可用 include_superseded/include_expired/include_archived 找回 (${hidden.total} hidden matches; use include_* to recover)`
+          : ''
+        return [{ type: 'text', text: list + note }]
+      },
     },
     isConcurrencySafe: () => true,
     execute(args, exec) {
-      const entries = service.search({
+      const { entries, hidden } = service.searchDetailed({
         query: args.query ?? '',
         scope: args.scope ?? 'all',
         category: args.category,
         workspace: cwdOf(sessionOf(exec)),
         limit: args.limit ?? 20,
+        offset: args.offset ?? 0,
         includeSuperseded: args.include_superseded ?? false,
         includeExpired: args.include_expired ?? false,
         includeArchived: args.include_archived ?? false,
       })
-      return entries.map((e) => ({
-        id: e.id, scope: e.scope, category: e.category, content: e.content, tags: e.tags, updated: e.updated,
-        origin: e.origin, pinned: e.pinned, expires: e.expires, archived: e.archived, superseded_by: e.superseded_by,
-      }))
+      return {
+        entries: entries.map(searchResultEntry),
+        hidden,
+      }
     },
   }
 

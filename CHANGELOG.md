@@ -3,6 +3,18 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.13.0] - 2026-11-13
+
+### 变更 Changed
+- **`memory_search` 输出形状（契约变更）**：由条目数组改为 `{entries, hidden}`。`entries` 为分页可见结果（条目形状不变）；`hidden={superseded,expired,archived,total}` 统计当前查询下被默认过滤隐藏的匹配数（按首个排除原因归类、不重复计数），会话渲染附「另有 N 条匹配被隐藏…可用 include_* 找回」提示，避免 agent 误判「无记忆」。面板 `/entries` 路由不受影响（仍用 `service.search` 数组）。
+
+### 新增 Added
+- `memory_search` 新增 `offset` 分页参数（服务层早已支持，工具面补齐）；记忆增多后可翻页检索。
+- `service.searchDetailed()`：检索＋隐藏态匹配计数（entries 分页可见＋hidden 全量统计）。
+
+### 修复 Fixed
+- `memory_search` 输出稀疏字段（origin/pinned/expires/archived/superseded_by）仅在存在时附加，避免 `undefined` 被 JSON.stringify 丢弃而触发宿主「value is not lossless JSON」校验失败（提取 `searchResultEntry` 纯函数＋回归测试）。
+
 ## [0.12.0] - 2026-11-13
 
 ### 新增 Added
@@ -168,6 +180,7 @@ All notable changes to this project are documented here. Format follows Keep a C
 - 系统提示注入：指引＋字符预算内召回（`interpolate: false` 保护用户内容）。
 - 隐私护栏：密码/密钥/token 规则检测硬拒写。
 
+[0.13.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.9.0...v0.10.0
