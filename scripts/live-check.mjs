@@ -14,12 +14,14 @@
  */
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { withLock } from '../lib/lock.js'
 import { atomicWrite } from '../lib/store.js'
 import { snapshotDataRoot, diffSnapshots } from './data-snapshot.mjs'
 import { acquireVerifyLock } from './verify-lock.mjs'
+import { startCleanupWatchdog } from './watchdog.mjs'
 
 const argv = process.argv.slice(2)
 const portArg = argv.find((a) => a.startsWith('--port='))?.split('=')[1] ?? argv.find((a) => /^\d+$/.test(a))
@@ -36,6 +38,16 @@ const EXPECTED_VERSION = String(PKG.version)
 let pass = 0
 let fail = 0
 let emergencyCleanup = null
+let watchdog = null
+
+/** 看门狗恢复 settings 用的原始基线（不存在则删除）。 */
+function readSettingsRaw(root) {
+  try {
+    return { exists: true, content: readFileSync(path.join(root, 'settings.json'), 'utf8') }
+  } catch {
+    return { exists: false }
+  }
+}
 const failures = []
 function ok(name, cond, detail = '') {
   if (cond) { pass += 1; console.log(`  ✔ ${name}`) }
@@ -172,6 +184,7 @@ async function main() {
       }
     } catch { /* ignore */ }
     try { if (verifyLock) verifyLock.release() } catch { /* ignore */ }
+    try { watchdog?.stop() } catch { /* ignore */ }
   }
   try {
     settingsSnapshot = (await req('GET', '/settings')).json?.overlay ?? {}
@@ -180,6 +193,16 @@ async function main() {
     await cleanupResidueMarkers(token)
   } catch { /* ignore */ }
   const dataSnapshotBefore = snapshotDataRoot(statusRoot)
+  // 强杀看门狗：父进程被 taskkill/CI 超时杀死时由 detached 子进程清理测试条目、
+  // 恢复 settings/backups 并删除残留锁（正常结束时在 cleanupAll 里停掉）。
+  try {
+    watchdog = startCleanupWatchdog({
+      root: statusRoot,
+      markers: ['__gui_', '__livecheck_'],
+      settingsBefore: readSettingsRaw(statusRoot),
+      backupsBefore: backupsSnapshot,
+    }, { manifestPath: path.join(tmpdir(), `dsh-memory-live-watchdog-${process.pid}.json`), logPath: path.join(tmpdir(), `dsh-memory-live-watchdog-${process.pid}.log`) })
+  } catch { /* 看门狗启动失败不阻断验证 */ }
   const abortAndExit = (code, err) => {
     if (err !== undefined) console.error('live-check 中断：', err)
     emergencyCleanup().catch(() => {}).then(() => finish(code))
@@ -690,12 +713,13 @@ async function main() {
   })
 
   await check('导入 importId 幂等回执（0.24.30）', async () => {
+    const idemRun = `live-idem-${RUN}`
     const payload = [{ id: 'm-live-idem-1', content: `${RUN} 幂等初版`, scope: 'global' }]
-    const first = await req('POST', '/import', { token, body: { entries: payload, importId: 'live-idem-run', chunkIndex: 0 } })
+    const first = await req('POST', '/import', { token, body: { entries: payload, importId: idemRun, chunkIndex: 0 } })
     ok('首次导入 200 且 imported=1', first.status === 200 && first.json?.result?.imported === 1, JSON.stringify(first.json?.result))
     const upd = await req('POST', '/update', { token, body: { id: 'm-live-idem-1', content: `${RUN} 用户新内容` } })
     ok('update 成功', upd.status === 200, `got ${upd.status}`)
-    const replay = await req('POST', '/import', { token, body: { entries: payload, importId: 'live-idem-run', chunkIndex: 0 } })
+    const replay = await req('POST', '/import', { token, body: { entries: payload, importId: idemRun, chunkIndex: 0 } })
     ok('重放返回缓存回执', replay.json?.result?.cached === true, JSON.stringify(replay.json?.result))
     const entries = await req('GET', `/entries?query=${encodeURIComponent(`${RUN} 用户新内容`)}&scope=global`)
     ok('用户新内容未被回滚', (entries.json?.entries ?? []).some((e) => e.id === 'm-live-idem-1'))

@@ -22,6 +22,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { snapshotDataRoot, diffSnapshots } from './data-snapshot.mjs'
 import { acquireVerifyLock } from './verify-lock.mjs'
+import { startCleanupWatchdog } from './watchdog.mjs'
 
 const argv = process.argv.slice(2)
 const argOf = (name) => argv.find((a) => a.startsWith(`--${name}=`))?.split('=').slice(1).join('=')
@@ -43,6 +44,16 @@ let verifyLock = null
 let dataSnapshotBefore = null
 let overlayBaseline = {}
 let backupsBaseline = []
+let watchdog = null
+
+/** 看门狗恢复 settings 用的原始基线（不存在则删除）。 */
+function readSettingsRaw(root) {
+  try {
+    return { exists: true, content: readFileSync(path.join(root, 'settings.json'), 'utf8') }
+  } catch {
+    return { exists: false }
+  }
+}
 
 // ===== 中断安全：幂等清理注册表 + 统一 abort 路径（SIGINT/SIGTERM/未捕获异常）=====
 const cleanupHooks = []
@@ -382,6 +393,17 @@ async function main() {
     })
     // 运行前后用户数据零差异自检（快照默认排除 access.json/index.json 等派生数据）。
     dataSnapshotBefore = snapshotDataRoot(ROOT)
+    // 强杀看门狗：GUI 验证被 taskkill/CI 超时杀死时，detached 子进程清理测试记忆、
+    // 恢复 settings/backups 并删除残留锁（正常收尾由 cleanup 注册表停掉）。
+    try {
+      watchdog = startCleanupWatchdog({
+        root: ROOT,
+        markers: ['__gui_', '__livecheck_'],
+        settingsBefore: readSettingsRaw(ROOT),
+        backupsBefore: backupsBaseline,
+      }, { manifestPath: path.join(os.tmpdir(), `dsh-memory-gui-watchdog-${process.pid}.json`), logPath: path.join(os.tmpdir(), `dsh-memory-gui-watchdog-${process.pid}.log`) })
+      registerCleanup(async () => { try { watchdog.stop() } catch { /* ignore */ } })
+    } catch { /* 看门狗启动失败不阻断验证 */ }
     if (ABORT_AFTER > 0) setTimeout(() => { void abortAndExit(130, new Error(`abort-after=${ABORT_AFTER}ms 注入`)) }, ABORT_AFTER)
 
     // 1b) Tabs：ARIA 关联 + ←/→ 键盘切换跟随焦点（WAI-ARIA tablist 模式）

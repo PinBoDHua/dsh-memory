@@ -3,6 +3,20 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.24.31] - 2026-11-13
+
+### 新增 Added（第五轮运维审计 P1：验证脚本强杀残留）
+- **强杀看门狗 `scripts/watchdog.mjs`**：live-check/gui-check 启动时把清理基线（数据根、测试条目前缀、settings 原始内容、backups 基线、锁名）写成 manifest，并启动 detached 子进程每 1.5s 检查父进程存活。父进程被 `taskkill /F`、CI 超时或任务管理器强杀后，看门狗自动：删除 `__gui_`/`__livecheck_` 测试记忆、恢复 settings.json（不存在则删除）、删除基线外新增备份、删除残留 `.lock-verify/.lock-settings/.lock-import`，随后删除 manifest 退出。正常收尾由 cleanup 注册表先停掉看门狗，避免与正常清理竞争。
+- 集成到 live/gui：manifest 放在系统临时目录，日志含清理统计；看门狗启动失败不阻断验证。
+- **真机验证**：`live-check` 运行中 `taskkill /F` 父进程 → 4 条残留测试记忆在 8s 内自动清零，settings/backups/锁全部恢复，无残留 watchdog 进程；随后完整 live-check 192/192。
+- 测试：`tests/watchdog.test.mjs` 覆盖标记条目删除、settings 存在/不存在两种恢复、基线外备份删除、锁清理、幂等与数据根缺失；测试临时目录自动清理。
+
+### 修复 Fixed
+- live-check 的 importId 幂等用例改用每次运行唯一 runId（此前固定字符串会命中上一轮宿主的幂等回执，导致 update 404）；仅为测试脚本修复，产品行为不变。
+
+### 验证证据
+- 单元 **314/314**；live **192/192**；真实 GUI **84/84**；强杀演练数据根零残留。
+
 ## [0.24.30] - 2026-11-13
 
 ### 修复 Fixed（第五轮审计 P1：/import 契约收口）

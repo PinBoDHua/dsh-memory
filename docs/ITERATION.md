@@ -25,7 +25,8 @@ This file is the self-iteration ledger for dsh-memory: per-round increments, ver
 | `scripts/live-check.mjs` | 运行中宿主回环 API 全链路＋客户端 bundle rev | `--port=` 或 `DSH_MEMORY_PORT`；测试条目/设置/备份自动恢复，`--fail-at=<子串>` 失败注入验证异常清理，运行前后数据根快照 diff=0 自检 |
 | `scripts/gui-check.mjs` | 真实浏览器面板：过滤请求参数、下拉键盘、弹窗 Esc 草稿 | `--url=`；Edge headless + CDP（端口默认随机，可用 `--cdp-port=` 固定）；cookie 由 `<DSH_HOME>/.credentials.yaml` 自签；临时记忆清理，设置/备份用例前后快照恢复，运行前后数据根快照 diff=0 自检；中断安全（清理注册表 + SIGINT/SIGTERM/异常统一 abort；`--abort-after=<ms>` 注入验证） |
 | `scripts/data-snapshot.mjs` | live/gui 共用的数据根快照/差异纯函数 | 条目内容 sha256、backups 内容 sha256、settings/meta；junk 清单（`.tmp-*`、`.lock-*`、非预期文件）；刻意排除 access.json/index.json；`tests/data-snapshot.test.mjs` 覆盖 |
-| `scripts/verify-lock.mjs` | 验证脚本互斥锁 | 数据根 `.lock-verify`（data-snapshot 忽略其存在）；并发第二个脚本码 `busy` 快速退出；陈旧锁按 mtime 自愈；`tests/verify-lock.test.mjs` 覆盖 |
+| `scripts/verify-lock.mjs` | 验证脚本互斥锁 | 数据根 `.lock-verify`（data-snapshot 忽略其存在）；并发第二个脚本码 `busy` 快速退出；陈旧锁按 mtime 自愈、owner 死 PID 立即自愈；`tests/verify-lock.test.mjs` 覆盖 |
+| `scripts/watchdog.mjs` | live/gui 强杀看门狗 | 父进程启动时写清理 manifest（root/测试标记/settings 原始内容/backups 基线），detached 子进程每 1.5s 检查父存活；被 taskkill/CI 超时杀死后自动删测试条目、恢复 settings、删除新增备份与残留锁；正常结束由 cleanup 注册表停掉；`tests/watchdog.test.mjs` 覆盖，真实 `taskkill /F` 实测通过 |
 
 环境注意：GUI 端口每次启动不同，以运行时上下文为准；PowerShell 5.1 输出中文需 `[Console]::OutputEncoding=[Text.Encoding]::UTF8`；`git push` 的 stderr 进度可能被 PS 报 NonZeroExit，需看内容判断。
 
@@ -174,7 +175,7 @@ dreaming/后台 LLM 提取、向量/图检索、完整 bi-temporal 四时间戳�
 - [x] **/import 单请求无条数上限**（0.24.30：>1000 条 400 invalid，dryRun 同样；客户端整档预演分片 dry-run 聚合，确认仍 ≤300/片）。
 - [x] **importId 幂等回执**（0.24.30：内存 LRU 200（importId+chunkIndex），重放返回 `{cached:true}` 不写盘；客户端稳定 runId + 部分失败保留弹窗重试，merge 重试不再回滚用户编辑）。
 - [x] **导入取代关系物化**（0.24.30：`supersedes` 自动补齐批内/磁盘目标的反向 `superseded_by`，磁盘目标随同一原子批次写；`superseded_by` 补齐批内目标 `supersedes`；冲突/未声明反向丢弃计 repaired；环检测含物化反向边）。
-- [ ] **验证脚本临时条目改专用 workspaceKey**：强杀后 global 测试记忆会被系统提示注入（实测已发生）；专用不可达 cwd 的 workspace 条目不会进注入。live/gui 的临时条目与清理需同步改造。
+- [x] **验证脚本临时条目强杀残留**（0.24.31：`scripts/watchdog.mjs` detached 看门狗——父验证脚本被 taskkill/CI 超时强杀后 1.5–8s 内自动删除 `__gui_`/`__livecheck_` 测试条目、恢复 settings、删除新增备份与残留锁；真实 `taskkill /F` 实测通过，残留窗口从「下次脚本运行」缩短到 ≤2s。专用 workspaceKey 迁移留作后续加固）。
 
 #### P2
 - [x] **merge 导入可产生同作用域重复内容**（0.24.30：merge 更新前查同内容去重表，命中即计 deduplicated 跳过）。
