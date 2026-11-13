@@ -311,6 +311,8 @@
     statusArchived: '已归档',
     statusPinned: '已钉选',
     statusAll: '全部状态',
+    hiddenHint: '另有 {n} 条匹配被隐藏（被取代 {s} / 已过期 {e} / 已归档 {a}）',
+    hiddenViewAll: '查看全部状态',
     pin: '钉选',
     unpin: '取消钉选',
     archive: '归档',
@@ -502,6 +504,8 @@
     statusArchived: 'Archived',
     statusPinned: 'Pinned',
     statusAll: 'All statuses',
+    hiddenHint: '{n} more matches hidden (superseded {s} / expired {e} / archived {a})',
+    hiddenViewAll: 'View all statuses',
     pin: 'Pin',
     unpin: 'Unpin',
     archive: 'Archive',
@@ -767,6 +771,7 @@
     '.dm_recall_item{display:flex;gap:8px;align-items:flex-start;font-size:12.5px;line-height:1.4;}',
     '.dm_recall_cat{flex-shrink:0;font-weight:700;font-size:11px;}',
     '.dm_recall_content{color:var(--dm-ink);word-break:break-word;}',
+    '.dm_hidden_hint{display:flex;align-items:flex-start;gap:8px;margin:0 0 10px;padding:10px 12px;border:1px solid color-mix(in srgb,var(--dm-primary) 30%,transparent);border-radius:12px;background:color-mix(in srgb,var(--dm-primary) 8%,transparent);color:var(--dm-ink);font-size:12.5px;line-height:1.45;}',
     '.dm_tile{border:1px solid var(--dm-line);border-radius:12px;padding:12px;background:var(--dm-bg);text-align:center;}',
     '.dm_tile_num{font-family:Georgia,"Times New Roman",serif;font-size:26px;font-weight:700;line-height:1.1;font-variant-numeric:tabular-nums;}',
     '.dm_tile_label{font-size:11px;color:var(--dm-ink3);margin-top:3px;}',
@@ -1788,6 +1793,8 @@
         var entries = entriesState[0]; var setEntries = entriesState[1]
         var statsState = useState(null)
         var stats = statsState[0]; var setStats = statsState[1]
+        var hiddenState = useState({ total: 0 })
+        var hidden = hiddenState[0]; var setHidden = hiddenState[1]
         var workspacesState = useState([])
         var workspaces = workspacesState[0]; var setWorkspaces = workspacesState[1]
         var cwdState = useState(undefined)
@@ -1869,6 +1876,7 @@
             if (seq !== seqRef.current) return
             var doc = results[0]
             setStats(results[1].stats)
+            setHidden(doc.hidden || { total: 0 })
             var sliced = pageSlice(doc.entries, pageSize)
             // 当前页被删空（如删掉末页最后一条）→ 自动回退一页，避免误导性空态。
             if (sliced.items.length === 0 && page > 0) { setPage(page - 1); return }
@@ -2314,6 +2322,12 @@
             h('button', { className: 'dm_btn', disabled: page === 0 || busy, onClick: function () { changePage(page - 1) } }, h(Icon, { name: 'chevL', size: 14 }), t('pagePrev')),
             h('span', { className: 'dm_pageinfo' }, t('pageInfo').replace('{page}', String(page + 1))),
             h('button', { className: 'dm_btn', disabled: !hasMore || busy, onClick: function () { changePage(page + 1) } }, t('pageNext'), h(Icon, { name: 'chevR', size: 14 }))) : null
+          var hiddenHint = hidden && hidden.total > 0
+            ? h('div', { className: 'dm_hidden_hint' },
+              h(Icon, { name: 'info', size: 14, style: { flexShrink: 0, marginTop: 1 } }),
+              h('span', { style: { flex: 1 } }, t('hiddenHint').replace('{n}', String(hidden.total)).replace('{s}', String(hidden.superseded)).replace('{e}', String(hidden.expired)).replace('{a}', String(hidden.archived))),
+              statusFilter !== 'all' ? h('button', { className: 'dm_btn dm_btn_mini', onClick: function () { changeStatus('all') } }, t('hiddenViewAll')) : null)
+            : null
           if (listError) {
             return h('div', { className: 'dm_empty' },
               h(Icon, { name: 'alert', size: 28, style: { color: 'var(--dm-danger)', marginBottom: 10 } }),
@@ -2322,7 +2336,7 @@
           }
           if (entries.length === 0) {
             var filtered = !!(query || categoryFilter || originFilter || statusFilter !== 'active')
-            return h('div', null,
+            return h('div', null, hiddenHint,
               h('div', { className: 'dm_empty' },
                 h(ConstellationArt, { small: filtered }),
                 h('div', { className: 'dm_empty_title' }, filtered ? t('noResults') : t('emptyTitle')),
@@ -2346,9 +2360,9 @@
               })
             })
           }
-          if (selection !== 'all') return h('div', null, rows(entries, 0), pager)
+          if (selection !== 'all') return h('div', null, hiddenHint, rows(entries, 0), pager)
           var groups = groupEntries(entries)
-          return h('div', null,
+          return h('div', null, hiddenHint,
             groups.global.length ? h('div', { className: 'dm_section_title' }, h(Icon, { name: 'globe', size: 13 }), t('scopeGlobal'), h('span', { className: 'dm_section_n' }, groups.global.length + ' ' + t('entriesUnit'))) : null,
             rows(groups.global, 0),
             groups.workspace.length ? h('div', { className: 'dm_section_title' }, h(Icon, { name: 'folder', size: 13 }), t('scopeWorkspace'), h('span', { className: 'dm_section_n' }, groups.workspace.length + ' ' + t('entriesUnit'))) : null,

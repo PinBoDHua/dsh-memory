@@ -163,6 +163,22 @@ test('GET entries honors offset and category together', async () => {
   assert.ok(ids.includes(doc.entries[0].id))
 })
 
+test('GET entries returns hidden match counts alongside entries', async () => {
+  const { service, handlers } = setup()
+  service.save({ content: '隐藏提示 活跃', scope: 'global' })
+  const old = service.save({ content: '隐藏提示 被取代', scope: 'global' })
+  service.save({ content: '隐藏提示 取代者', scope: 'global', supersedes: old.entry.id })
+  const res = fakeRes()
+  await handlers.entries(fakeReq({ url: '/plugins/dsh-memory/entries?query=' + encodeURIComponent('隐藏提示') }), res)
+  assert.equal(res.statusCode, 200)
+  const doc = res.json()
+  assert.equal(doc.entries.length, 2, 'active + 取代者 visible')
+  assert.deepEqual(doc.hidden, { superseded: 1, expired: 0, archived: 0, total: 1 })
+  const all = fakeRes()
+  await handlers.entries(fakeReq({ url: '/plugins/dsh-memory/entries?query=' + encodeURIComponent('隐藏提示') + '&include_superseded=true' }), all)
+  assert.equal(all.json().hidden.total, 0)
+})
+
 test('GET stats returns distribution; loopback enforced', async () => {
   const { service, handlers } = setup()
   service.save({ content: '统计路由', scope: 'global', category: 'decision' })

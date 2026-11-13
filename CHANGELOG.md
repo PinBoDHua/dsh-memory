@@ -3,6 +3,14 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.18.0] - 2026-11-13
+
+### 新增 Added
+- **面板检索隐藏态提示**：`GET /entries` 改用 `service.searchDetailed`，响应增 `hidden` 计数（被取代/过期/归档，与 0.13.0 工具同口径）；面板搜索时若存在隐藏匹配，列表上方提示「另有 N 条匹配被隐藏…」并可一键切「全部状态」查看。面板与工具的检索完整性对齐。
+
+### 变更 Changed
+- `/entries` 响应由 `{entries}` 扩展为 `{entries, hidden}`（additive，面板读取 entries 不变）。
+
 ## [0.17.0] - 2026-11-13
 
 ### 新增 Added
@@ -215,6 +223,7 @@ All notable changes to this project are documented here. Format follows Keep a C
 - 系统提示注入：指引＋字符预算内召回（`interpolate: false` 保护用户内容）。
 - 隐私护栏：密码/密钥/token 规则检测硬拒写。
 
+[0.18.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.14.0...v0.15.0
