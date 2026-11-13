@@ -3,6 +3,11 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.19.0] - 2026-11-13
+
+### 新增 Added
+- **列表注入徽章**：主列表卡片对「已注入系统提示」的活跃记忆显示「已注入」徽章（按全局＋当前工作区上下文、当前预算/衰减设置实时计算，复用 `GET /recall-preview`，失败降级不阻断列表）；自动注入关闭时不显示。注入效果在主视图可见，便于 tuning 记忆集与预算，与设置页召回预览互补。
+
 ## [0.18.0] - 2026-11-13
 
 ### 新增 Added
@@ -223,6 +228,7 @@ All notable changes to this project are documented here. Format follows Keep a C
 - 系统提示注入：指引＋字符预算内召回（`interpolate: false` 保护用户内容）。
 - 隐私护栏：密码/密钥/token 规则检测硬拒写。
 
+[0.19.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.15.0...v0.16.0

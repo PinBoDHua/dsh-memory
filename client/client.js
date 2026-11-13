@@ -313,6 +313,8 @@
     statusAll: '全部状态',
     hiddenHint: '另有 {n} 条匹配被隐藏（被取代 {s} / 已过期 {e} / 已归档 {a}）',
     hiddenViewAll: '查看全部状态',
+    injectedLabel: '已注入',
+    injectedTitle: '已注入到系统提示（全局＋当前工作区上下文）',
     pin: '钉选',
     unpin: '取消钉选',
     archive: '归档',
@@ -506,6 +508,8 @@
     statusAll: 'All statuses',
     hiddenHint: '{n} more matches hidden (superseded {s} / expired {e} / archived {a})',
     hiddenViewAll: 'View all statuses',
+    injectedLabel: 'Injected',
+    injectedTitle: 'Injected into the system prompt (global + current workspace context)',
     pin: 'Pin',
     unpin: 'Unpin',
     archive: 'Archive',
@@ -890,6 +894,7 @@
     '.dm_successor:hover{background:color-mix(in srgb,var(--dm-primary) 10%,transparent);}',
     '.dm_successor:focus-visible{outline:none;box-shadow:var(--dm-ring);}',
     '.dm_pinned_mark{display:inline-flex;color:var(--dm-pref);}',
+    '.dm_injected_mark{display:inline-flex;align-items:center;gap:3px;font-size:10.5px;font-weight:700;color:var(--dm-success);}',
     '.dm_card_muted{opacity:.72;}',
     '.dm_card_muted:hover{opacity:1;}',
     '.dm_btn_pinned{color:var(--dm-pref);}',
@@ -1163,6 +1168,8 @@
               }, h(Icon, { name: 'chevR', size: 11, strokeWidth: 2.2 }), t('viewSuccessor')) : null,
               entry.pinned && status === 'active' ? h('span', { className: 'dm_pinned_mark', title: t('pinnedLabel') },
                 h(Icon, { name: 'pin', size: 12, style: { fill: 'currentColor' } })) : null,
+              props.injected && status === 'active' ? h('span', { className: 'dm_injected_mark', title: t('injectedTitle') },
+                h(Icon, { name: 'checkCircle', size: 11 }), t('injectedLabel')) : null,
               h('span', { className: 'dm_scope_chip' },
                 h(Icon, { name: entry.scope === 'global' ? 'globe' : 'folder', size: 12 }),
                 entry.scope === 'global' ? t('scopeGlobal') : t('scopeWorkspace')),
@@ -1795,6 +1802,8 @@
         var stats = statsState[0]; var setStats = statsState[1]
         var hiddenState = useState({ total: 0 })
         var hidden = hiddenState[0]; var setHidden = hiddenState[1]
+        var injectedState = useState([])
+        var injected = injectedState[0]; var setInjected = injectedState[1]
         var workspacesState = useState([])
         var workspaces = workspacesState[0]; var setWorkspaces = workspacesState[1]
         var cwdState = useState(undefined)
@@ -1872,11 +1881,13 @@
           else { scopeParams.scope = 'workspace'; scopeParams.workspace = selection }
           var params = Object.assign({}, scopeParams, { query: query, category: categoryFilter, limit: pageSize + 1, offset: page * pageSize }, statusQueryFlags(statusFilter))
           var statsParams = Object.assign({}, scopeParams, { query: query })
-          return Promise.all([api.entries(params), api.stats(statsParams)]).then(function (results) {
+          return Promise.all([api.entries(params), api.stats(statsParams), api.recallPreview(currentCwd).catch(function () { return null })]).then(function (results) {
             if (seq !== seqRef.current) return
             var doc = results[0]
             setStats(results[1].stats)
             setHidden(doc.hidden || { total: 0 })
+            var rp = results[2]
+            setInjected(rp && rp.autoInject ? (rp.entries || []).map(function (e) { return e.id }) : [])
             var sliced = pageSlice(doc.entries, pageSize)
             // 当前页被删空（如删掉末页最后一条）→ 自动回退一页，避免误导性空态。
             if (sliced.items.length === 0 && page > 0) { setPage(page - 1); return }
@@ -2351,6 +2362,7 @@
               return h(MemoryCard, {
                 key: entry.id, entry: entry, t: t, index: offset + i,
                 selected: selected.indexOf(entry.id) !== -1,
+                injected: injected.indexOf(entry.id) !== -1,
                 useRelative: !settings || settings.effective.relativeTime,
                 onToggleSelect: toggleSelect,
                 onEdit: openEdit, onDelete: openDelete,
