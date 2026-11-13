@@ -106,11 +106,11 @@ This file is the self-iteration ledger for dsh-memory: per-round increments, ver
 - [x] 相似查重 O(N²)（0.24.17：特征倒排候选，1500 条比较阶段 <900ms，与暴力实现结果一致）。
 
 **P2**
-- [ ] 大导入写放大 + 同步锁：每条 ensureMeta/读写 index.json；`touchAccess` 锁等待 5s 冻结事件循环 → 合并索引写、簿记短超时、busy 503。（0.24.16 已合并 ensureMeta/索引刷新；簿记短超时仍待做）
-- [ ] `access.json` 无 GC：手工删文件后同 id 重导入继承幽灵命中；账本无界增长 → prune（list/status/backup/import 后惰性）。
-- [ ] `backups/` 按任意 `*.json` 轮转与 lastBackup：会删用户手放导出、外来未来 mtime 永久阻塞自动备份 → 只匹配 `dsh-memory-*.json`。
-- [ ] v1→v2 迁移的强制备份失败被静默吞掉；`maybeAutoBackup` 不可写抛错 → 降级 + status 暴露 migrationPending/backupError。
-- [ ] 导入悬垂 `superseded_by/supersedes` 指针使条目默认永久隐藏 → 丢弃不存在目标的指针并计数 repaired。
+- [x] 大导入写放大 + 同步锁（0.24.16 合并 ensureMeta/索引刷新；0.24.18 账本簿记 400ms / 导入锁 3s 超时→busy，不再同步冻结）。
+- [x] `access.json` 无 GC（0.24.18：启动与导入后惰性 prune，手工删除不再留幽灵命中）。
+- [x] `backups/` 按任意 `*.json` 轮转与 lastBackup（0.24.18：只认 `dsh-memory-<时间戳>.json`，用户手放文件保留、外来未来 mtime 不再阻塞自动备份）。
+- [x] v1→v2 迁移的强制备份失败被静默吞掉（0.24.18：保留 v1 并在 status 暴露 pending/error；maybeAutoBackup 降级）。
+- [x] 导入悬垂 `superseded_by/supersedes` 指针使条目默认永久隐藏（0.24.18：丢弃不可达指针并计 repaired，批内前向引用保留）。
 - [ ] 常驻 tabpanel 导致 `/recall-preview` 初始化与设置保存各多一次（隐藏面板仍挂载即加载）→ RecallPreview 仅激活时加载。
 - [ ] 撤销吐司：倒计时条不随新吐司重启（Toast key 未传给组件）；消失后焦点掉 body；hover/focus 不暂停计时。
 - [ ] 分页时区块计数＝当前页条数，与统计条总数矛盾。

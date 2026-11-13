@@ -3,6 +3,18 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.24.18] - 2026-11-13
+
+### 修复 Fixed（第三轮审计 P2：存储卫生）
+- **`access.json` 幽灵记录惰性 GC**：新增 `store.pruneAccessLedger`（`withLock` 内比对存活 id，原子写回），服务启动与导入落盘成功后 best-effort 调用。手工/外部删除文件后账本不再只增不减，同 id 重导入也不会继承「前世」命中。真实数据里 2 条幽灵记录已在重载后自动清理。
+- **`backups/` 只轮转插件自己的文件**：备份文件名白名单（`dsh-memory-<ISO 时间戳>.json`）用于计数、轮转与 `lastBackup`。用户手放的 JSON 不再被静默删除；外来「未来 mtime」文件也不会让自动备份永久不触发。
+- **迁移/备份失败可观测**：v1→v2 强制备份失败不再静默吞掉——保留 v1、`status` 暴露 `migrationPending/migrationError`；`maybeAutoBackup` 失败降级返回 null 并记录 `status.backupError`（显式 `backup()` 仍抛错给调用方）。
+- **导入悬垂取代指针修复**：指向「目标根不存在且本批不提供」的 `supersedes/superseded_by` 在导入时丢弃并计数 `repaired`（批内前向引用保留）——不再产生默认永久隐藏、工具无法修复的条目。
+- **簿记锁短超时**：`touchAccess`/账本清理/导入锁等待改为有界（账本 400ms、导入 3s→`code=busy` 503），锁被另一进程持有时检索/装配不再同步冻结事件循环。
+
+### 新增 Added
+- 测试：幽灵账本 prune + 同 id 重导入无继承、簿记锁忙时 search <1.5s、外来 JSON 不被轮转/未来 mtime 不阻塞自动备份、迁移备份失败降级与修复后恢复、并发导入快速 busy、悬垂指针 repaired 且批内前向引用保留；live-check 增加账本幽灵清理/悬垂指针/手放备份保留/status 可观测字段真机检查。
+
 ## [0.24.17] - 2026-11-13
 
 ### 性能 Performance（第三轮审计 P1/P2：大库读路径）

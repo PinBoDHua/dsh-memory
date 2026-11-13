@@ -117,6 +117,40 @@ test('two processes touching disjoint entries lose no ledger updates', async () 
   }
 })
 
+test('pruneAccessLedger removes ghost records from externally deleted files', () => {
+  const { root, service } = tmpService()
+  const kept = service.save({ content: '保留条目', scope: 'global' })
+  const gone = service.save({ content: '外部删除条目', scope: 'global' })
+  service.search({ query: '条目', scope: 'global' })
+  const before = readLedger(root)
+  assert.ok(before[gone.entry.id], 'ledger recorded for soon-deleted file')
+  // 模拟手工/外部删除（不经过 forget）：账本残留幽灵记录。
+  fs.rmSync(path.join(root, 'global', `${gone.entry.id}.md`))
+  const removed = service.pruneAccessLedger()
+  assert.equal(removed, 1)
+  const after = readLedger(root)
+  assert.equal(after[gone.entry.id], undefined)
+  assert.ok(after[kept.entry.id], 'alive record kept')
+  // 同 id 重新导入：不继承幽灵命中。
+  const res = service.import({ entries: [{ id: gone.entry.id, content: '重新导入的新内容', scope: 'global' }] })
+  assert.equal(res.imported, 1)
+  const reimported = service.list({ scope: 'global' }).find((e) => e.id === gone.entry.id)
+  assert.equal(reimported.hit_count, undefined)
+  assert.equal(reimported.last_access, undefined)
+})
+
+test('touchAccess never blocks search when the ledger lock is held (short timeout)', async () => {
+  const { root, service } = tmpService()
+  service.save({ content: '锁忙条目', scope: 'global' })
+  fs.mkdirSync(path.join(root, '.lock-access'), { recursive: true }) // 模拟另一进程持锁
+  const started = Date.now()
+  const results = service.search({ query: '锁忙条目', scope: 'global' })
+  const elapsed = Date.now() - started
+  assert.equal(results.length, 1, 'search still works')
+  assert.ok(elapsed < 1500, `search waited ${elapsed}ms on ledger lock (must be best-effort ~400ms)`)
+  fs.rmSync(path.join(root, '.lock-access'), { recursive: true, force: true })
+})
+
 test('system prompt injection records hits (throttled) through the ledger', () => {
   const prevHome = process.env.DSH_HOME
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-memory-inject-home-'))

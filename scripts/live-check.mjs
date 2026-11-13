@@ -85,6 +85,9 @@ async function main() {
     ok(`version === ${EXPECTED_VERSION}`, json?.version === EXPECTED_VERSION, `got ${json?.version}`)
     ok('schemaVersion === 2', json?.schemaVersion === 2, `got ${json?.schemaVersion}`)
     ok('token 非空', typeof json?.key === 'string' && json.key.length > 0)
+    // 0.24.18：迁移/备份失败可观测字段（健康时应为 false/null）。
+    ok('migrationPending=false', json?.migrationPending === false, `got ${JSON.stringify(json?.migrationPending)}`)
+    ok('backupError=null', json?.backupError === null, `got ${JSON.stringify(json?.backupError)}`)
     token = json?.key ?? ''
     statusRoot = json?.root ?? ''
   })
@@ -492,15 +495,48 @@ async function main() {
     const safeRetention = Math.max(retentionNow, backupsSnapshot.length + 2)
     await req('POST', '/settings', { token, body: { backupRetention: safeRetention } })
     const beforeTrigger = listBackups().length
+    // 用户手放的 JSON 不应被轮转删除（0.24.18：只轮转插件自己的时间戳备份）。
+    const manualFile = path.join(statusRoot, 'backups', 'user-manual-note.json')
+    writeFileSync(manualFile, '{"user":"manual"}', 'utf8')
     const bk = await req('POST', '/backup', { token, body: {} })
     ok('backup 返回 file', typeof bk.json?.result?.file === 'string')
-    ok('backup 未裁剪既有历史备份', listBackups().length >= beforeTrigger + 1, `${beforeTrigger} -> ${listBackups().length}`)
+    ok('backup 未裁剪既有历史备份', listBackups().length >= beforeTrigger + 2, `${beforeTrigger} -> ${listBackups().length}`)
+    ok('备份不删除用户手放文件', existsSync(manualFile))
     const ex = await req('GET', '/export')
     ok('export format', ex.json?.format === 'dsh-memory-export')
     const im = await req('POST', '/import', { token, body: { dryRun: true, entries: [{ content: `${RUN} 导入预览`, scope: 'global' }] } })
     ok('import dryRun imported=1', im.json?.result?.dryRun === true && im.json?.result?.imported === 1)
     const ws = await req('GET', '/workspaces')
     ok('workspaces 数组', Array.isArray(ws.json?.workspaces))
+  })
+
+  await check('账本幽灵清理与悬垂取代指针修复（0.24.18）', async () => {
+    // a) 手工删除文件留下的账本幽灵记录：下一次导入成功后触发惰性 prune。
+    const sv = await req('POST', '/save', { token, body: { content: `${RUN} 幽灵清理`, scope: 'global', origin: 'auto' } })
+    const ghostId = sv.json?.result?.entry?.id ?? ''
+    ok('幽灵测试条目已创建', ghostId.startsWith('m-'))
+    created.push(ghostId)
+    await req('GET', `/entries?query=${encodeURIComponent(`${RUN} 幽灵清理`)}`)
+    let ledger = {}
+    try { ledger = JSON.parse(readFileSync(path.join(statusRoot, 'access.json'), 'utf8')) } catch { /* ignore */ }
+    ok('账本命中记录已建立', Boolean(ledger[ghostId]))
+    rmSync(path.join(statusRoot, 'global', `${ghostId}.md`), { force: true })
+    const im = await req('POST', '/import', { token, body: { entries: [{ content: `${RUN} 触发清理`, scope: 'global' }] } })
+    ok('触发清理的导入成功', im.json?.result?.imported === 1, JSON.stringify(im.json?.result))
+    const found = await req('GET', `/entries?query=${encodeURIComponent(`${RUN} 触发清理`)}&scope=global`)
+    for (const e of found.json?.entries ?? []) created.push(e.id)
+    let after = {}
+    try { after = JSON.parse(readFileSync(path.join(statusRoot, 'access.json'), 'utf8')) } catch { /* ignore */ }
+    ok('幽灵账本记录已被 prune', after[ghostId] === undefined, JSON.stringify(after[ghostId]))
+
+    // b) 悬垂 supersede 指针：dryRun 与落盘都计 repaired，修复后条目默认可见。
+    const dangling = await req('POST', '/import', { token, body: { dryRun: true, entries: [{ content: `${RUN} 悬垂指针`, scope: 'global', supersedes: 'm-missing-deadbeef' }] } })
+    ok('悬垂指针 dryRun repaired=1', dangling.json?.result?.repaired === 1, JSON.stringify(dangling.json?.result))
+    const realImp = await req('POST', '/import', { token, body: { entries: [{ content: `${RUN} 悬垂指针`, scope: 'global', supersedes: 'm-missing-deadbeef' }] } })
+    ok('悬垂指针落盘 repaired=1', realImp.json?.result?.repaired === 1 && realImp.json?.result?.imported === 1, JSON.stringify(realImp.json?.result))
+    const visible = await req('GET', `/entries?query=${encodeURIComponent(`${RUN} 悬垂指针`)}&scope=global`)
+    for (const e of visible.json?.entries ?? []) created.push(e.id)
+    ok('修复后条目默认可见', (visible.json?.entries ?? []).length === 1, JSON.stringify(visible.json?.entries))
   })
 
   await check('导入落盘失败零变更（结构化 io 错误，0.24.16）', async () => {

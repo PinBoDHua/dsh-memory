@@ -219,7 +219,8 @@ test('backup writes to backups/ and prunes to retention; maybeAutoBackup gates o
   service.updateSettings({ autoBackup: true, backupRetention: 2 })
   const dir = path.join(root, 'backups')
   fs.mkdirSync(dir, { recursive: true })
-  for (let i = 1; i <= 5; i++) fs.writeFileSync(path.join(dir, `dsh-memory-2020-01-0${i}.json`), '{}', 'utf8')
+  // 只有插件自己的时间戳备份参与轮转（0.24.18 起不再按任意 *.json 计数）。
+  for (let i = 1; i <= 5; i++) fs.writeFileSync(path.join(dir, `dsh-memory-2020-01-01T00-00-0${i}-000Z.json`), '{}', 'utf8')
   const result = service.backup()
   assert.equal(result.count, 2)
   assert.equal(fs.readdirSync(dir).filter((n) => n.endsWith('.json')).length, 2)
@@ -228,6 +229,69 @@ test('backup writes to backups/ and prunes to retention; maybeAutoBackup gates o
   assert.equal(service.maybeAutoBackup(), null)
   service.updateSettings({ autoBackup: false })
   assert.equal(service.maybeAutoBackup(), null)
+})
+
+test('backup only rotates plugin timestamp files; foreign json never deleted nor blocks auto-backup', () => {
+  const { root, service } = tmpService()
+  service.save({ content: '备份内容', scope: 'global' })
+  service.updateSettings({ autoBackup: true, backupRetention: 1 })
+  const dir = path.join(root, 'backups')
+  fs.mkdirSync(dir, { recursive: true })
+  const foreign = path.join(dir, 'notes-and-manual-export.json')
+  fs.writeFileSync(foreign, '{"user":"manual"}', 'utf8')
+  // 外来的「未来 mtime」文件不应被当作 lastBackup（否则自动备份永久不触发）。
+  const future = new Date(Date.now() + 365 * 24 * 3600 * 1000)
+  fs.utimesSync(foreign, future, future)
+  service.backup()
+  const own = fs.readdirSync(dir).filter((n) => /^dsh-memory-\d{4}-\d{2}-\d{2}T/.test(n))
+  assert.equal(own.length, 1)
+  assert.ok(fs.existsSync(foreign), 'foreign json preserved')
+  fs.rmSync(path.join(dir, own[0]))
+  const auto = service.maybeAutoBackup()
+  assert.ok(auto && typeof auto.file === 'string', 'auto-backup still runs despite foreign future mtime')
+  assert.ok(fs.existsSync(foreign))
+})
+
+test('v1 migration backup failure degrades to readable status, then recovers', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-memory-mig-'))
+  fs.mkdirSync(path.join(root, 'global'), { recursive: true })
+  fs.writeFileSync(path.join(root, 'meta.json'), JSON.stringify({ plugin: 'dsh-memory', schemaVersion: 1 }), 'utf8')
+  fs.writeFileSync(path.join(root, 'backups'), 'blocker', 'utf8') // 让备份目录创建失败
+  const broken = createMemoryService({ root })
+  const status = broken.status()
+  assert.equal(status.migrationPending, true)
+  assert.match(String(status.migrationError || ''), /迁移备份失败/)
+  assert.equal(status.schemaVersion, 1, 'schema only bumps after a successful backup')
+  // 记忆仍可读写（迁移失败不阻断）。
+  broken.save({ content: '迁移期间的记忆', scope: 'global' })
+  assert.equal(broken.list({ scope: 'global' }).length, 1)
+  // 自动备份失败降级返回 null，而不是向调用方抛错。
+  broken.updateSettings({ autoBackup: true })
+  assert.equal(broken.maybeAutoBackup(), null)
+  // 修复阻塞后再次加载：完成迁移，状态可观测为已恢复。
+  fs.rmSync(path.join(root, 'backups'), { force: true })
+  const fixed = createMemoryService({ root })
+  assert.equal(fixed.status().schemaVersion, 2)
+  assert.equal(fixed.status().migrationPending, false)
+  assert.equal(fixed.status().migrationError, null)
+})
+
+test('concurrent import fails fast with retryable busy instead of freezing on the lock', () => {
+  const { root, service } = tmpService()
+  const lock = path.join(root, '.lock-import')
+  fs.mkdirSync(lock, { recursive: true })
+  const started = Date.now()
+  let err = null
+  try {
+    service.import({ entries: [{ content: '并发导入', scope: 'global' }] })
+  } catch (e) {
+    err = e
+  }
+  const elapsed = Date.now() - started
+  fs.rmSync(lock, { recursive: true, force: true })
+  assert.ok(err, 'import must fail while lock held')
+  assert.equal(err.code, 'busy')
+  assert.ok(elapsed < 5000, `lock wait ${elapsed}ms (expected ~3s cap)`)
 })
 
 test('search offset paginates without overlap', () => {

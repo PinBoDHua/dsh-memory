@@ -89,6 +89,24 @@ test('failed import leaves merge-update target content unchanged', () => {
   assert.equal(after[0].content, '原始内容', 'merge target must not be overwritten by a failed batch')
 })
 
+test('import repairs dangling supersede pointers; in-batch forward refs are kept', () => {
+  const { root, service } = tmpService()
+  const res = service.import({ entries: [
+    { id: 'm-dangle-a', content: '悬垂指针甲', scope: 'global', supersedes: 'm-missing-1' },
+    { id: 'm-dangle-b', content: '悬垂指针乙', scope: 'global', superseded_by: 'm-missing-2' },
+    { id: 'm-dangle-c', content: '前向引用丙', scope: 'global', superseded_by: 'm-dangle-d' },
+    { id: 'm-dangle-d', content: '前向引用丁', scope: 'global' },
+  ] })
+  assert.equal(res.repaired, 2)
+  assert.equal(res.imported, 4)
+  const visible = service.search({ scope: 'global' }).map((e) => e.id).sort()
+  assert.deepEqual(visible, ['m-dangle-a', 'm-dangle-b', 'm-dangle-d'], 'dangling pointers repaired, forward ref hidden')
+  // 批内前向引用保留（目标在同批，导入后可见）。
+  const all = store.listScope(root, 'global', undefined)
+  const c = all.find((e) => e.id === 'm-dangle-c')
+  assert.equal(c.superseded_by, 'm-dangle-d')
+})
+
 test('successful batch import writes all entries and refreshes workspace index', () => {
   const { root, service } = tmpService()
   const res = service.import({
