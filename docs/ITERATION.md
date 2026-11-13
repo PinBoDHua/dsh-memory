@@ -27,6 +27,7 @@ This file is the self-iteration ledger for dsh-memory: per-round increments, ver
 | `scripts/data-snapshot.mjs` | live/gui 共用的数据根快照/差异纯函数 | 条目内容 sha256、backups 内容 sha256、settings/meta；junk 清单（`.tmp-*`、`.lock-*`、非预期文件）；刻意排除 access.json/index.json；`tests/data-snapshot.test.mjs` 覆盖 |
 | `scripts/verify-lock.mjs` | 验证脚本互斥锁 | 数据根 `.lock-verify`（data-snapshot 忽略其存在）；并发第二个脚本码 `busy` 快速退出；陈旧锁按 mtime 自愈、owner 死 PID 立即自愈；`tests/verify-lock.test.mjs` 覆盖 |
 | `scripts/watchdog.mjs` | live/gui 强杀看门狗 | 父进程启动时写清理 manifest（root/测试标记/settings 原始内容/backups 基线），detached 子进程每 1.5s 检查父存活；被 taskkill/CI 超时杀死后自动删测试条目、恢复 settings、删除新增备份与残留锁；正常结束由 cleanup 注册表停掉；`tests/watchdog.test.mjs` 覆盖，真实 `taskkill /F` 实测通过 |
+| `scripts/bench.mjs` | 大库性能基准 | `--entries=30000 --dir=<临时根> --regen`；合成 global+workspace 数据根，输出冷/热 listAll、status、export、recallPreview、search、forgetOne 毫秒数（JSON） |
 
 环境注意：GUI 端口每次启动不同，以运行时上下文为准；PowerShell 5.1 输出中文需 `[Console]::OutputEncoding=[Text.Encoding]::UTF8`；`git push` 的 stderr 进度可能被 PS 报 NonZeroExit，需看内容判断。
 
@@ -171,7 +172,7 @@ dreaming/后台 LLM 提取、向量/图检索、完整 bi-temporal 四时间戳�
 > 三个只读审计员（宿主 / 面板 / 运维文档）的合并清单。0.24.29 已修项：分片导入按取代链分量打包（P1 数据损坏）、部分成功导入刷新 dataVersion、导出 skipped UI 提示、frontmatter 换行注入防护、busy 不粘滞 backupError、GUI profile 回收（实测回收 85 目录/9.7GB）、verify-lock 死 PID 自愈、settings 真并发测试、skipped 导入往返测试。
 
 #### P1
-- [ ] **30k 库全量遍历同步冻结宿主**：冷启动首次装配/list ~18s，热态 listAll/stats/export/recall ~1.45s，单条 forget ~1.6s；瓶颈是每条 statSync（29k 文件 1.25s）。方案：根级快照缓存（fs.watch + 写失效）或 ≤1s TTL＋写失效（需同步修改「手改立即生效」口径），装配层 sectionText 短 TTL 缓存。
+- [x] **30k 库全量遍历同步冻结宿主（热路径）**（0.24.33：≥1024 文件的目录缓存解析结果数组，靠「本进程写路径同步打补丁 + fs.watch 递归增量重读单文件 + watcher 不可用退化为不缓存」三路维护；30k 合成库实测 warm listAll **1450→约 50ms**、export **1466→86ms**、recallPreview **1568→152ms**、search→91ms、单条 forget **1594→75ms**；小目录/测试库保持逐文件 stat 的严格语义。冷启动首次解析仍 ~15.4s，下一步单独优化）。
 - [x] **/import 单请求无条数上限**（0.24.30：>1000 条 400 invalid，dryRun 同样；客户端整档预演分片 dry-run 聚合，确认仍 ≤300/片）。
 - [x] **importId 幂等回执**（0.24.30：内存 LRU 200（importId+chunkIndex），重放返回 `{cached:true}` 不写盘；客户端稳定 runId + 部分失败保留弹窗重试，merge 重试不再回滚用户编辑）。
 - [x] **导入取代关系物化**（0.24.30：`supersedes` 自动补齐批内/磁盘目标的反向 `superseded_by`，磁盘目标随同一原子批次写；`superseded_by` 补齐批内目标 `supersedes`；冲突/未声明反向丢弃计 repaired；环检测含物化反向边）。

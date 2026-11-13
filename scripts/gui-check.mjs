@@ -899,23 +899,43 @@ async function main() {
       // 0.24.19：删除确认弹窗在请求期间显示「删除中…」而不是整框静默变灰。
       await send('Network.emulateNetworkConditions', { offline: false, latency: 1500, downloadThroughput: -1, uploadThroughput: -1 })
       await evaluate(`(() => { const btn = document.querySelector('.dm_dialog .dm_btn_danger_solid'); if (btn) btn.click(); return Boolean(btn) })()`)
-      await sleep(400)
-      const deleteBusy = await evaluate(`(() => {
-        const dialog = document.querySelector('.dm_dialog')
-        return { text: dialog ? (dialog.innerText || '').replace(/\\s+/g, ' ') : '', disabled: [...document.querySelectorAll('.dm_dialog button')].every((b) => b.disabled) }
-      })()`)
+      // 轮询到「删除中」态：固定 400ms 采样受 CDP 延迟注入生效时机影响会偶发假失败。
+      let deleteBusy = { text: '', disabled: false }
+      for (let i = 0; i < 8; i += 1) {
+        await sleep(150)
+        deleteBusy = await evaluate(`(() => {
+          const dialog = document.querySelector('.dm_dialog')
+          return { text: dialog ? (dialog.innerText || '').replace(/\\s+/g, ' ') : '', disabled: dialog ? [...dialog.querySelectorAll('button')].every((b) => b.disabled) : false }
+        })()`)
+        if (/删除中|Deleting/.test(deleteBusy.text) && deleteBusy.disabled) break
+      }
       check('删除请求期间确认弹窗显示进行中', /删除中|Deleting/.test(deleteBusy.text) && deleteBusy.disabled, JSON.stringify(deleteBusy).slice(0, 160))
       await sleep(2300)
       await send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 })
-      await sleep(400)
-      const afterDelete = await evaluate(`(() => ({ text: (document.querySelector('.dm_toast_text') || {}).textContent || '', hasAction: document.querySelector('.dm_toast_action') !== null }))()`)
+      let afterDelete = { text: '', hasAction: false }
+      for (let i = 0; i < 12; i += 1) {
+        await sleep(300)
+        afterDelete = await evaluate(`(() => ({ text: (document.querySelector('.dm_toast_text') || {}).textContent || '', hasAction: document.querySelector('.dm_toast_action') !== null }))()`)
+        if (afterDelete.hasAction && /删除|Delete/.test(afterDelete.text)) break
+      }
       check('删除后出现带撤销的吐司', afterDelete.hasAction && /删除|Delete/.test(afterDelete.text), JSON.stringify(afterDelete))
-      const undoFocus = await evaluate(`document.activeElement ? (document.activeElement.className || '') : ''`)
+      let undoFocus = ''
+      for (let i = 0; i < 10; i += 1) {
+        undoFocus = await evaluate(`document.activeElement ? (document.activeElement.className || '') : ''`)
+        if (typeof undoFocus === 'string' && undoFocus.includes('dm_toast_action')) break
+        await sleep(200)
+      }
       check('删除后焦点移到撤销按钮（键盘可达）', typeof undoFocus === 'string' && undoFocus.includes('dm_toast_action'), undoFocus)
-      const toastCloseLabel = await evaluate(`(() => { const el = document.querySelector('.dm_toast_close'); return el ? el.getAttribute('aria-label') : null })()`)
+      let toastCloseLabel = null
+      for (let i = 0; i < 6; i += 1) {
+        toastCloseLabel = await evaluate(`(() => { const el = document.querySelector('.dm_toast_close'); return el ? el.getAttribute('aria-label') : null })()`)
+        if (toastCloseLabel) break
+        await sleep(200)
+      }
       check('吐司关闭按钮 aria-label 为「关闭提示」', /关闭|Dismiss/.test(String(toastCloseLabel || '')), String(toastCloseLabel))
 
       // 0.24.19：聚焦/悬停时倒计时暂停——撤销入口不会在用户操作途中消失。
+      await evaluate(`(() => { const btn = document.querySelector('.dm_toast_action'); if (btn) btn.focus(); return Boolean(btn) })()`)
       await sleep(7000)
       const pauseState = await evaluate(`(() => ({
         hasAction: document.querySelector('.dm_toast_action') !== null,

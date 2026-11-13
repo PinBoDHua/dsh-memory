@@ -3,6 +3,31 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.24.33] - 2026-11-13
+
+### 性能 Performance（第五轮宿主审计 P1：30k 库全量 stat 冻结）
+- **目录级列表缓存**：目录内条目数 ≥1024 时缓存解析结果数组，热路径不再逐文件 `statSync`（29k 文件约 1.25s 的 stat 成本归零）。缓存靠三路信号增量维护：
+  1. 本进程写入/删除（`atomicWrite`、批量导入提交/回滚、`forget`、`move`）同步打补丁，读己之写立即可见；
+  2. `fs.watch(root, {recursive:true})` 监听外部手工编辑/增删，命中后只重读变化的那一个文件（目录删除等目录级事件清空该 root 缓存）；
+  3. watcher 创建失败时退化为**不缓存**，保持旧路径严格语义。
+- **小目录零行为变化**：<1024 文件的目录（真实用户常见规模、全部测试库）仍逐文件校验签名，「改完立即可见」语义不变；大库中外部手改在 watcher 事件后（毫秒级）生效，DETAIL 已注明。
+- **相关路径同步受益**：`listEverywhere`（取代链清理/导出/导入规划）也走缓存并对条目拷贝，避免调用方原地修改污染缓存；单条 forget 的取代指针全库扫描不再逐个 stat。
+- 新增 `scripts/bench.mjs`（合成 30k 库：global 2k + workspace 28k，测冷/热 listAll、status、export、recallPreview、search、forgetOne）。
+
+### 实测（本机 30k 同步数据根）
+- warm `listAll`：1450ms → **约 50ms**（5 次 49–54ms）
+- `export`：1466ms → **86ms**；`recallPreview`：1568ms → **152ms**；`search` → **91ms**
+- 单条 `forget`：1594ms → **75ms**
+- 冷启动首次解析仍约 15.4s（下一步单独优化，见 ITERATION）。
+
+### 新增测试
+- `tests/directory-cache.test.mjs`：大目录 warm list 不逐文件 stat（stat 计数断言）、本进程写入/删除同步可见、外部手改被 watcher 拾取、小目录保持逐文件校验。
+- access 并发回归测试支持 `DSH_MEMORY_ACCESS_LOCK_TIMEOUT` 提高锁超时，避免测试机负载导致 best-effort 跳过被误判为丢更新。
+- GUI 删除确认/吐司相关断言由固定 sleep 改为轮询（CDP 延迟注入生效时机曾导致偶发假失败，连续两轮 89/89 稳定）。
+
+### 验证证据
+- 单元 **321/321**；live **192/192**；真实 GUI **89/89**；数据根快照一致、零残留。
+
 ## [0.24.32] - 2026-11-13
 
 ### 修复 Fixed（第五轮面板审计 P2 收尾）
