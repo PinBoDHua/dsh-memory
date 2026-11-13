@@ -69,6 +69,43 @@ export function searchResultEntry(e) {
   return item
 }
 
+/** memory_save 输出渲染（纯函数，可单测）。 */
+export function renderSaveResult(value) {
+  const base = value.deduplicated
+    ? `已有相同记忆，未重复写入：${value.id} (duplicate; existing memory kept)`
+    : `已记录记忆 ${value.id} [${value.category}/${value.scope}/${value.origin}] (memory saved)`
+  const similar = value.similar ?? []
+  if (similar.length === 0) return [{ type: 'text', text: base }]
+  const list = similar.map((s) => `${s.id}「${s.content.length > 40 ? `${s.content.slice(0, 40)}…` : s.content}」(${s.score})`).join('；')
+  return [{ type: 'text', text: `${base}\n检测到 ${similar.length} 条相似记忆：${list}。若为信息更新，请取代（supersedes）或更新旧条目，避免并存矛盾 (similar memories detected; prefer supersede/update over duplicating)` }]
+}
+
+/** memory_search 输出渲染（纯函数，可单测）。 */
+export function renderSearchResult(value) {
+  const entries = value.entries ?? []
+  const hidden = value.hidden ?? { total: 0 }
+  const list = entries.length === 0
+    ? (hidden.total > 0 ? '没有可见的匹配记忆 (no visible matches)' : '没有匹配的记忆 (no matching memories)')
+    : entries.map((e) => {
+      const marks = [e.pinned ? 'pinned' : '', e.archived ? 'archived' : '', e.superseded_by ? `superseded→${e.superseded_by}` : '', e.expires ? `expires ${e.expires}` : ''].filter(Boolean).join(', ')
+      return `- [${e.category}/${e.scope}${marks ? `; ${marks}` : ''}] ${e.content} (id: ${e.id}, updated: ${e.updated})`
+    }).join('\n')
+  const note = hidden.total > 0
+    ? `\n另有 ${hidden.total} 条匹配被隐藏（被取代 ${hidden.superseded} / 已过期 ${hidden.expired} / 已归档 ${hidden.archived}），可用 include_superseded/include_expired/include_archived 找回 (${hidden.total} hidden matches; use include_* to recover)`
+    : ''
+  return [{ type: 'text', text: list + note }]
+}
+
+/** memory_update 输出渲染（纯函数，可单测）。 */
+export function renderUpdateResult(value) {
+  return [{ type: 'text', text: `已更新记忆 ${value.id} [${value.scope}]（新覆旧）(memory updated)` }]
+}
+
+/** memory_forget 输出渲染（纯函数，可单测）。 */
+export function renderForgetResult(value) {
+  return [{ type: 'text', text: `已忘记记忆 ${value.id} (memory forgotten)` }]
+}
+
 export function apply(ctx, rawConfig) {
   const config = resolveConfig(rawConfig)
   if (!config.enabled) return
@@ -151,15 +188,7 @@ export function apply(ctx, rawConfig) {
         },
         required: ['id', 'scope', 'category', 'deduplicated'],
       },
-      render: (_args, value) => {
-        const base = value.deduplicated
-          ? `已有相同记忆，未重复写入：${value.id} (duplicate; existing memory kept)`
-          : `已记录记忆 ${value.id} [${value.category}/${value.scope}/${value.origin}] (memory saved)`
-        const similar = value.similar ?? []
-        if (similar.length === 0) return [{ type: 'text', text: base }]
-        const list = similar.map((s) => `${s.id}「${s.content.length > 40 ? `${s.content.slice(0, 40)}…` : s.content}」(${s.score})`).join('；')
-        return [{ type: 'text', text: `${base}\n检测到 ${similar.length} 条相似记忆：${list}。若为信息更新，请取代（supersedes）或更新旧条目，避免并存矛盾 (similar memories detected; prefer supersede/update over duplicating)` }]
-      },
+      render: (_args, value) => renderSaveResult(value),
     },
     isConcurrencySafe: () => false,
     execute(args, exec) {
@@ -237,20 +266,7 @@ export function apply(ctx, rawConfig) {
         },
         required: ['entries', 'hidden'],
       },
-      render: (_args, value) => {
-        const entries = value.entries ?? []
-        const hidden = value.hidden ?? { total: 0 }
-        const list = entries.length === 0
-          ? (hidden.total > 0 ? '没有可见的匹配记忆 (no visible matches)' : '没有匹配的记忆 (no matching memories)')
-          : entries.map((e) => {
-            const marks = [e.pinned ? 'pinned' : '', e.archived ? 'archived' : '', e.superseded_by ? `superseded→${e.superseded_by}` : '', e.expires ? `expires ${e.expires}` : ''].filter(Boolean).join(', ')
-            return `- [${e.category}/${e.scope}${marks ? `; ${marks}` : ''}] ${e.content} (id: ${e.id}, updated: ${e.updated})`
-          }).join('\n')
-        const note = hidden.total > 0
-          ? `\n另有 ${hidden.total} 条匹配被隐藏（被取代 ${hidden.superseded} / 已过期 ${hidden.expired} / 已归档 ${hidden.archived}），可用 include_superseded/include_expired/include_archived 找回 (${hidden.total} hidden matches; use include_* to recover)`
-          : ''
-        return [{ type: 'text', text: list + note }]
-      },
+      render: (_args, value) => renderSearchResult(value),
     },
     isConcurrencySafe: () => true,
     execute(args, exec) {
@@ -300,7 +316,7 @@ export function apply(ctx, rawConfig) {
         properties: { id: { type: 'string' }, updated: { type: 'string' }, scope: { type: 'string' }, origin: { type: 'string' } },
         required: ['id', 'updated', 'scope'],
       },
-      render: (_args, value) => [{ type: 'text', text: `已更新记忆 ${value.id} [${value.scope}]（新覆旧）(memory updated)` }],
+      render: (_args, value) => renderUpdateResult(value),
     },
     isConcurrencySafe: () => false,
     execute(args, exec) {
@@ -340,7 +356,7 @@ export function apply(ctx, rawConfig) {
         properties: { id: { type: 'string' }, deleted: { type: 'boolean' } },
         required: ['id', 'deleted'],
       },
-      render: (_args, value) => [{ type: 'text', text: `已忘记记忆 ${value.id} (memory forgotten)` }],
+      render: (_args, value) => renderForgetResult(value),
     },
     isConcurrencySafe: () => false,
     execute(args, exec) {

@@ -3,6 +3,14 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.23.0] - 2026-11-13
+
+### 变更 Changed
+- **工具输出渲染纯函数化（质量加固）**：`memory_save`/`memory_search`/`memory_update`/`memory_forget` 的 render 提取为模块级纯函数 `renderSaveResult`/`renderSearchResult`/`renderUpdateResult`/`renderForgetResult`（行为完全不变），可独立单测。
+
+### 新增 Added
+- 工具渲染回归测试（`tests/tool-render.test.mjs`）：覆盖保存/去重/相似提示（含 40 字截断）、检索空态/隐藏态/标记、更新/遗忘文案，及所有工具输出的 lossless JSON 往返——防止 v0.13 式输出回归。
+
 ## [0.22.0] - 2026-11-13
 
 ### 变更 Changed
@@ -250,6 +258,7 @@ All notable changes to this project are documented here. Format follows Keep a C
 - 系统提示注入：指引＋字符预算内召回（`interpolate: false` 保护用户内容）。
 - 隐私护栏：密码/密钥/token 规则检测硬拒写。
 
+[0.23.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.22.0...v0.23.0
 [0.22.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.19.0...v0.20.0

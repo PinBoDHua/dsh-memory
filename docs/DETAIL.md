@@ -28,7 +28,7 @@ Cross-session long-term memory for DeepSeek Harness: durable user preferences, p
 - 记忆标签能力：作用域切换（全局＋当前工作区 / 仅全局 / 各已知工作区）、统计条（总数＋分类分布条＋计数筛选 chips＋全局/工作区计数）、列表注入徽章（标记已注入系统提示的活跃记忆）、关键词搜索（300ms 防抖、相关度排序、`/` 快捷聚焦、一键清空、隐藏匹配计数提示＋一键查看全部状态）、来源/标签服务端过滤（分页口径一致，标签精确匹配输入框）、分页（每页条数可设 20/50/100）、新建/编辑（内容字数统计、分类单选卡片、标签、作用域、编辑含来源选择「显式要求/主动沉淀」、Ctrl/⌘+Enter 保存）、删除二次确认＋6 秒撤销（单条/批量，原样恢复 id/时间戳）、批量选择浮栏（Esc 清除）、标签点击直达搜索、相对时间（可设绝对时间，悬停见绝对时间）、条目详情（点击正文展开：创建/更新时间、来源会话、复制 id、取代链 id 双向点击跳转）、状态筛选含「全部状态」（一览含隐藏态全部记忆）、导出 JSON、导入（dry-run 预览瓦片＋确认）、相似记忆查重（扫描当前作用域活跃记忆两两相似度≥50%，相似对可「新取代旧」保留历史或「忽略」保留两条）、图标吐司（动作按钮＋倒计时进度条）。
 - 设置标签能力：见下「设置 Settings」。
 - 数据面：宿主 `webServer` 命名路由 `/plugins/dsh-memory/{status,entries,workspaces,cwd,stats,similar,recall-preview,export,settings,settings/reset,backup,save,update,forget,import}`，浏览器同源 fetch；进程级 token（status 下发），写操作校验 `X-RPC-Key`，全部路由仅回环可达。
-- 一个操作，两个调用方：面板与 agent 工具调用同一 `lib/service.js`，语义与失败原因完全一致。
+- 一个操作，两个调用方：面板与 agent 工具调用同一 `lib/service.js`，语义与失败原因完全一致。工具输出渲染（`renderSaveResult`/`renderSearchResult`/`renderUpdateResult`/`renderForgetResult`）与检索条目映射（`searchResultEntry`）为模块级纯函数，独立单测覆盖（含 lossless JSON 往返）。
 - 样式仅用 `--dsw-alias-*` 主题令牌，自动跟随亮/暗主题；文案中英双语（zh/en）。
 
 ## 工具 Tools
