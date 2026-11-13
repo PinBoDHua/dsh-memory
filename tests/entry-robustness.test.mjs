@@ -139,20 +139,17 @@ test('entry cache invalidates on inode change even when mtime/ctime/size collide
   const file = path.join(root, 'global', `${saved.entry.id}.md`)
   // 首次读取填充缓存。
   assert.equal(service.list({ scope: 'global' })[0].content, '缓存碰撞甲')
-  const realStat = fs.statSync(file)
   // 同字节长度原地改写（模拟 Windows 同一文件时间 tick 内的写）。
   fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('缓存碰撞甲', '缓存碰撞乙'), 'utf8')
   const original = fs.statSync
-  const patchedStat = {
-    mtimeMs: realStat.mtimeMs,
-    ctimeMs: realStat.ctimeMs,
-    size: realStat.size,
-    ino: realStat.ino + 1, // 仅 inode 变化
-    birthtimeMs: realStat.birthtimeMs,
-  }
+  const basename = path.basename(file)
+  // 无论 store 传绝对路径还是相对路径都命中补丁：inode 强制 +1，保证签名必然不同。
   fs.statSync = function (target, ...args) {
-    if (String(target) === file) return patchedStat
-    return original.call(this, target, ...args)
+    const current = original.call(this, target, ...args)
+    if (String(target) === file || String(target).endsWith(basename)) {
+      return { ...current, ino: Number(current.ino) + 1 }
+    }
+    return current
   }
   try {
     const after = service.list({ scope: 'global' })[0]

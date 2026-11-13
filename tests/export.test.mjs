@@ -89,3 +89,14 @@ test('GET /export?scope=global returns global only from loopback', async () => {
   assert.equal(doc.entries.length, 1)
   assert.equal(doc.entries[0].content, '全局甲')
 })
+
+test('export reports skipped damaged files instead of silently losing them', () => {
+  const { root, service } = tmpService()
+  fs.writeFileSync(path.join(root, 'global', 'm-export-broken.md'), 'not frontmatter', 'utf8')
+  const doc = service.export({ scope: 'global' })
+  assert.equal(doc.entries.length, 1)
+  assert.equal(doc.skipped, 1, 'damaged file must be counted, not silently dropped')
+  const all = service.export({ scope: 'all' })
+  assert.ok(Array.isArray(all.entries) && all.entries.length >= 2)
+  assert.equal(typeof all.skipped, 'number')
+})

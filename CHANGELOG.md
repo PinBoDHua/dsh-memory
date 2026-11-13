@@ -3,6 +3,18 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.24.28] - 2026-11-13
+
+### 修复 Fixed（第四轮审计面板/导出收尾）
+- **召回预览只随数据变化刷新**：用显式 `dataVersion`（保存/更新/删除/撤销/导入/取代成功时 +1）替代 `busy` 依赖；导出、查重、导入预演不再各触发一次全量 `/recall-preview` 扫描（大库每次省约 500ms 同步扫描）。
+- **弹窗 busy 结束后焦点回弹窗**：Modal 在 `busy` true→false 且焦点掉到 body/弹窗外时，自动聚焦弹窗内首个可用控件（覆盖保存失败、审计弹窗取代后）；「取消选择」后焦点回面板容器（GUI 已断言）。
+- **导出/备份不再静默漏损坏条目**：导出文档新增 `skipped`（目录 `.md` 文件数 − 可解析条目数），损坏文件可被审计/面板发现；导入端忽略该字段，向后兼容。
+- **包分发**：`files` 补 `scripts`（验证入口随包发布），新增 `tests/package.test.mjs` 守卫（无 runtime deps、type/main/node engine）。
+- **测试稳定性**：inode 缓存测试改用「无论路径形态都命中的 stat 补丁 + 实时 stat 派生签名」消除偶发假失败；GUI 保存失败用例改用 `.lock-settings` 确定性阻塞（不再依赖 CDP offline 的 15s 超时时机）。
+
+### 验证证据
+- 单元 **295/295**；live **186/186**；真实 GUI **82/82**（+导出不触发召回刷新、取消选择焦点）。
+
 ## [0.24.27] - 2026-11-13
 
 ### 修复 Fixed（第四轮审计 P2/P3 性能与可观测性）

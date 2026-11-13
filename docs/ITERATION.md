@@ -146,20 +146,20 @@ This file is the self-iteration ledger for dsh-memory: per-round increments, ver
 - [x] **/status 与设置响应同步全量**（0.24.27：status counts 改为 readdir 目录计数（不解析条目）；`storageUsage` 5 秒缓存，设置保存响应不再每次全树 stat；自动备份首检仍为 5s 后但冷缓存导出只发生一次）。
 - [x] **写/读路由未知异常未脱敏**：`writeHandler/readHandler` 把 Node 原始错误（含本机绝对路径、`.tmp-` 名）500 回传面板；import 已脱敏为 `io`。方案：未知 code 统一 `500 {code:'internal'}`，日志留原文；客户端 `errorKeyFor` 映射 internal。
 - [x] **导入绕过取代链不变量**：自指、A↔B 环、目标仅存在于其它工作区/损坏文件时指针被保留 → 永久隐藏且工具不可修。方案：导入校验自指/同作用域可达/环检测，违规计入 repaired。
-- [ ] **recall-preview 被 busy 翻转触发**：导出/查重/导入 dry-run 的 busy true→false 各多一次全量 `/recall-preview` 扫描。方案：用显式 `dataVersion` 替代 busy 依赖（写操作成功 +1）。
-- [ ] **三处操作后焦点掉 body**：审计弹窗取代（按钮 disabled 并移除）、保存失败弹窗、取消选择浮栏卸载。方案：回调/卸载后显式聚焦 `.dm_dialog` 或 `.dm_page`。
+- [x] **recall-preview 被 busy 翻转触发**（0.24.28：显式 `dataVersion` 只在写操作成功时 +1；导出/查重/导入预演不再触发全量召回扫描，GUI 断言导出前后 recall-preview 请求数不变）。
+- [x] **三处操作后焦点掉 body**（0.24.28：Modal 在 busy→false 且焦点在弹窗外时聚焦回弹窗（覆盖保存失败/审计操作）；取消选择后焦点回面板容器；GUI 断言覆盖取消选择路径）。
 
 ### P3
 - [x] **备份 `-1` 后缀不被白名单识别**（0.24.24：正则允许 `(?:-\d{1,3})?`，备份按 mtime 排序轮转，count/lastBackup 准确）。
 - [x] **settings.json 覆盖层读-改-写无跨进程锁**：两进程并发 patch 不同键 14/20 轮丢一个键。方案：`withLock(root/.lock-settings)` 包住 read-modify-write。
 - [ ] **withLock 长临界区/双释放风险**：临界区超过 staleMs 会被抢占；finally 无条件删锁可删他人锁。方案：写批心跳刷新 mtime、锁内 owner nonce 校验后释放。
-- [ ] **导出静默漏损坏条目**：`export` 跳过不可解析 `.md` 且无 skipped 计数；「全量备份」不完整无告警。方案：返回 `skipped/warnings` 并在面板提示。
+- [x] **导出静默漏损坏条目**（0.24.28：导出/备份文档增加 `skipped` 计数（目录文件数−可解析条目数），损坏文件可被审计发现；导入端忽略该字段）。
 - [x] **gui-check 中断不清理**（0.24.26：模块级清理注册表 + SIGINT/SIGTERM/uncaughtException 统一 abort 路径（清理→数据根 diff 断言→非 0 退出）；`--abort-after=<ms>` 可复现注入；启动时扫描并清理 `__gui_`/`__livecheck_` 残留；实测 15s/45s 中断均零残留）。
 - [x] **data-snapshot 漏检面**（0.24.26：junk 清单覆盖 `.tmp-*`、`.lock-*`（验证锁除外）、条目目录非 .md、backups 非 .json；backups 改为内容 sha256；abort 路径也做 diff 断言）。
 - [x] **验证脚本并发不安全**（0.24.26：`scripts/verify-lock.mjs` 数据根互斥锁（陈旧自愈），live/gui 启动即获取、busy 快速退出；GUI CDP 端口默认随机动态）。
 - [ ] **迁移 meta 写失败被吞**：`migrateSchema` 原子写失败仍返回 true/pending=false，且每次启动重跑强制备份可挤掉历史备份。方案：写失败抛错记 migrationError，失败后备份节流。
 - [ ] **导入悬垂指针指向「根内已存在但无关」id 不修复**：占位 id 视作有效目标 → 永久隐藏。方案：仅保留同批前向引用与确实反向声明的目标，其余丢弃计 repaired。
-- [ ] **包分发/引擎**：`files` 含 tests 不含 scripts（ITERATION 引用 scripts 作为验证入口）；`engines.dsh >=0.2.0-rc.2` 对宿主 0.2.2-alpha.3 严格 semver 不满足（待验证宿主校验口径）。方案：files 加 scripts，engines 按宿主语义修正或文档注明。
+- [x] **包分发/引擎**：`files` 已补 `scripts`（0.24.28 + `tests/package.test.mjs` 守卫）；`engines.dsh` 严格 semver 口径仍待宿主实际校验语义确认（当前 link 安装可用，先记录不改）。
 - [x] **可观测/自愈边角**：`status.schemaVersion` 在 meta 损坏时回落 2 掩盖损坏（0.24.27：null+metaError）；未来 mtime 的锁永不 stale（0.24.27：绝对时间差）；live-check cleanup 先置 cleaned 再请求，任一步抛错即留残留（0.24.25 已改批量 forget，0.24.26 中断路径自检）。
 - [ ] **设置重载与在途保存窄窗口**（待验证）：备份触发的 loadSettings 可能让在途保存响应被丢弃、UI 短暂显示旧值。
 

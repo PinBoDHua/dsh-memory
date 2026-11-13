@@ -1471,6 +1471,7 @@ var IMPORT_TIMEOUT_MS = 180000
       // 焦点陷阱 + 焦点归还；busy 时禁止 Escape/遮罩关闭；回调经 ref 稳定。
       function Modal(props) {
         var dialogRef = useRef(null)
+        var wasBusyRef = useRef(props.busy)
         var onCloseRef = useRef(props.onClose)
         onCloseRef.current = props.onClose
         var busyRef = useRef(props.busy)
@@ -1515,6 +1516,21 @@ var IMPORT_TIMEOUT_MS = 180000
             if (page) { page.setAttribute('tabindex', '-1'); page.focus() }
           }
         }, [])
+        // busy 结束后若焦点因控件被禁用而掉到 body（保存失败 / 审计弹窗操作后）：
+        // 把焦点送回弹窗，而不是让键盘用户从页面开头重新 Tab。
+        useEffect(function () {
+          var was = wasBusyRef.current
+          wasBusyRef.current = props.busy
+          if (!was || props.busy) return
+          var dialog = dialogRef.current
+          if (!dialog) return
+          var active = document.activeElement
+          if (active && active !== document.body && dialog.contains(active)) return
+          var nodes = dialog.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])')
+          var items = Array.prototype.filter.call(nodes, function (el) { return !el.disabled })
+          if (items.length > 0) items[0].focus()
+          else dialog.focus()
+        }, [props.busy])
         return h('div', {
           className: 'dm_overlay',
           onClick: function (e) { if (!busyRef.current && e.target === e.currentTarget) onCloseRef.current() },
@@ -2193,6 +2209,11 @@ var IMPORT_TIMEOUT_MS = 180000
         var importPlan = importState[0]; var setImportPlan = importState[1]
         var importProgressState = useState(null)
         var importProgress = importProgressState[0]; var setImportProgress = importProgressState[1]
+        // 写操作成功计数：召回预览只随「数据真的变了」刷新，导出/查重/导入预演的 busy
+        // 翻转不再各触发一次全量 /recall-preview 扫描。
+        var dataVersionState = useState(0)
+        var dataVersion = dataVersionState[0]; var setDataVersion = dataVersionState[1]
+        var bumpDataVersion = useCallback(function () { setDataVersion(function (v) { return v + 1 }) }, [])
         var auditState = useState(null)
         var audit = auditState[0]; var setAudit = auditState[1]
         var toastState = useState(null)
@@ -2518,9 +2539,9 @@ var IMPORT_TIMEOUT_MS = 180000
         }, [api, currentCwd])
 
         useEffect(function () {
-          if (phase !== 'ready' || busy || tab !== 'memories') return
+          if (phase !== 'ready' || tab !== 'memories') return
           refreshRecall()
-        }, [phase, busy, settings, currentCwd, tab, refreshRecall])
+        }, [phase, dataVersion, settings, currentCwd, tab, refreshRecall])
 
         // 选择/查询/分类/页码变化 → 刷新列表（查询防抖 300ms）
         useEffect(function () {
@@ -2652,6 +2673,7 @@ var IMPORT_TIMEOUT_MS = 180000
           if (busy) return
           setBusy(true)
           api.update(Object.assign({ id: entry.id, workspace: entry.scope === 'workspace' ? workspaceTarget : undefined }, patch)).then(function () {
+            bumpDataVersion()
             showToast('ok', t(okKey), action)
             return refreshRef.current()
           }).catch(writeFailure).then(function () { setBusy(false) })
@@ -2707,6 +2729,7 @@ var IMPORT_TIMEOUT_MS = 180000
           }
           promise.then(function (payload) {
             if (editorRef.current === started) setEditor(null)
+            bumpDataVersion()
             var result = (payload && payload.result) || {}
             var key = savedToastKey(result)
             var sim = result.similar || []
@@ -2748,6 +2771,7 @@ var IMPORT_TIMEOUT_MS = 180000
             })
           }
           outcomePromise.then(function (outcome) {
+            if (outcome.ok.length > 0) bumpDataVersion()
             if (confirmRef.current === started) setConfirm(null)
             setSelected([])
             // 成功项先从当前页移除，不必等刷新（刷新也仍会执行）。
@@ -2784,6 +2808,7 @@ var IMPORT_TIMEOUT_MS = 180000
             }
           })
           api.import({ entries: payloadEntries }).then(function (payload) {
+            bumpDataVersion()
             var n = payload && payload.result ? payload.result.imported : 0
             showToast('ok', t('undone').replace('{n}', String(n)))
             return refreshRef.current()
@@ -2873,6 +2898,7 @@ var IMPORT_TIMEOUT_MS = 180000
           chain.then(function () {
             setImportPlan(null)
             setImportProgress(null)
+            bumpDataVersion()
             var summary = importSummary(totals)
             showToast('ok', t('imported') + ' · ' + t('importNew') + ' ' + summary.imported + ' / ' + t('importUpdated') + ' ' + summary.updated + ' / ' + t('importDup') + ' ' + summary.deduplicated + ' / ' + t('importRej') + ' ' + summary.rejected)
             setPage(0)
@@ -2907,6 +2933,7 @@ var IMPORT_TIMEOUT_MS = 180000
           setBusy(true)
           var params = audit.params
           api.update({ id: pair.newer.id, supersedes: pair.older.id, workspace: pair.newer.scope === 'workspace' ? params.workspace : undefined }).then(function () {
+            bumpDataVersion()
             showToast('ok', t('auditSuperseded'))
             return api.similar(params)
           }).then(function (payload) {
@@ -3107,7 +3134,7 @@ var IMPORT_TIMEOUT_MS = 180000
                 ? h('div', { className: 'dm_selbar', role: 'region', 'aria-label': t('bulkSelected').replace('{n}', String(selected.length)) },
                   h('span', { className: 'dm_selbar_n', 'aria-live': 'polite' }, t('bulkSelected').replace('{n}', String(selected.length))),
                   h('button', { className: 'dm_btn dm_btn_danger_solid', onClick: openBulkDelete, disabled: busy }, h(Icon, { name: 'trash', size: 14 }), t('bulkDelete')),
-                  h('button', { className: 'dm_btn', onClick: function () { setSelected([]) }, disabled: busy }, t('clearSelection')))
+                  h('button', { className: 'dm_btn', onClick: function () { setSelected([]); if (pageRef.current) { try { pageRef.current.focus() } catch { /* ignore */ } } }, disabled: busy }, t('clearSelection')))
                 : null,
               phase === 'loading' ? h(Skeletons)
                 : phase === 'error' ? h('div', { className: 'dm_empty' },

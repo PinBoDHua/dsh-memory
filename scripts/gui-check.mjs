@@ -457,6 +457,12 @@ async function main() {
     await sleep(1300)
     const recallAfter = requests.filter((u) => u.includes('/recall-preview')).length
     check('列表筛选刷新不重复请求 recall-preview', recallAfter === recallBefore, `${recallBefore} -> ${recallAfter}`)
+      // 0.24.28：导出/查重/导入预演只翻转 busy，不应触发全量 /recall-preview。
+      const exportRecallBefore = requests.filter((u) => u.includes('/recall-preview')).length
+      await evaluate(`(() => { const btn = [...document.querySelectorAll('.dm_toolbtn')].find((b) => /导出|Export/.test((b.textContent || '').trim())); if (btn) btn.click(); return Boolean(btn) })()`)
+      await sleep(1200)
+      const exportRecallAfter = requests.filter((u) => u.includes('/recall-preview')).length
+      check('导出不触发 recall-preview 全量刷新', exportRecallAfter === exportRecallBefore, `${exportRecallBefore} -> ${exportRecallAfter}`)
     await evaluate(`(() => {
       const input = document.querySelector('input.dm_search')
       if (!input) return false
@@ -742,6 +748,8 @@ async function main() {
       check('批量浮栏在列表之前且可聚焦（键盘可达）', selState !== null && selState.before && selState.role === 'region' && selState.buttons >= 2, JSON.stringify(selState))
       await evaluate(`(() => { const b = [...document.querySelectorAll('.dm_selbar button')].find((el) => /取消选择|Clear selection/.test((el.textContent || '').trim())); if (b) b.click(); return Boolean(b) })()`)
       await sleep(300)
+      const clearFocus = await evaluate(`(document.activeElement ? (document.activeElement.className || '') : '').includes('dm_page')`)
+      check('取消选择后焦点回到面板容器', clearFocus, String(clearFocus))
 
       // 删除 A（卡片内「删除」→ 确认弹窗危险按钮）。
       await evaluate(`(() => {
@@ -1128,13 +1136,15 @@ async function main() {
       check('备份保留份数已还原', Number(restoredSettings?.effective?.backupRetention) === originalRetention, String(restoredSettings?.effective?.backupRetention))
 
       // 8c) 保存失败 → footer 显示重试 → 点击重试成功（设置写入状态机 0.24.10）
-      await send('Network.emulateNetworkConditions', { offline: true, latency: 0, downloadThroughput: -1, uploadThroughput: -1 })
+      // 用 .lock-settings 阻塞写锁制造确定性失败（锁超时 1s）。若用 CDP offline，fetch 可能
+      // 挂到 15s 请求超时，固定轮询窗口会偶发假失败。
       const failTarget = Math.min(30, originalRetention + 1)
+      const settingsLock = path.join(ROOT, '.lock-settings')
+      mkdirSync(settingsLock, { recursive: true })
       await setRetention(failTarget)
-      // 轮询到错误态（离线请求的失败时机受事件循环/在途请求影响，固定 sleep 会偶发假失败）。
       let failState = null
-      for (let i = 0; i < 8; i += 1) {
-        await sleep(500)
+      for (let i = 0; i < 16; i += 1) {
+        await sleep(400)
         failState = await evaluate(`(() => ({
           footer: (document.querySelector('.dm_savestate') || {}).innerText || '',
           retry: document.querySelector('.dm_linkbtn') !== null,
@@ -1142,15 +1152,19 @@ async function main() {
         }))()`)
         if (failState.retry) break
       }
-      check('保存失败显示重试而非谎报已保存', failState.retry && /重试|Retry/.test(failState.footer) && String(failState.value) === String(failTarget), JSON.stringify({ ...failState, recentSettings: requests.filter((u) => u.includes('/settings')).slice(-4), recentConsole: consoleLines.slice(-4) }))
-      await send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 })
+      check('保存失败显示重试而非谎报已保存', failState.retry && /重试|Retry/.test(failState.footer) && String(failState.value) === String(failTarget), JSON.stringify({ ...failState, recentSettings: requests.filter((u) => u.includes('/settings')).slice(-4) }))
+      rmSync(settingsLock, { recursive: true, force: true })
       await sleep(400)
       await evaluate(`(() => { const b = document.querySelector('.dm_linkbtn'); if (b) b.click(); return Boolean(b) })()`)
-      await sleep(1700)
-      const retryState = await evaluate(`(() => ({
-        footer: (document.querySelector('.dm_savestate') || {}).innerText || '',
-        value: (document.querySelectorAll('.dm_numinput')[0] || {}).value || null,
-      }))()`)
+      let retryState = { footer: '', value: null }
+      for (let i = 0; i < 14; i += 1) {
+        await sleep(400)
+        retryState = await evaluate(`(() => ({
+          footer: (document.querySelector('.dm_savestate') || {}).innerText || '',
+          value: (document.querySelectorAll('.dm_numinput')[0] || {}).value || null,
+        }))()`)
+        if (/已保存|Saved/.test(retryState.footer)) break
+      }
       const retryDoc = await apiJson('/settings')
       check('失败后重试保存成功且状态回到已保存', /已保存|Saved/.test(retryState.footer) && Number(retryDoc?.effective?.backupRetention) === failTarget, JSON.stringify(retryState))
       await setRetention(originalRetention)
@@ -1196,6 +1210,7 @@ async function main() {
         console.error('恢复设置 overlay 失败：', err)
       }
       removeNewBackups(backupsBefore)
+      try { rmSync(path.join(ROOT, '.lock-settings'), { recursive: true, force: true }) } catch { /* ignore */ }
       const restoredOverlay = (await apiJson('/settings'))?.overlay ?? {}
       check('真实设置 overlay 已恢复原值', JSON.stringify(restoredOverlay) === JSON.stringify(overlayBefore), JSON.stringify({ restoredOverlay, overlayBefore }))
       check('真实 backups 文件集已恢复（无新增残留）', JSON.stringify(listBackups()) === JSON.stringify(backupsBefore), JSON.stringify({ before: backupsBefore, after: listBackups() }))
