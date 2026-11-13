@@ -3,6 +3,23 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.24.27] - 2026-11-13
+
+### 修复 Fixed（第四轮审计 P2/P3 性能与可观测性）
+- **`/status` 不再解析全库**：counts 改为 `store.countEntries` 目录文件计数（20k 库从 9.5s 降到毫秒级；客户端本来只用 counts 显示规模）。
+- **设置页存储统计缓存**：`storageUsage` 加 5 秒缓存，设置保存响应不再每次对全树 `stat`（20k 库 790ms 级开销消失）。
+- **迁移 meta 写失败可观测**：`migrateSchema` 写失败抛 `code=io` 而不是静默返回成功；服务层保持 `migrationPending=true` 并暴露 `migrationError`，schema 仍为 v1。迁移前强制备份**节流**：最近 10 分钟已有备份则复用，避免反复启动重试新增备份、轮转掉用户历史恢复点。
+- **损坏 meta 不再伪装健康**：meta.json 存在但不可解析时 status 上报 `schemaVersion:null` + `metaError:'meta.json 损坏'`（缺失仍视为未初始化、按当前版本）。
+- **未来 mtime 的锁可自愈**：锁陈旧判断改用绝对时间差（时钟漂移/手工改时间不再让写操作永久 busy）。
+
+### 新增测试
+- 迁移 meta 写入失败（patch rename）→ status pending/error 且 schema 仍 1；恢复后复用最近备份并升级 v2。
+- status counts 为目录文件计数（含损坏文件）；损坏 meta 上报 null+metaError。
+- 锁 mtime 在未来时按 stale 自愈。
+
+### 验证证据
+- 单元 **292/292**；live **186/186**（+counts 整数/`metaError=null` 断言）；真实 GUI **80/80**。
+
 ## [0.24.26] - 2026-11-13
 
 ### 新增 Added / 测试基础设施

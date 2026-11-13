@@ -16,6 +16,17 @@ function tmpRoot() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-memory-lock-'))
 }
 
+test('future-mtime stale lock self-heals (clock skew)', () => {
+  const root = tmpRoot()
+  const lockPath = path.join(root, '.lock-future')
+  fs.mkdirSync(lockPath)
+  const future = new Date(Date.now() + 60_000)
+  fs.utimesSync(lockPath, future, future)
+  const result = withLock(lockPath, () => 42, { staleMs: 1000, timeoutMs: 500 })
+  assert.equal(result, 42)
+  assert.equal(fs.existsSync(lockPath), false)
+})
+
 test('withLock runs the body and releases the lock', () => {
   const root = tmpRoot()
   const lockPath = path.join(root, '.lock')

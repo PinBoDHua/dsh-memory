@@ -109,6 +109,9 @@ async function main() {
     // 0.24.18：迁移/备份失败可观测字段（健康时应为 false/null）。
     ok('migrationPending=false', json?.migrationPending === false, `got ${JSON.stringify(json?.migrationPending)}`)
     ok('backupError=null', json?.backupError === null, `got ${JSON.stringify(json?.backupError)}`)
+    // 0.24.27：counts 为目录计数（不再解析全库）；损坏 meta 会显式上报 metaError。
+    ok('counts 为整数', Number.isInteger(json?.counts?.global) && Number.isInteger(json?.counts?.workspaces), JSON.stringify(json?.counts))
+    ok('metaError=null（健康）', json?.metaError === null, `got ${JSON.stringify(json?.metaError)}`)
     token = json?.key ?? ''
     statusRoot = json?.root ?? ''
   })

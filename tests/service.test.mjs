@@ -261,7 +261,7 @@ test('v1 migration backup failure degrades to readable status, then recovers', (
   const broken = createMemoryService({ root })
   const status = broken.status()
   assert.equal(status.migrationPending, true)
-  assert.match(String(status.migrationError || ''), /迁移备份失败/)
+  assert.match(String(status.migrationError || ''), /迁移备份失败|迁移失败/)
   assert.equal(status.schemaVersion, 1, 'schema only bumps after a successful backup')
   // 记忆仍可读写（迁移失败不阻断）。
   broken.save({ content: '迁移期间的记忆', scope: 'global' })
@@ -347,6 +347,48 @@ test('same-millisecond backups get unique names, are counted and rotated as plug
   } finally {
     globalThis.Date = RealDate
   }
+})
+
+test('status counts use directory listing (damaged files included) and corrupt meta is surfaced', () => {
+  const { root, service } = tmpService()
+  service.save({ content: '计数甲', scope: 'global' })
+  fs.writeFileSync(path.join(root, 'global', 'm-damaged-count.md'), 'not frontmatter', 'utf8')
+  const st = service.status()
+  assert.equal(st.counts.global, 2, 'counts are file counts, not parseable-only')
+  assert.equal(st.metaError, null)
+  fs.writeFileSync(path.join(root, 'meta.json'), 'not json', 'utf8')
+  const corrupt = service.status()
+  assert.equal(corrupt.schemaVersion, null, 'corrupt meta must not masquerade as healthy v2')
+  assert.match(String(corrupt.metaError || ''), /损坏|corrupt/)
+})
+
+test('migration meta write failure stays pending and retry reuses the recent backup', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-memory-migwrite-'))
+  const setup = createMemoryService({ root })
+  setup.save({ content: '迁移写入失败内容', scope: 'global' })
+  fs.writeFileSync(path.join(root, 'meta.json'), JSON.stringify({ plugin: 'dsh-memory', schemaVersion: 1, createdAt: new Date().toISOString() }), 'utf8')
+  const originalRename = fs.renameSync
+  fs.renameSync = function (from, to, ...rest) {
+    if (String(to).endsWith('meta.json')) throw Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' })
+    return originalRename.call(this, from, to, ...rest)
+  }
+  let failedService
+  try {
+    failedService = createMemoryService({ root })
+  } finally {
+    fs.renameSync = originalRename
+  }
+  const failedStatus = failedService.status()
+  assert.equal(failedStatus.schemaVersion, 1, 'meta still v1 after failed write')
+  assert.equal(failedStatus.migrationPending, true)
+  assert.match(String(failedStatus.migrationError || ''), /io|迁移失败/)
+  const backupsAfterFail = fs.readdirSync(path.join(root, 'backups')).length
+  assert.ok(backupsAfterFail >= 1, 'forced backup happened before the failed meta write')
+  // 恢复：最近 10 分钟已有备份 → 复用，不再新增（避免反复启动轮转掉历史备份）；迁移成功。
+  const recovered = createMemoryService({ root })
+  assert.equal(recovered.status().schemaVersion, 2)
+  assert.equal(recovered.status().migrationPending, false)
+  assert.equal(fs.readdirSync(path.join(root, 'backups')).length, backupsAfterFail, 'recent backup reused')
 })
 
 test('forgetMany deletes a batch in one pass and clears supersede refs', () => {

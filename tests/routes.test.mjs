@@ -60,6 +60,7 @@ test('GET status from loopback returns key, version and counts', async () => {
   assert.equal(doc.key, TOKEN)
   assert.equal(doc.version, '0.2.0-test')
   assert.equal(doc.schemaVersion, 2)
+  assert.equal(doc.metaError, null)
   assert.deepEqual(doc.counts, { global: 0, workspaces: 0 })
   // 0.24.18：迁移/备份失败可观测字段（健康时为 false/null）。
   assert.equal(doc.migrationPending, false)

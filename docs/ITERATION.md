@@ -143,7 +143,7 @@ This file is the self-iteration ledger for dsh-memory: per-round increments, ver
 
 ### P2
 - [x] **解析缓存上限在大库退化**：20k 条目 warm list ≈ cold（9–11s，顺序扫描把 LRU 冲空）；status/save/export/装配同步全量。方案：默认上限提高到 32768 或按库规模自适应（压测入口保留），DETAIL 写明内存上界。
-- [ ] **/status 与设置响应同步全量**：20k 全 global 库 `/status` 9.5s（解析全部条目；客户端未消费 counts）、设置保存响应含 backup 全量信息 790ms；自动备份定时器冷缓存 9.6s。方案：status counts 改 readdir 计数或省略、storageUsage 签名缓存、首检延后。
+- [x] **/status 与设置响应同步全量**（0.24.27：status counts 改为 readdir 目录计数（不解析条目）；`storageUsage` 5 秒缓存，设置保存响应不再每次全树 stat；自动备份首检仍为 5s 后但冷缓存导出只发生一次）。
 - [x] **写/读路由未知异常未脱敏**：`writeHandler/readHandler` 把 Node 原始错误（含本机绝对路径、`.tmp-` 名）500 回传面板；import 已脱敏为 `io`。方案：未知 code 统一 `500 {code:'internal'}`，日志留原文；客户端 `errorKeyFor` 映射 internal。
 - [x] **导入绕过取代链不变量**：自指、A↔B 环、目标仅存在于其它工作区/损坏文件时指针被保留 → 永久隐藏且工具不可修。方案：导入校验自指/同作用域可达/环检测，违规计入 repaired。
 - [ ] **recall-preview 被 busy 翻转触发**：导出/查重/导入 dry-run 的 busy true→false 各多一次全量 `/recall-preview` 扫描。方案：用显式 `dataVersion` 替代 busy 依赖（写操作成功 +1）。
@@ -160,7 +160,7 @@ This file is the self-iteration ledger for dsh-memory: per-round increments, ver
 - [ ] **迁移 meta 写失败被吞**：`migrateSchema` 原子写失败仍返回 true/pending=false，且每次启动重跑强制备份可挤掉历史备份。方案：写失败抛错记 migrationError，失败后备份节流。
 - [ ] **导入悬垂指针指向「根内已存在但无关」id 不修复**：占位 id 视作有效目标 → 永久隐藏。方案：仅保留同批前向引用与确实反向声明的目标，其余丢弃计 repaired。
 - [ ] **包分发/引擎**：`files` 含 tests 不含 scripts（ITERATION 引用 scripts 作为验证入口）；`engines.dsh >=0.2.0-rc.2` 对宿主 0.2.2-alpha.3 严格 semver 不满足（待验证宿主校验口径）。方案：files 加 scripts，engines 按宿主语义修正或文档注明。
-- [ ] **可观测/自愈边角**：`status.schemaVersion` 在 meta 损坏时回落 2 掩盖损坏；未来 mtime 的锁永不 stale；live-check cleanup 先置 cleaned 再请求，任一步抛错即留残留。方案：schemaVersion 上报 null+metaError；stale 判断用 |now−mtime|；cleaned 置末尾且逐项 catch。
+- [x] **可观测/自愈边角**：`status.schemaVersion` 在 meta 损坏时回落 2 掩盖损坏（0.24.27：null+metaError）；未来 mtime 的锁永不 stale（0.24.27：绝对时间差）；live-check cleanup 先置 cleaned 再请求，任一步抛错即留残留（0.24.25 已改批量 forget，0.24.26 中断路径自检）。
 - [ ] **设置重载与在途保存窄窗口**（待验证）：备份触发的 loadSettings 可能让在途保存响应被丢弃、UI 短暂显示旧值。
 
 dreaming/后台 LLM 提取、向量/图检索、完整 bi-temporal 四时间戳、git 版本化存储、画像 slots、回收站、默认 TTL、跨工作区移动（global↔当前工作区之外的组合）、会话级记忆开关。
