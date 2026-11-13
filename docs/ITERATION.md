@@ -52,10 +52,10 @@ This file is the self-iteration ledger for dsh-memory: per-round increments, ver
 - [x] **删除失败路径**（0.24.4）：`Promise.allSettled` 逐项结算，成功后立即移除并刷新/保留撤销，失败项汇报，全部失败提示删除失败。
 - [x] **撤销 toast 被后续 toast 覆盖**（0.24.4）：撤销吐司未到期时普通提示排队（最多 3 条），点击撤销先出队再恢复。
 - [x] **批量选择与列表刷新同步**（0.24.4）：列表刷新后选中集合与当前页求交；选中项全失效时清空选择并提示。
-- [ ] **设置保存一致性**：服务端夹取值不回收（输入 0 实际存 1）、`backupNow` 触发的 `loadSettings` 会覆盖防抖窗内草稿、保存失败仍显示「已保存」。
-- [ ] **标签数量/长度**：客户端无 12 个上限/64 字符提示与去重，服务端静默截断。
-- [ ] **设置页加载失败永久骨架**：`loadSettings` catch 为空、无重试；召回预览旧响应可覆盖新响应。
-- [ ] **WAI-ARIA Tabs 模式**：`role=tablist/tab` 无 `aria-controls`/roving tabIndex/方向键，面板无 `role=tabpanel`。
+- [x] **设置保存一致性**（0.24.5）：写路由 `{result}` 解包（此前保存设置必崩设置页）、夹取值回收、加载不覆盖防抖草稿、失败清除已保存态。
+- [x] **标签数量/长度**（0.24.5）：客户端 `parseTags` 去重/12 上限/64 字符，并显示计数与超限提示。
+- [x] **设置页加载失败永久骨架**（0.24.5）：错误 + 重试；召回预览 seq 守卫。
+- [x] **WAI-ARIA Tabs 模式**（0.24.5）：tablist/tab/tabpanel 关联、roving tabIndex、方向键/Home/End。
 
 ### P4 边角
 

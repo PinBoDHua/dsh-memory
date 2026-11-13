@@ -214,6 +214,40 @@ async function main() {
     await sleep(2500)
     check('记忆面板已打开', opened && (await evaluate(`document.querySelector('.dm_page') !== null`)))
 
+    // 1b) Tabs：ARIA 关联 + ←/→ 键盘切换跟随焦点（WAI-ARIA tablist 模式）
+    const tabsAria = await evaluate(`(() => {
+      const mem = document.querySelector('#dm-tab-memories')
+      const set = document.querySelector('#dm-tab-settings')
+      const panel = document.querySelector('#dm-panel-memories')
+      return {
+        memRole: mem && mem.getAttribute('role'),
+        memControls: mem && mem.getAttribute('aria-controls'),
+        setControls: set && set.getAttribute('aria-controls'),
+        panelRole: panel && panel.getAttribute('role'),
+        panelLabelled: panel && panel.getAttribute('aria-labelledby'),
+        memTabIndex: mem && mem.getAttribute('tabindex'),
+        setTabIndex: set && set.getAttribute('tabindex'),
+        listRole: (document.querySelector('.dm_tabs') || {}).getAttribute ? document.querySelector('.dm_tabs').getAttribute('role') : null,
+      }
+    })()`)
+    check('Tabs 具备 ARIA tablist/tab/tabpanel 关联', tabsAria.listRole === 'tablist' && tabsAria.memRole === 'tab' && tabsAria.memControls === 'dm-panel-memories' && tabsAria.setControls === 'dm-panel-settings' && tabsAria.panelRole === 'tabpanel' && tabsAria.panelLabelled === 'dm-tab-memories', JSON.stringify(tabsAria))
+    check('Tabs roving tabIndex', tabsAria.memTabIndex === '0' && tabsAria.setTabIndex === '-1', JSON.stringify(tabsAria))
+    await evaluate(`(() => { const t = document.querySelector('#dm-tab-memories'); if (t) t.focus(); return Boolean(t) })()`)
+    await key('ArrowRight', 'ArrowRight', 39)
+    const tabRight = await evaluate(`(() => ({
+      settingsSelected: (document.querySelector('#dm-tab-settings') || {}).getAttribute ? document.querySelector('#dm-tab-settings').getAttribute('aria-selected') : null,
+      focused: document.activeElement ? document.activeElement.id : null,
+      panel: document.querySelector('#dm-panel-settings') !== null,
+    }))()`)
+    check('→ 键切到设置页且焦点跟随', tabRight.settingsSelected === 'true' && tabRight.focused === 'dm-tab-settings' && tabRight.panel, JSON.stringify(tabRight))
+    await key('ArrowLeft', 'ArrowLeft', 37)
+    const tabLeft = await evaluate(`(() => ({
+      memoriesSelected: (document.querySelector('#dm-tab-memories') || {}).getAttribute ? document.querySelector('#dm-tab-memories').getAttribute('aria-selected') : null,
+      focused: document.activeElement ? document.activeElement.id : null,
+      panel: document.querySelector('#dm-panel-memories') !== null,
+    }))()`)
+    check('← 键切回记忆页且焦点跟随', tabLeft.memoriesSelected === 'true' && tabLeft.focused === 'dm-tab-memories' && tabLeft.panel, JSON.stringify(tabLeft))
+
     // 1) 自定义下拉键盘：Enter 打开 → 焦点进入浮层 → ArrowDown 移动高亮 → Esc 关闭
     const kbdOpened = await evaluate(`(() => { const t = document.querySelector('.dm_select_trigger'); if (!t) return false; t.focus(); return document.activeElement === t })()`)
     await key('Enter', 'Enter', 13)
@@ -301,6 +335,45 @@ async function main() {
         ta.dispatchEvent(new Event('input', { bubbles: true }))
         return true
       })()`)
+      // 1c) 标签：去重 + 12 个上限计数/提示（客户端与服务端同口径）
+      await evaluate(`(() => {
+        const input = document.querySelector('#dm-tags')
+        if (!input) return false
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+        setter.call(input, 'a, a, b')
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+        return true
+      })()`)
+      await sleep(250)
+      const tagsCounter = await evaluate(`(() => {
+        const field = [...document.querySelectorAll('.dm_dialog .dm_field')].find(f => (f.innerText || '').includes('标签'))
+        return field ? ((field.querySelector('.dm_charcount') || {}).textContent || '') : ''
+      })()`)
+      check('标签计数显示去重后的 2/12', /2\s*\/\s*12/.test(tagsCounter), tagsCounter)
+      await evaluate(`(() => {
+        const input = document.querySelector('#dm-tags')
+        if (!input) return false
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+        setter.call(input, Array.from({ length: 14 }, (_, i) => 't' + i).join(','))
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+        return true
+      })()`)
+      await sleep(250)
+      const tagsLimit = await evaluate(`(() => {
+        const field = [...document.querySelectorAll('.dm_dialog .dm_field')].find(f => (f.innerText || '').includes('标签'))
+        return field ? ((field.querySelector('.dm_charcount') || {}).textContent || '') : ''
+      })()`)
+      check('标签超过 12 个显示上限提示', /12\s*\/\s*12/.test(tagsLimit) && /上限|Limit/.test(tagsLimit), tagsLimit)
+      // 清空标签（弹窗不保存），避免影响后续键盘用例。
+      await evaluate(`(() => {
+        const input = document.querySelector('#dm-tags')
+        if (!input) return false
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+        setter.call(input, '')
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+        return true
+      })()`)
+      await sleep(150)
       await evaluate(`(() => { const t = document.querySelector('.dm_dialog .dm_select_trigger'); if (t) t.click(); return true })()`)
       await sleep(500)
       check('弹窗内下拉已展开', await evaluate(`document.querySelector('.dm_dialog') !== null && document.querySelector('.dm_select_pop') !== null`))
@@ -417,7 +490,45 @@ async function main() {
     await sleep(1200)
     check('恢复在线后列表重新加载', (await evaluate(`document.querySelectorAll('.dm_card').length`)) >= 0)
 
-    // 8) 无 JS 异常 + 截图
+    // 8) 设置页：保留份数夹取 + 备份触发重载不覆盖防抖中的草稿（0.24.5）
+    const settingsBefore = await apiJson('/settings')
+    const originalRetention = Number(settingsBefore?.effective?.backupRetention)
+    check('读取原始备份保留份数', Number.isInteger(originalRetention), String(originalRetention))
+    await evaluate(`(() => { const tab = document.querySelector('#dm-tab-settings'); if (tab) tab.click(); return Boolean(tab) })()`)
+    await sleep(1000)
+    check('设置页已打开', await evaluate(`document.querySelector('#dm-panel-settings') !== null && document.querySelectorAll('.dm_numinput').length > 0`))
+    const setRetention = async (value) => evaluate(`(() => {
+      const input = document.querySelectorAll('.dm_numinput')[0]
+      if (!input) return false
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+      setter.call(input, ${JSON.stringify(String(value))})
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      return true
+    })()`)
+    // 8a) 输入 0：服务端夹取为 1，草稿应回收为 effective（界面值=实际值）。
+    const setZero = await setRetention(0)
+    await sleep(1800)
+    if (setZero !== true) console.log('  · 设置页保留份数输入框未就绪')
+    const clampedValue = await evaluate(`(() => { const input = document.querySelectorAll('.dm_numinput')[0]; return input ? input.value : null })()`)
+    const clampedDoc = await apiJson('/settings')
+    check('保留份数 0 被夹取为 1 且界面同步', String(clampedValue) === '1' && Number(clampedDoc?.effective?.backupRetention) === 1, `${clampedValue} / ${clampedDoc?.effective?.backupRetention}`)
+    // 8b) 改值后立刻点「立即备份」（600ms 防抖窗内）→ 重载设置不得覆盖草稿。
+    const targetRetention = Math.min(30, originalRetention + 1)
+    await setRetention(targetRetention)
+    await evaluate(`(() => { const b = [...document.querySelectorAll('button')].find(x => /立即备份|Back up now/.test((x.textContent || '').trim())); if (b) b.click(); return Boolean(b) })()`)
+    await sleep(3200)
+    const afterBackupValue = await evaluate(`(() => { const input = document.querySelectorAll('.dm_numinput')[0]; return input ? input.value : null })()`)
+    const afterBackupDoc = await apiJson('/settings')
+    check('备份触发的设置重载不覆盖未保存草稿', String(afterBackupValue) === String(targetRetention) && Number(afterBackupDoc?.effective?.backupRetention) === targetRetention, `${afterBackupValue} / ${afterBackupDoc?.effective?.backupRetention}`)
+    // 还原原始保留份数并切回记忆页。
+    await setRetention(originalRetention)
+    await sleep(1800)
+    const restoredSettings = await apiJson('/settings')
+    check('备份保留份数已还原', Number(restoredSettings?.effective?.backupRetention) === originalRetention, String(restoredSettings?.effective?.backupRetention))
+    await evaluate(`(() => { const tab = document.querySelector('#dm-tab-memories'); if (tab) tab.click(); return Boolean(tab) })()`)
+    await sleep(800)
+
+    // 9) 无 JS 异常 + 截图
     check('页面无未捕获 JS 异常', consoleLines.every((line) => !line.startsWith('exception:')), JSON.stringify(consoleLines.slice(0, 5)))
     const shot = await send('Page.captureScreenshot', { format: 'png' })
     writeFileSync(SHOT, Buffer.from(shot.data, 'base64'))

@@ -3,6 +3,18 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.24.5] - 2026-11-13
+
+### 修复 Fixed
+- **设置页在保存设置时崩溃（重要）**：`POST /settings` 与 `/settings/reset` 的响应被包在 `{result}` 里，客户端把包裹对象当成设置视图写回状态，任何一次设置自动保存/恢复默认都会让设置页渲染崩溃（面板消失）。新增 `unwrapResult` 统一解包写路由响应。
+- **设置保存一致性**：服务端会夹取/规范化取值（如保留份数 0→1），保存成功且无新编辑时把草稿回收为 effective，界面值不再与实际保存值错位；加载设置不再覆盖防抖窗内未保存的草稿（改完立刻点「立即备份」不会回滚改动）；保存失败清除「已保存」状态；保留份数输入即夹取到服务端允许区间。
+- **设置加载失败不再永久骨架**：首次加载失败显示「加载失败 + 重试」，而不是无限骨架；召回预览加 seq 守卫，快速切换工作区时旧响应不再覆盖新响应。
+- **标签客户端收敛**：编辑器解析标签时去重、单项截 64 字符、最多 12 个（与宿主 `cleanTags` 同口径），并新增「标签 n/12」计数与超限提示，避免「提示已保存、服务端静默截断」。
+- **WAI-ARIA Tabs**：记忆/设置标签补全 `tablist`/`tab`/`tabpanel` 关联（`aria-controls`/`aria-labelledby`）、roving `tabIndex` 与 ←/→/Home/End 键盘切换（焦点跟随）。
+
+### 新增 Added
+- 客户端纯函数 `parseTags`、`unwrapResult` ＋单测；GUI 验收新增 11 项（Tabs ARIA/方向键、标签计数与上限提示、保留份数夹取、备份触发重载不覆盖草稿），GUI 检查 24→35 项。
+
 ## [0.24.4] - 2026-11-13
 
 ### 修复 Fixed

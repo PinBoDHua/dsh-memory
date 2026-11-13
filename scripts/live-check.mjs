@@ -62,11 +62,11 @@ async function main() {
 
   // 1. status：版本与 schema
   let token = ''
-  await check('status 报告 version=0.24.4 / schemaVersion=2 并下发 token', async () => {
+  await check('status 报告 version=0.24.5 / schemaVersion=2 并下发 token', async () => {
     const { status, json } = await req('GET', '/status')
     ok('status HTTP 200', status === 200, `got ${status}`)
     ok('status.ok', json?.ok === true)
-    ok('version === 0.24.4', json?.version === '0.24.4', `got ${json?.version}`)
+    ok('version === 0.24.5', json?.version === '0.24.5', `got ${json?.version}`)
     ok('schemaVersion === 2', json?.schemaVersion === 2, `got ${json?.schemaVersion}`)
     ok('token 非空', typeof json?.key === 'string' && json.key.length > 0)
     token = json?.key ?? ''
@@ -329,6 +329,9 @@ async function main() {
     // 0.24.4：请求超时/网络错误映射、撤销吐司优先队列、批量删除逐项结算。
     ok('bundle 含 0.24.4 超时与队列修复', code.includes('REQUEST_TIMEOUT_MS') && code.includes('AbortSignal') && code.includes('errTimeout'))
     ok('bundle 含 0.24.4 撤销队列与删除结算', code.includes('shouldQueueToast') && code.includes('partitionSettled'))
+    // 0.24.5：设置写路由解包、标签收敛、ARIA Tabs。
+    ok('bundle 含 0.24.5 设置解包与标签收敛', code.includes('unwrapResult') && code.includes('parseTags'))
+    ok('bundle 含 0.24.5 ARIA Tabs', code.includes('dm-panel-settings') && code.includes('onTabKey'))
   })
 
   // 7. 清理测试条目

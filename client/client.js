@@ -16,6 +16,26 @@
 
   // ===== 纯逻辑（node 可测，缝 4） =====
 
+  // 标签上限与单项长度（与宿主 lib/store.js cleanTags 同口径）。
+  var TAG_MAX_COUNT = 12
+  var TAG_MAX_LENGTH = 64
+
+  // 标签解析（纯函数）：中英文逗号分隔、trim、去重、单项截 64 字符、最多 12 个。
+  // 与宿主 store.cleanTags 同口径，客户端提前收敛，避免「提示已保存、服务端却静默截断」。
+  function parseTags(text) {
+    var seen = {}
+    var out = []
+    var parts = String(text || '').split(/[,，]/)
+    for (var i = 0; i < parts.length; i++) {
+      var tag = parts[i].trim().slice(0, TAG_MAX_LENGTH)
+      if (!tag || seen[tag]) continue
+      seen[tag] = true
+      out.push(tag)
+      if (out.length >= TAG_MAX_COUNT) break
+    }
+    return out
+  }
+
   function validateDraft(draft) {
     var content = String((draft && draft.content) || '').trim()
     if (content === '') return { ok: false, error: 'empty-content' }
@@ -183,6 +203,12 @@
     return { ok: ok, failed: failed }
   }
 
+  // 写路由统一包 {result}：设置类接口取 result 里的设置视图（避免把包裹对象当视图导致崩溃）。
+  function unwrapResult(payload) {
+    if (payload && typeof payload === 'object' && Object.prototype.hasOwnProperty.call(payload, 'result')) return payload.result
+    return payload
+  }
+
   function validateImportDoc(doc) {
     if (!doc || typeof doc !== 'object') return { ok: false, error: 'bad-doc' }
     if (doc.format !== 'dsh-memory-export' || doc.version !== 1) return { ok: false, error: 'bad-doc' }
@@ -248,7 +274,7 @@
     return (mb < 10 ? mb.toFixed(1) : Math.round(mb)) + ' MB'
   }
 
-  var helpers = { validateDraft: validateDraft, groupEntries: groupEntries, nextToken: nextToken, entriesParams: entriesParams, buildEntriesQuery: buildEntriesQuery, workspaceOptions: workspaceOptions, errorKeyFor: errorKeyFor, shouldQueueToast: shouldQueueToast, partitionSettled: partitionSettled, validateImportDoc: validateImportDoc, importSummary: importSummary, pageSlice: pageSlice, entryDetailRows: entryDetailRows, relativeTime: relativeTime, formatBytes: formatBytes, isExpired: isExpired, statusOf: statusOf, originOf: originOf, statusQueryFlags: statusQueryFlags }
+  var helpers = { validateDraft: validateDraft, groupEntries: groupEntries, nextToken: nextToken, entriesParams: entriesParams, buildEntriesQuery: buildEntriesQuery, workspaceOptions: workspaceOptions, errorKeyFor: errorKeyFor, shouldQueueToast: shouldQueueToast, partitionSettled: partitionSettled, parseTags: parseTags, unwrapResult: unwrapResult, validateImportDoc: validateImportDoc, importSummary: importSummary, pageSlice: pageSlice, entryDetailRows: entryDetailRows, relativeTime: relativeTime, formatBytes: formatBytes, isExpired: isExpired, statusOf: statusOf, originOf: originOf, statusQueryFlags: statusQueryFlags }
 
   // ===== node 测试导出（CJS） =====
   if (typeof module !== 'undefined' && module.exports) {
@@ -297,6 +323,8 @@
     editorHint: 'Ctrl/⌘ + Enter 快速保存',
     categoryLabel: '分类',
     tagsLabel: '标签（逗号分隔，最多 12 个）',
+    tagsCount: '标签 {n}/{max}',
+    tagsLimit: '已达上限，超出部分不会保存',
     scopeLabel: '作用域',
     catPreference: '偏好',
     catFact: '事实',
@@ -502,6 +530,8 @@
     editorHint: 'Ctrl/⌘ + Enter to save',
     categoryLabel: 'Category',
     tagsLabel: 'Tags (comma-separated, max 12)',
+    tagsCount: 'Tags {n}/{max}',
+    tagsLimit: 'Limit reached; extra tags will not be saved',
     scopeLabel: 'Scope',
     catPreference: 'Preference',
     catFact: 'Fact',
@@ -815,6 +845,7 @@
     '.dm_textarea:focus,.dm_input:focus,.dm_dialog .dm_select:focus{outline:none;border-color:var(--dm-primary);box-shadow:var(--dm-ring);}',
     '.dm_dialog .dm_select{width:100%;max-width:none;height:38px;border-radius:12px;background-color:var(--dm-bg);}',
     '.dm_charcount{text-align:right;font-size:11px;color:var(--dm-ink3);margin-top:4px;font-variant-numeric:tabular-nums;}',
+    '.dm_charcount_limit{color:var(--dm-danger);}',
     '.dm_catgrid{display:flex;gap:8px;}',
     '.dm_catopt{flex:1;display:flex;align-items:center;justify-content:center;gap:7px;border:1px solid var(--dm-line2);border-radius:12px;background:transparent;color:var(--dm-ink2);padding:10px 8px;cursor:pointer;font:inherit;font-size:12.5px;font-weight:600;transition:all .15s;}',
     '.dm_catopt:hover{border-color:color-mix(in srgb,var(--dm-cat) 45%,var(--dm-line2));color:var(--dm-cat);}',
@@ -1065,8 +1096,9 @@
         return date.toLocaleString(uiLang() === 'zh' ? 'zh-CN' : 'en-US')
       }
 
+      // 兼容旧调用点：标签解析与导出统一走模块级 parseTags（宿主同口径）。
       function splitTags(text) {
-        return String(text || '').split(/[,，]/).map(function (s) { return s.trim() }).filter(Boolean)
+        return parseTags(text)
       }
 
       function legacyCopy(text) {
@@ -1148,8 +1180,8 @@
           recallPreview: function (workspace) { return request(API_BASE + '/recall-preview' + (workspace ? '?workspace=' + encodeURIComponent(workspace) : '')) },
           export: function (params) { return request(API_BASE + '/export' + buildEntriesQuery(params || {})) },
           settings: function () { return request(API_BASE + '/settings') },
-          saveSettings: function (input) { return post(API_BASE + '/settings', input) },
-          resetSettings: function () { return post(API_BASE + '/settings/reset', {}) },
+          saveSettings: function (input) { return post(API_BASE + '/settings', input).then(unwrapResult) },
+          resetSettings: function () { return post(API_BASE + '/settings/reset', {}).then(unwrapResult) },
           backup: function () { return post(API_BASE + '/backup', {}) },
           save: function (input) { return post(API_BASE + '/save', input) },
           update: function (input) { return post(API_BASE + '/update', input) },
@@ -1414,7 +1446,13 @@
             h('div', { className: 'dm_hint', style: { marginTop: 4 } }, t('originEditHint'))) : null,
           h('div', { className: 'dm_field' },
             h('label', { className: 'dm_label', htmlFor: 'dm-tags' }, h(Icon, { name: 'tag', size: 13 }), t('tagsLabel')),
-            h('input', { id: 'dm-tags', className: 'dm_input', disabled: props.busy, value: draft.tags, onChange: function (e) { field('tags', e.target.value) }, onKeyDown: onKeySave })),
+            h('input', { id: 'dm-tags', className: 'dm_input', disabled: props.busy, value: draft.tags, onChange: function (e) { field('tags', e.target.value) }, onKeyDown: onKeySave }),
+            (function () {
+              var tags = parseTags(draft.tags)
+              var atLimit = tags.length >= TAG_MAX_COUNT
+              return h('div', { className: 'dm_charcount' + (atLimit ? ' dm_charcount_limit' : '') },
+                t('tagsCount').replace('{n}', String(tags.length)).replace('{max}', String(TAG_MAX_COUNT)) + (atLimit ? ' · ' + t('tagsLimit') : ''))
+            })()),
           h('div', { className: 'dm_field' },
             h('label', { className: 'dm_label', htmlFor: 'dm-expires' }, h(Icon, { name: 'clock', size: 13 }), t('expiresLabel')),
             h('div', { className: 'dm_expiresrow' },
@@ -1582,9 +1620,20 @@
         var err = errState[0]; var setErr = errState[1]
         var busyState = useState(false)
         var busy = busyState[0]; var setBusy = busyState[1]
+        var seqRef = useRef(0)
         function load() {
+          // seq 守卫：快速切换工作区时旧响应不得覆盖新响应。
+          var seq = ++seqRef.current
           setBusy(true)
-          api.recallPreview(workspace).then(function (doc) { setData(doc); setErr('') }).catch(function (e) { setErr(errorText(e, t)) }).then(function () { setBusy(false) })
+          api.recallPreview(workspace).then(function (doc) {
+            if (seq !== seqRef.current) return
+            setData(doc); setErr('')
+          }).catch(function (e) {
+            if (seq !== seqRef.current) return
+            setErr(errorText(e, t))
+          }).then(function () {
+            if (seq === seqRef.current) setBusy(false)
+          })
         }
         useEffect(function () { load() }, [workspace])
         var summary = data
@@ -1615,7 +1664,16 @@
         var t = props.t
         var view = props.view
         var draft = props.draft
-        if (!view || !draft) return h(Skeletons)
+        if (!view || !draft) {
+          // 首次加载失败：显示错误与重试入口，而不是永久骨架。
+          if (props.error) {
+            return h('div', { className: 'dm_empty' },
+              h(Icon, { name: 'alert', size: 28, style: { color: 'var(--dm-danger)', marginBottom: 10 } }),
+              h('div', null, t('loadError') + ': ' + props.error),
+              h('button', { className: 'dm_btn', style: { marginTop: 12 }, onClick: props.onRetry }, h(Icon, { name: 'undo', size: 13 }), t('retry')))
+          }
+          return h(Skeletons)
+        }
         var bounds = view.bounds
         var meta = view.meta
         function set(key) { return function (value) { props.onChange(key, value) } }
@@ -1654,7 +1712,13 @@
               h('input', {
                 type: 'number', className: 'dm_numinput', min: bounds.retentionMin, max: bounds.retentionMax,
                 value: draft.backupRetention, 'aria-label': t('retentionLabel'), disabled: props.busy,
-                onChange: function (e) { props.onChange('backupRetention', Number(e.target.value)) },
+                // 输入即夹取到服务端允许区间，避免「显示 0、实际存 1」的错位。
+                onChange: function (e) {
+                  var n = Number(e.target.value)
+                  if (!isFinite(n)) return
+                  var clamped = Math.min(bounds.retentionMax, Math.max(bounds.retentionMin, Math.round(n)))
+                  props.onChange('backupRetention', clamped)
+                },
               })),
             h('div', { className: 'dm_backupmeta' },
               h('span', null, t('lastBackupLabel') + ': ' + (meta.backup.lastBackup ? formatTime(meta.backup.lastBackup) : t('neverBackup'))),
@@ -1899,6 +1963,8 @@
         var seqRef = useRef(0)
         var toastSeq = useRef(0)
         var searchRef = useRef(null)
+        var tabMemoriesRef = useRef(null)
+        var tabSettingsRef = useRef(null)
 
         var phaseState = useState('loading')
         var phase = phaseState[0]; var setPhase = phaseState[1]
@@ -1952,8 +2018,28 @@
         var listError = listErrorState[0]; var setListError = listErrorState[1]
         var tabState = useState('memories')
         var tab = tabState[0]; var setTab = tabState[1]
+        // WAI-ARIA Tabs：←/→/Home/End 切换并跟随焦点；tab 用 roving tabIndex。
+        var TAB_KEYS = ['memories', 'settings']
+        function focusTabButton(key) {
+          var ref = key === 'memories' ? tabMemoriesRef : tabSettingsRef
+          if (ref.current) ref.current.focus()
+        }
+        function onTabKey(e) {
+          var idx = TAB_KEYS.indexOf(tab)
+          var next = null
+          if (e.key === 'ArrowRight') next = TAB_KEYS[(idx + 1) % TAB_KEYS.length]
+          else if (e.key === 'ArrowLeft') next = TAB_KEYS[(idx + TAB_KEYS.length - 1) % TAB_KEYS.length]
+          else if (e.key === 'Home') next = TAB_KEYS[0]
+          else if (e.key === 'End') next = TAB_KEYS[TAB_KEYS.length - 1]
+          if (next === null) return
+          e.preventDefault()
+          setTab(next)
+          focusTabButton(next)
+        }
         var settingsState = useState(null)
         var settings = settingsState[0]; var setSettings = settingsState[1]
+        var settingsErrorState = useState('')
+        var settingsError = settingsErrorState[0]; var setSettingsError = settingsErrorState[1]
         var draftState = useState(null)
         var draft = draftState[0]; var setDraft = draftState[1]
         var savingState = useState(false)
@@ -2072,14 +2158,19 @@
         useEffect(function () { loadInitial() }, [loadInitial])
 
         // 设置：加载有效值作为可编辑草稿；改动防抖自动保存（改完即生效）。
+        // 加载不覆盖「防抖窗内」未保存的草稿（否则改完立刻点备份/切换会把改动回滚）。
         var loadSettings = useCallback(function () {
           var seq = ++settingsSeq.current
           return api.settings().then(function (view) {
             if (seq !== settingsSeq.current) return
             setSettings(view)
-            setDraft(view.effective)
-          }).catch(function () {})
-        }, [api])
+            setSettingsError('')
+            if (!dirtyRef.current) setDraft(view.effective)
+          }).catch(function (err) {
+            if (seq !== settingsSeq.current) return
+            setSettingsError(errorText(err, t))
+          })
+        }, [api, t])
 
         useEffect(function () { loadSettings() }, [loadSettings])
 
@@ -2119,10 +2210,18 @@
             api.saveSettings(draftRef.current).then(function (view) {
               if (seq !== settingsSeq.current) return
               setSettings(view)
+              setSettingsError('')
               setSavedOnce(true)
+              // 服务端会夹取/规范化（如保留份数 0→1）：没有新编辑时把草稿回收为
+              // effective，避免输入框显示的值与实际保存值不一致。
+              if (!dirtyRef.current) setDraft(view.effective)
             }).catch(function (err) {
+              if (seq !== settingsSeq.current) return
+              setSavedOnce(false)
               showToast('error', errorText(err, t))
-            }).then(function () { setSaving(false) })
+            }).then(function () {
+              if (seq === settingsSeq.current) setSaving(false)
+            })
           }, 600)
           return function () { clearTimeout(timer) }
         }, [draft, api, t])
@@ -2562,17 +2661,23 @@
             tab === 'memories'
               ? h('button', { className: 'dm_btn dm_btn_primary dm_cta', onClick: openCreate, disabled: busy }, h(Icon, { name: 'plus', size: 15, strokeWidth: 2.2 }), t('newMemory'))
               : null),
-          h('div', { className: 'dm_tabs', role: 'tablist' },
+          h('div', { className: 'dm_tabs', role: 'tablist', 'aria-label': t('title') },
             h('button', {
-              role: 'tab', 'aria-selected': tab === 'memories', className: 'dm_tab' + (tab === 'memories' ? ' dm_tab_active' : ''),
-              onClick: function () { setTab('memories') },
+              ref: tabMemoriesRef, id: 'dm-tab-memories',
+              role: 'tab', 'aria-selected': tab === 'memories', 'aria-controls': 'dm-panel-memories',
+              tabIndex: tab === 'memories' ? 0 : -1,
+              className: 'dm_tab' + (tab === 'memories' ? ' dm_tab_active' : ''),
+              onClick: function () { setTab('memories') }, onKeyDown: onTabKey,
             }, h(Icon, { name: 'layers', size: 15 }), t('tabMemories'), h('span', { className: 'dm_tab_n' }, stats ? String(stats.total) : '…')),
             h('button', {
-              role: 'tab', 'aria-selected': tab === 'settings', className: 'dm_tab' + (tab === 'settings' ? ' dm_tab_active' : ''),
-              onClick: function () { setTab('settings') },
+              ref: tabSettingsRef, id: 'dm-tab-settings',
+              role: 'tab', 'aria-selected': tab === 'settings', 'aria-controls': 'dm-panel-settings',
+              tabIndex: tab === 'settings' ? 0 : -1,
+              className: 'dm_tab' + (tab === 'settings' ? ' dm_tab_active' : ''),
+              onClick: function () { setTab('settings') }, onKeyDown: onTabKey,
             }, h(Icon, { name: 'sliders', size: 15 }), t('tabSettings'))),
           tab === 'memories'
-            ? h('div', null,
+            ? h('div', { id: 'dm-panel-memories', role: 'tabpanel', 'aria-labelledby': 'dm-tab-memories' },
               renderStats(),
               h('div', { className: 'dm_toolbar_wrap' },
                 h('div', { className: 'dm_toolbar' },
@@ -2623,11 +2728,13 @@
                   h('button', { className: 'dm_btn dm_btn_danger_solid', onClick: openBulkDelete, disabled: busy }, h(Icon, { name: 'trash', size: 14 }), t('bulkDelete')),
                   h('button', { className: 'dm_btn', onClick: function () { setSelected([]) }, disabled: busy }, t('clearSelection')))
                 : null)
-            : h(SettingsPage, {
+            : h('div', { id: 'dm-panel-settings', role: 'tabpanel', 'aria-labelledby': 'dm-tab-settings' },
+            h(SettingsPage, {
               view: settings, draft: draft, busy: busy, saving: saving, savedOnce: savedOnce, t: t, api: api, workspace: currentCwd,
+              error: settingsError, onRetry: loadSettings,
               onChange: changeSetting, onReset: resetSettings, onBackup: backupNow,
               onToast: function (text, kind) { showToast(kind, text) },
-            }),
+            })),
           editor ? h(EditorModal, { draft: editor, setDraft: setEditor, t: t, workspaceTarget: workspaceTarget, busy: busy, onSave: handleSave, onClose: function () { if (!busy) setEditor(null) } }) : null,
           confirm ? h(ConfirmModal, { entries: confirm.entries, t: t, busy: busy, onConfirm: handleDelete, onClose: function () { if (!busy) setConfirm(null) } }) : null,
           importPlan ? h(ImportModal, { plan: importPlan.plan, mode: importPlan.mode, t: t, busy: busy, onConfirm: confirmImport, onModeChange: changeImportMode, onClose: function () { if (!busy) setImportPlan(null) } }) : null,

@@ -7,7 +7,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import helpers from '../client/client.js'
 
-const { validateDraft, groupEntries, nextToken, entriesParams, buildEntriesQuery, workspaceOptions, errorKeyFor, shouldQueueToast, partitionSettled, validateImportDoc, importSummary, pageSlice, entryDetailRows, relativeTime, formatBytes, isExpired, statusOf, originOf, statusQueryFlags } = helpers
+const { validateDraft, groupEntries, nextToken, entriesParams, buildEntriesQuery, workspaceOptions, errorKeyFor, shouldQueueToast, partitionSettled, parseTags, unwrapResult, validateImportDoc, importSummary, pageSlice, entryDetailRows, relativeTime, formatBytes, isExpired, statusOf, originOf, statusQueryFlags } = helpers
 
 test('validateDraft accepts a complete draft and rejects bad ones', () => {
   assert.deepEqual(validateDraft({ content: '一条事实', category: 'fact' }), { ok: true })
@@ -168,6 +168,28 @@ test('workspaceOptions builds global plus known workspaces and current cwd', () 
     { value: 'D:\\proj\\beta', kind: 'workspace', count: 0 },
   ])
   assert.deepEqual(workspaceOptions({ workspaces: [], currentCwd: undefined }), [{ value: 'global', kind: 'global' }])
+})
+
+test('parseTags trims, splits zh/en commas, dedupes, caps length and count', () => {
+  assert.deepEqual(parseTags(''), [])
+  assert.deepEqual(parseTags('   ,  ,'), [])
+  assert.deepEqual(parseTags('a, b，c'), ['a', 'b', 'c'])
+  assert.deepEqual(parseTags('a, a , A'), ['a', 'A'], 'exact-case dedupe, case variants kept')
+  assert.deepEqual(parseTags('x,'.repeat(20)), ['x'], 'dedupe keeps one')
+  const many = Array.from({ length: 20 }, (_, i) => 't' + i).join(',')
+  assert.deepEqual(parseTags(many).length, 12, 'max 12 tags')
+  const long = 'a'.repeat(100)
+  assert.equal(parseTags(long)[0].length, 64, 'single tag capped at 64 chars')
+  assert.deepEqual(parseTags('中文，标签,中文'), ['中文', '标签'])
+})
+
+test('unwrapResult unwraps write-route {result} envelopes (settings views)', () => {
+  const view = { effective: { backupRetention: 7 }, bounds: { retentionMin: 1 } }
+  assert.equal(unwrapResult({ result: view }), view)
+  assert.deepEqual(unwrapResult(view), view)
+  assert.equal(unwrapResult(null), null)
+  assert.equal(unwrapResult({ result: null }), null)
+  assert.deepEqual(unwrapResult({ other: 1 }), { other: 1 })
 })
 
 test('errorKeyFor maps service and route errors to locale keys', () => {
