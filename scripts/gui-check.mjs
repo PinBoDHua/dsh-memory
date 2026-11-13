@@ -21,12 +21,16 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync
 import os from 'node:os'
 import path from 'node:path'
 import { snapshotDataRoot, diffSnapshots } from './data-snapshot.mjs'
+import { acquireVerifyLock } from './verify-lock.mjs'
 
 const argv = process.argv.slice(2)
 const argOf = (name) => argv.find((a) => a.startsWith(`--${name}=`))?.split('=').slice(1).join('=')
 const BASE = argOf('url') ?? process.env.DSH_MEMORY_GUI_URL ?? 'http://127.0.0.1:57031/'
 const SHOT = argOf('shot') ?? path.join(os.tmpdir(), 'dsh-memory-gui-check.png')
-const CDP_PORT = Number(argOf('cdp-port') ?? 9334)
+// 动态默认 CDP 端口：固定 9334 会让并发运行连到同一个 Edge 页面。
+const CDP_PORT = Number(argOf('cdp-port') ?? (9300 + Math.floor(Math.random() * 600)))
+// 测试用中断注入：到点走与真实 SIGINT 相同的清理/自检路径（Windows 下无法可靠发 SIGINT）。
+const ABORT_AFTER = Number(argOf('abort-after') ?? 0)
 const USER_DATA = path.join(os.tmpdir(), `dsh-memory-gui-profile-${process.pid}`)
 const EDGE = process.env.EDGE_PATH ?? 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe'
 const DSH_HOME = process.env.DSH_HOME ?? path.join(os.homedir(), '.dsh')
@@ -35,6 +39,67 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 // ===== 真实数据根快照/恢复（设置页破坏性用例前后保持一致） =====
 let ROOT = ''
 let TOKEN = ''
+let verifyLock = null
+let dataSnapshotBefore = null
+let overlayBaseline = {}
+let backupsBaseline = []
+
+// ===== 中断安全：幂等清理注册表 + 统一 abort 路径（SIGINT/SIGTERM/未捕获异常）=====
+const cleanupHooks = []
+let aborting = false
+
+function registerCleanup(fn) {
+  cleanupHooks.push(fn)
+}
+
+async function runCleanupHooks() {
+  const hooks = cleanupHooks.splice(0).reverse()
+  for (const fn of hooks) {
+    try {
+      await fn()
+    } catch (err) {
+      console.error('清理钩子失败：', err?.message ?? err)
+    }
+  }
+}
+
+async function forgetIds(ids) {
+  const list = (ids || []).filter(Boolean)
+  if (list.length === 0) return
+  await apiJson('/forget', { method: 'POST', token: TOKEN, body: { ids: list } }).catch(() => {})
+}
+
+/** 启动时清理上次中断留下的测试条目（只认 __gui_/__livecheck_ 内容标记，不碰真实记忆）。 */
+async function cleanupResidueMarkers() {
+  if (!TOKEN) return
+  const ids = []
+  for (const marker of ['__gui_', '__livecheck_']) {
+    const doc = await apiJson(`/entries?query=${encodeURIComponent(marker)}&scope=all&limit=200&include_superseded=true&include_expired=true&include_archived=true`).catch(() => null)
+    for (const entry of doc?.entries || []) {
+      const content = String(entry.content || '')
+      if (content.startsWith(marker) || content.includes(marker)) ids.push(entry.id)
+    }
+  }
+  await forgetIds(ids)
+}
+
+async function abortAndExit(code, err) {
+  if (aborting) return
+  aborting = true
+  console.error(`GUI CHECK 中断（${code}）：`, err?.message ?? err ?? '')
+  await runCleanupHooks()
+  if (ROOT && dataSnapshotBefore) {
+    const changes = diffSnapshots(dataSnapshotBefore, snapshotDataRoot(ROOT))
+    if (changes.length > 0) console.error('数据根残差：', JSON.stringify(changes.slice(0, 5)))
+    else console.error('数据根零残留（中断清理成功）')
+  }
+  process.exit(code)
+}
+
+process.once('SIGINT', () => { void abortAndExit(130, new Error('SIGINT')) })
+process.once('SIGTERM', () => { void abortAndExit(143, new Error('SIGTERM')) })
+process.on('uncaughtException', (err) => { void abortAndExit(1, err) })
+process.on('unhandledRejection', (err) => { void abortAndExit(1, err) })
 
 function listBackups() {
   if (!ROOT) return []
@@ -251,8 +316,20 @@ async function main() {
     const statusDoc = await apiJson('/status')
     ROOT = statusDoc?.root ?? ''
     TOKEN = statusDoc?.key ?? ''
+    // 验证脚本互斥：同一数据根只允许一个 live/gui 验证脚本（并发会互相删备份/竞态恢复设置）。
+    verifyLock = acquireVerifyLock(ROOT)
+    registerCleanup(async () => { try { verifyLock.release() } catch { /* ignore */ } })
+    // 先清理上次中断残留（__gui_*/__livecheck_* 测试条目），再拍零残留基线。
+    await cleanupResidueMarkers()
+    overlayBaseline = (await apiJson('/settings'))?.overlay ?? {}
+    backupsBaseline = listBackups()
+    registerCleanup(async () => {
+      try { await restoreSettingsOverlay(overlayBaseline) } catch { /* ignore */ }
+      removeNewBackups(backupsBaseline)
+    })
     // 运行前后用户数据零差异自检（快照默认排除 access.json/index.json 等派生数据）。
-    const dataSnapshotBefore = snapshotDataRoot(ROOT)
+    dataSnapshotBefore = snapshotDataRoot(ROOT)
+    if (ABORT_AFTER > 0) setTimeout(() => { void abortAndExit(130, new Error(`abort-after=${ABORT_AFTER}ms 注入`)) }, ABORT_AFTER)
 
     // 1b) Tabs：ARIA 关联 + ←/→ 键盘切换跟随焦点（WAI-ARIA tablist 模式）
     const tabsAria = await evaluate(`(() => {
@@ -521,6 +598,8 @@ async function main() {
           scope: 'global',
           category: 'fact',
         }))
+        const bigIds = bigEntries.map((e) => e.id)
+        registerCleanup(async () => { await forgetIds(bigIds); bigIds.length = 0 })
         const bigFile = path.join(dir, 'big-export.json')
         writeFileSync(bigFile, JSON.stringify({ format: 'dsh-memory-export', version: 1, exportedAt: new Date().toISOString(), entries: bigEntries }), 'utf8')
         try {
@@ -552,8 +631,8 @@ async function main() {
           check('大导入显示分片进度', sawProgress, 'progress text not observed')
           check('大导入全部落盘（320 条）', (listed?.entries || []).length === 320, String((listed?.entries || []).length))
         } finally {
-          const st = await apiJson('/status')
-          await apiJson('/forget', { method: 'POST', token: st?.key, body: { ids: bigEntries.map((e) => e.id) } }).catch(() => {})
+          await forgetIds(bigEntries.map((e) => e.id))
+          bigIds.length = 0
           const left = await apiJson(`/entries?query=${encodeURIComponent('GUI 分片导入')}&scope=global&limit=10`)
           check('分片导入测试条目已批量清理', (left?.entries || []).length === 0, String((left?.entries || []).length))
         }
@@ -565,6 +644,7 @@ async function main() {
     // 6) 删除撤销吐司优先级 + 撤销恢复（0.24.4）：删除后的撤销不能被后续提示挤掉。
     const marker = `__gui_undo_${Date.now().toString(36)}__`
     let createdIds = []
+    registerCleanup(async () => { await forgetIds(createdIds); createdIds = [] })
     try {
       const status = await apiJson('/status')
       const token = status && status.key
@@ -820,10 +900,10 @@ async function main() {
       }
       check('批量删除可一次撤销恢复多条', bulkToast.hasAction && bulkRestored.has(idM) && bulkRestored.has(idN), JSON.stringify({ bulkInfo, idM, idN, restored: [idM, idN].filter((id) => bulkRestored.has(id)) }))
     } finally {
-      // 清理验收临时记忆（失败路径也要清）。
+      // 清理验收临时记忆（失败路径也要清；批量单请求，兼容并发/中断清理钩子）。
       try {
-        const status = await apiJson('/status')
-        for (const id of createdIds) await apiJson('/forget', { method: 'POST', token: status?.key, body: { id } })
+        await forgetIds(createdIds)
+        createdIds = []
         const left = await apiJson(`/entries?query=${encodeURIComponent(marker)}&scope=global&limit=100&include_superseded=true&include_expired=true&include_archived=true`)
         check('验收临时记忆已清理', (left?.entries || []).length === 0, JSON.stringify((left?.entries || []).map((e) => e.id)))
       } catch (err) {
@@ -967,9 +1047,9 @@ async function main() {
     // 破坏性用例保护：快照真实 settings overlay 与 backups 文件集，结束原样恢复并删除本次
     // 新增备份（0.24.15 起不再 reset 用户设置/裁剪用户历史备份）。
     const settingsBefore = await apiJson('/settings')
-    const overlayBefore = settingsBefore?.overlay ?? {}
+    const overlayBefore = overlayBaseline
     const originalRetention = Number(settingsBefore?.effective?.backupRetention)
-    const backupsBefore = listBackups()
+    const backupsBefore = backupsBaseline
     try {
       check('读取原始备份保留份数', Number.isInteger(originalRetention), String(originalRetention))
       await evaluate(`(() => { const tab = document.querySelector('#dm-tab-settings'); if (tab) tab.click(); return Boolean(tab) })()`)
@@ -1127,7 +1207,8 @@ async function main() {
 
     // 9) 无 JS 异常 + 截图
     check('页面无未捕获 JS 异常', consoleLines.every((line) => !line.startsWith('exception:')), JSON.stringify(consoleLines.slice(0, 5)))
-    // 真实数据根前后一致（临时记忆已清理、设置/备份已恢复）。
+    // 真实数据根前后一致（临时记忆已清理、设置/备份已恢复；中断路径共用同一清理注册表）。
+    await runCleanupHooks()
     const dataChangesGui = diffSnapshots(dataSnapshotBefore, snapshotDataRoot(ROOT))
     check('真实数据根快照前后一致（零残留）', dataChangesGui.length === 0, JSON.stringify(dataChangesGui.slice(0, 5)))
     const shot = await send('Page.captureScreenshot', { format: 'png' })
@@ -1143,8 +1224,9 @@ async function main() {
   }
   console.log(`\n结果：${report.checks.filter((c) => c.ok).length} 通过，${report.checks.filter((c) => !c.ok).length} 失败`)
   if (!report.ok && consoleLines.length > 0) console.log('CONSOLE ' + JSON.stringify(consoleLines.slice(0, 20), null, 2))
-  if (failed !== null) process.exit(1)
-  process.exit(report.ok ? 0 : 1)
+  // 用 exitCode 而非 process.exit()：Windows 上在 Edge 子进程/管道仍在收尾时强制 exit
+  // 偶发触发 libuv 断言（0xC0000409）。让 Node 在句柄自然关闭后退出。
+  process.exitCode = failed !== null || !report.ok ? 1 : 0
 }
 
-main().catch((err) => { console.error('gui-check 启动失败：', err); process.exit(1) })
+main().catch((err) => { console.error('gui-check 启动失败：', err); process.exitCode = 1 })

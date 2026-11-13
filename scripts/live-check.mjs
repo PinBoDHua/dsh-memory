@@ -19,6 +19,7 @@ import { fileURLToPath } from 'node:url'
 import { withLock } from '../lib/lock.js'
 import { atomicWrite } from '../lib/store.js'
 import { snapshotDataRoot, diffSnapshots } from './data-snapshot.mjs'
+import { acquireVerifyLock } from './verify-lock.mjs'
 
 const argv = process.argv.slice(2)
 const portArg = argv.find((a) => a.startsWith('--port='))?.split('=')[1] ?? argv.find((a) => /^\d+$/.test(a))
@@ -79,6 +80,19 @@ function clientRev() {
 
 const created = []
 let statusRoot = ''
+let verifyLock = null
+
+/** 启动时清理上次中断残留（只认 __gui_/__livecheck_ 内容标记的测试条目）。 */
+async function cleanupResidueMarkers(token) {
+  const ids = []
+  for (const marker of ['__gui_', '__livecheck_']) {
+    const { json } = await req('GET', `/entries?query=${encodeURIComponent(marker)}&scope=all&limit=200&include_superseded=true&include_expired=true&include_archived=true`)
+    for (const entry of json?.entries || []) {
+      if (String(entry.content || '').includes(marker)) ids.push(entry.id)
+    }
+  }
+  if (ids.length > 0) await req('POST', '/forget', { token, body: { ids } })
+}
 
 async function main() {
   console.log(`dsh-memory live-check @ ${BASE}\n`)
@@ -99,6 +113,16 @@ async function main() {
     statusRoot = json?.root ?? ''
   })
   if (!token) { console.log('\n无法取得 token，终止。'); finish(); return }
+
+  // 验证脚本互斥：同一数据根只允许一个 live/gui 验证脚本。
+  try {
+    verifyLock = acquireVerifyLock(statusRoot)
+  } catch (err) {
+    console.error(`live-check 无法启动：${err?.message ?? err}`)
+    finish(1)
+    return
+  }
+  // 清理上次中断残留（__gui_*/__livecheck_*），再拍零残留基线（快照在下方 settings 快照之后）。
 
   // ===== 真实数据根快照 + 幂等清理（正常结束/异常/中断都要恢复） =====
   let settingsSnapshot = null
@@ -135,7 +159,7 @@ async function main() {
   const cleanupAll = async () => {
     if (cleaned) return
     cleaned = true
-    for (const id of created) await req('POST', '/forget', { token, body: { id } })
+    try { await req('POST', '/forget', { token, body: { ids: created } }) } catch { /* ignore */ }
     pruneAccessLedger()
     try { await restoreSettings() } catch { /* ignore */ }
     try {
@@ -144,17 +168,26 @@ async function main() {
         if (!backupsSnapshot.includes(name)) rmSync(path.join(dir, name), { force: true })
       }
     } catch { /* ignore */ }
+    try { if (verifyLock) verifyLock.release() } catch { /* ignore */ }
   }
   try {
     settingsSnapshot = (await req('GET', '/settings')).json?.overlay ?? {}
     backupsSnapshot = listBackups()
+    // 先清理历史残留，再拍基线：否则残留清理会被快照自检当成「删除真实条目」。
+    await cleanupResidueMarkers(token)
   } catch { /* ignore */ }
+  const dataSnapshotBefore = snapshotDataRoot(statusRoot)
   const abortAndExit = (code, err) => {
     if (err !== undefined) console.error('live-check 中断：', err)
-    cleanupAll().catch(() => {}).then(() => finish(code))
+    emergencyCleanup().catch(() => {}).then(() => finish(code))
   }
-  emergencyCleanup = cleanupAll
-  const dataSnapshotBefore = snapshotDataRoot(statusRoot)
+  emergencyCleanup = async () => {
+    await cleanupAll()
+    // 中断/异常路径也做数据根自检：清理后必须零残留。
+    const changes = diffSnapshots(dataSnapshotBefore, snapshotDataRoot(statusRoot))
+    if (changes.length > 0) console.error('数据根残差：', JSON.stringify(changes.slice(0, 5)))
+    else console.error('数据根零残留（中断清理成功）')
+  }
   process.once('SIGINT', () => { abortAndExit(130) })
   process.once('SIGTERM', () => { abortAndExit(143) })
   process.once('uncaughtException', (err) => { abortAndExit(1, err) })

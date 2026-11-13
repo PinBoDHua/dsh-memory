@@ -23,8 +23,9 @@ This file is the self-iteration ledger for dsh-memory: per-round increments, ver
 |---|---|---|
 | `tests/*.test.mjs` | 纯逻辑/服务/路由/存储/锁/设置/守卫/客户端纯函数 | `node --test tests/*.test.mjs` |
 | `scripts/live-check.mjs` | 运行中宿主回环 API 全链路＋客户端 bundle rev | `--port=` 或 `DSH_MEMORY_PORT`；测试条目/设置/备份自动恢复，`--fail-at=<子串>` 失败注入验证异常清理，运行前后数据根快照 diff=0 自检 |
-| `scripts/gui-check.mjs` | 真实浏览器面板：过滤请求参数、下拉键盘、弹窗 Esc 草稿 | `--url=`；Edge headless + CDP；cookie 由 `<DSH_HOME>/.credentials.yaml` 自签；临时记忆清理，设置/备份用例前后快照恢复，运行前后数据根快照 diff=0 自检（0.24.22） |
-| `scripts/data-snapshot.mjs` | live/gui 共用的数据根快照/差异纯函数 | 条目内容 sha256、backups 文件名、settings/meta；刻意排除 access.json/index.json；`tests/data-snapshot.test.mjs` 覆盖 |
+| `scripts/gui-check.mjs` | 真实浏览器面板：过滤请求参数、下拉键盘、弹窗 Esc 草稿 | `--url=`；Edge headless + CDP（端口默认随机，可用 `--cdp-port=` 固定）；cookie 由 `<DSH_HOME>/.credentials.yaml` 自签；临时记忆清理，设置/备份用例前后快照恢复，运行前后数据根快照 diff=0 自检；中断安全（清理注册表 + SIGINT/SIGTERM/异常统一 abort；`--abort-after=<ms>` 注入验证） |
+| `scripts/data-snapshot.mjs` | live/gui 共用的数据根快照/差异纯函数 | 条目内容 sha256、backups 内容 sha256、settings/meta；junk 清单（`.tmp-*`、`.lock-*`、非预期文件）；刻意排除 access.json/index.json；`tests/data-snapshot.test.mjs` 覆盖 |
+| `scripts/verify-lock.mjs` | 验证脚本互斥锁 | 数据根 `.lock-verify`（data-snapshot 忽略其存在）；并发第二个脚本码 `busy` 快速退出；陈旧锁按 mtime 自愈；`tests/verify-lock.test.mjs` 覆盖 |
 
 环境注意：GUI 端口每次启动不同，以运行时上下文为准；PowerShell 5.1 输出中文需 `[Console]::OutputEncoding=[Text.Encoding]::UTF8`；`git push` 的 stderr 进度可能被 PS 报 NonZeroExit，需看内容判断。
 
@@ -153,9 +154,9 @@ This file is the self-iteration ledger for dsh-memory: per-round increments, ver
 - [x] **settings.json 覆盖层读-改-写无跨进程锁**：两进程并发 patch 不同键 14/20 轮丢一个键。方案：`withLock(root/.lock-settings)` 包住 read-modify-write。
 - [ ] **withLock 长临界区/双释放风险**：临界区超过 staleMs 会被抢占；finally 无条件删锁可删他人锁。方案：写批心跳刷新 mtime、锁内 owner nonce 校验后释放。
 - [ ] **导出静默漏损坏条目**：`export` 跳过不可解析 `.md` 且无 skipped 计数；「全量备份」不完整无告警。方案：返回 `skipped/warnings` 并在面板提示。
-- [ ] **gui-check 中断不清理**（第四轮实测：强杀留下 3 条 `__gui_*` 测试记忆）：无 SIGINT/SIGTERM/异常清理注册表；启动不扫描上次残留。方案：模块级 cleanup 注册表统一 abort（清理→diff 断言→非 0），启动扫描 `__gui_`/`__livecheck_` 标记残留。
-- [ ] **data-snapshot 漏检面**：只采 `.md`/backups 文件名/settings/meta hash；`.tmp-*`、`.lock-*`、非 md 垃圾、同名备份内容改写全漏；abort 路径不做 diff。方案：增加 junk/锁清单与 backups 内容 hash，abort 也断言 diff=0。
-- [ ] **验证脚本并发不安全**：gui-check CDP 固定 9334、两个脚本可同时对真实数据根破坏写入。方案：数据根验证锁 + CDP 端口动态/必填，后者 busy 快速退出。
+- [x] **gui-check 中断不清理**（0.24.26：模块级清理注册表 + SIGINT/SIGTERM/uncaughtException 统一 abort 路径（清理→数据根 diff 断言→非 0 退出）；`--abort-after=<ms>` 可复现注入；启动时扫描并清理 `__gui_`/`__livecheck_` 残留；实测 15s/45s 中断均零残留）。
+- [x] **data-snapshot 漏检面**（0.24.26：junk 清单覆盖 `.tmp-*`、`.lock-*`（验证锁除外）、条目目录非 .md、backups 非 .json；backups 改为内容 sha256；abort 路径也做 diff 断言）。
+- [x] **验证脚本并发不安全**（0.24.26：`scripts/verify-lock.mjs` 数据根互斥锁（陈旧自愈），live/gui 启动即获取、busy 快速退出；GUI CDP 端口默认随机动态）。
 - [ ] **迁移 meta 写失败被吞**：`migrateSchema` 原子写失败仍返回 true/pending=false，且每次启动重跑强制备份可挤掉历史备份。方案：写失败抛错记 migrationError，失败后备份节流。
 - [ ] **导入悬垂指针指向「根内已存在但无关」id 不修复**：占位 id 视作有效目标 → 永久隐藏。方案：仅保留同批前向引用与确实反向声明的目标，其余丢弃计 repaired。
 - [ ] **包分发/引擎**：`files` 含 tests 不含 scripts（ITERATION 引用 scripts 作为验证入口）；`engines.dsh >=0.2.0-rc.2` 对宿主 0.2.2-alpha.3 严格 semver 不满足（待验证宿主校验口径）。方案：files 加 scripts，engines 按宿主语义修正或文档注明。

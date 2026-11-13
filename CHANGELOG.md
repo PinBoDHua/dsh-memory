@@ -3,6 +3,21 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.24.26] - 2026-11-13
+
+### 新增 Added / 测试基础设施
+- **验证脚本中断安全**：gui-check 增加模块级幂等清理注册表（临时 id、分片导入 id、settings overlay、backups、验证锁）与统一 abort 路径（SIGINT/SIGTERM/uncaughtException/unhandledRejection：清理 → 数据根 diff 断言 → 非 0 退出）；`--abort-after=<ms>` 可复现中断。启动时先扫描并清理上次残留的 `__gui_*`/`__livecheck_*` 测试条目，再拍零残留基线。实测 15s/45s 中断均「数据根零残留」退出 130。
+- **验证脚本互斥锁**：新增 `scripts/verify-lock.mjs`（数据根 `.lock-verify`，陈旧锁按 mtime 自愈）；live-check/gui-check 启动即获取，并发第二个脚本 code=busy 快速退出；GUI CDP 端口默认随机动态（固定 9334 会让并发连到同一页面）。
+- **快照漏检面补齐**：data-snapshot 的 junk 清单覆盖 `.tmp-*`、`.lock-*`（验证锁除外）、条目目录非 `.md`、backups 非 `.json`；backups 改为内容 sha256（同名备份被改写也能发现）；abort 路径同样做 diff 断言。live-check 清理改为批量 `/forget ids[]`，再次运行前先清历史残留。
+- **Windows 退出健壮性**：gui-check 改用 `process.exitCode` 而非 `process.exit()`（Edge 子进程收尾时强制退出偶发 libuv 断言 0xC0000409；并发锁 busy 场景复现并修复）。
+
+### 新增测试
+- `tests/data-snapshot.test.mjs`：junk/临时文件/锁目录/同名备份内容变更检测、验证锁忽略。
+- `tests/verify-lock.test.mjs`：获取/释放、并发 busy、陈旧自愈、自动创建数据根。
+
+### 验证证据
+- 单元 **289/289**；live **184/184**；真实 GUI **80/80**；中断注入（15s/45s）与并发互斥（第二个脚本 exit 1 且数据零变化）实测通过；live `--fail-at` 中断路径同样输出「数据根零残留」。
+
 ## [0.24.25] - 2026-11-13
 
 ### 修复 Fixed（第四轮审计 P1 导入/删除可用性）
