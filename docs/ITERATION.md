@@ -71,7 +71,7 @@ This file is the self-iteration ledger for dsh-memory: per-round increments, ver
 0.24.8 已清掉条目健壮性 5 项（文件名 id 权威、BOM/CRLF、坏文件可删、账本余影、Windows tick 缓存碰撞），其余按优先级：
 
 **P1**
-- [ ] **export/import 保真**：导出缺权威 `workspaceKey`（只带索引 `cwd`）——索引损坏时工作区条目 `workspace:null` 被导入拒绝（备份丢条目）、索引陈旧时恢复到错误工作区。修法：导出附 `workspaceKey`，导入按 key 落盘，`cwd` 仅作展示/补索引。
+- [x] **export/import 保真**（0.24.9）：导出附权威 `workspaceKey`，导入按 key 落盘——索引损坏不再拒绝、陈旧不再搬错工作区；旧导出按 cwd 兼容，merge 可按 key 合并。
 - [ ] **设置写入状态机**：`resetSettings`/`backupNow` 与在途自动保存无互斥（重置可能被旧响应回滚）；`saving` 在 seq 被推进时可能永久卡「保存中」；保存失败无脏标记/重试。
 
 **P2**

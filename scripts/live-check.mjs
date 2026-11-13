@@ -62,11 +62,11 @@ async function main() {
 
   // 1. status：版本与 schema
   let token = ''
-  await check('status 报告 version=0.24.8 / schemaVersion=2 并下发 token', async () => {
+  await check('status 报告 version=0.24.9 / schemaVersion=2 并下发 token', async () => {
     const { status, json } = await req('GET', '/status')
     ok('status HTTP 200', status === 200, `got ${status}`)
     ok('status.ok', json?.ok === true)
-    ok('version === 0.24.8', json?.version === '0.24.8', `got ${json?.version}`)
+    ok('version === 0.24.9', json?.version === '0.24.9', `got ${json?.version}`)
     ok('schemaVersion === 2', json?.schemaVersion === 2, `got ${json?.schemaVersion}`)
     ok('token 非空', typeof json?.key === 'string' && json.key.length > 0)
     token = json?.key ?? ''
@@ -282,6 +282,23 @@ async function main() {
     let ledger = {}
     try { ledger = JSON.parse(readFileSync(path.join(statusRoot, 'access.json'), 'utf8')) } catch { /* ignore */ }
     ok('forget 后账本记录已清理', ledger[id] === undefined, JSON.stringify(ledger[id]))
+  })
+
+  await check('导出携带权威 workspaceKey 且可回灌（0.24.9）', async () => {
+    const wsCwd = 'D:\\Questions'
+    const sv = await req('POST', '/save', { token, body: { content: `${RUN} 导出键`, scope: 'workspace', workspace: wsCwd, origin: 'auto' } })
+    const id = sv.json?.result?.entry?.id ?? ''
+    try {
+      ok('工作区导出测试条目已创建', id.startsWith('m-'))
+      const doc = await req('GET', '/export?scope=all')
+      const mine = (doc.json?.entries ?? []).find((e) => e.id === id)
+      ok('导出条目含权威 workspaceKey', Boolean(mine) && /^[a-f0-9]{16}$/.test(String(mine.workspaceKey)), JSON.stringify(mine && mine.workspaceKey))
+      // 按 workspaceKey 回灌（dry-run）：能定位作用域、不应被 no-workspace 拒绝。
+      const im = await req('POST', '/import', { token, body: { dryRun: true, entries: [{ id, content: `${RUN} 导出键`, scope: 'workspace', workspaceKey: mine?.workspaceKey }] } })
+      ok('按 workspaceKey 回灌可解析', im.status === 200 && (im.json?.result?.rejected?.length ?? 1) === 0, JSON.stringify(im.json))
+    } finally {
+      await req('POST', '/forget', { token, body: { id, workspace: wsCwd } })
+    }
   })
 
   await check('update origin 修正往返（0.10.0）', async () => {

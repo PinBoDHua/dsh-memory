@@ -3,6 +3,15 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.24.9] - 2026-11-13
+
+### 修复 Fixed
+- **导出/导入保真（权威 `workspaceKey`）**：此前导出只带索引里的 `workspace`（cwd），而导入按 cwd 哈希定位——索引损坏/缺失时工作区条目变成 `workspace:null` 被 `no-workspace` 拒绝（备份静默丢条目），索引陈旧（cwd 指错）时条目被恢复到**错误工作区**。现在导出为工作区条目附目录权威 `workspaceKey`（global 为 null）；导入优先按 key 落盘（cwd 可缺失、索引可损坏/陈旧），仅在 cwd 与 key 自洽时登记 index.json；旧导出无 `workspaceKey` 时仍按 cwd 兼容导入，merge 模式也支持按 key 合并。
+- 导入拒绝信息与 `workspaceKey` 校验接入现有 per-entry 校验/拒绝路径；`workspaceKey` 与 `workspace` 冲突时以 key 定位、不写误导性索引映射。
+
+### 新增 Added
+- `tests/export-key.test.mjs`（6 条）：导出带 key、损坏索引往返零拒绝、陈旧索引不搬错目录、旧导出兼容、仅 key 无 cwd 可导入、merge 按 key 合并；live-check 增加导出含 `workspaceKey` 与按 key 回灌检查。
+
 ## [0.24.8] - 2026-11-13
 
 ### 修复 Fixed（第二轮双端审计的条目健壮性批次）
