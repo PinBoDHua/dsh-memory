@@ -277,11 +277,30 @@ test('update with scope moves over HTTP; duplicate maps to 409', async () => {
 test('oversized body maps to 413 body-too-large, not invalid-json', async () => {
   const { handlers } = setup()
   const auth = { 'x-rpc-key': TOKEN }
-  const big = { content: 'x'.repeat(1024 * 1024 + 10), scope: 'global' }
+  // 上限 32MB：超过上限才 413（导入备份的常见大小必须放行，见上一条用例）。
+  const big = '{"content":"' + 'x'.repeat(32 * 1024 * 1024 + 10) + '","scope":"global"}'
   const res = fakeRes()
   await handlers.save(fakeReq({ method: 'POST', url: '/plugins/dsh-memory/save', headers: auth, body: big }), res)
   assert.equal(res.statusCode, 413)
   assert.equal(res.json().error, 'body-too-large')
+})
+
+test('import bodies larger than the old 1MB cap are accepted (backup restore path)', async () => {
+  const { service, handlers } = setup()
+  const auth = { 'x-rpc-key': TOKEN }
+  const content = 'x'.repeat(1_200_000) // 单条 ~1.2MB：旧上限直接 413，备份将无法恢复
+  const res = fakeRes()
+  await handlers.import(fakeReq({ method: 'POST', url: '/plugins/dsh-memory/import', headers: auth, body: JSON.stringify({ entries: [{ content, scope: 'global' }] }) }), res)
+  assert.equal(res.statusCode, 200, res.body.slice(0, 200))
+  const doc = res.json()
+  assert.equal(doc.result.imported, 1)
+  // 落盘模式不再回传全量 entries（客户端只用计数）；dryRun 仍返回预览计划。
+  assert.equal(doc.result.entries, undefined)
+  assert.equal(service.list({ scope: 'global' }).length, 1)
+  const dry = fakeRes()
+  await handlers.import(fakeReq({ method: 'POST', url: '/plugins/dsh-memory/import', headers: auth, body: { dryRun: true, entries: [{ content: '预览条目', scope: 'global' }] } }), dry)
+  assert.equal(dry.statusCode, 200)
+  assert.equal(dry.json().result.entries.length, 1)
 })
 
 test('non-object JSON bodies map to 400 invalid-json (not 500)', async () => {

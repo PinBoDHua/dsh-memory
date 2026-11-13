@@ -9,13 +9,15 @@
  *   node scripts/gui-check.mjs --url=http://127.0.0.1:57031/ [--shot=out.png]
  *   默认 URL 取 env DSH_MEMORY_GUI_URL；Edge 路径可用 env EDGE_PATH 覆盖。
  *
- * 安全：只读＋可逆操作——不保存/删除任何真实记忆；新建弹窗只输入草稿后关闭。
+ * 安全：默认只做「可逆」操作——临时记忆全部清理；设置页破坏性用例（重置/备份）
+ * 运行前快照真实 settings overlay 与 backups/ 文件集，结束后原样恢复并删除本次新增
+ * 备份，保证真实数据根前后一致。日志/截图只在本机临时目录。
  * 登录 cookie 由本机 <DSH_HOME>/.credentials.yaml 的 browser-session secret 自签
  * （与 dsh-client-connection 同一算法），仅用于回环地址。
  */
 import { spawn } from 'node:child_process'
 import { createHash, createHmac } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -28,6 +30,35 @@ const USER_DATA = path.join(os.tmpdir(), `dsh-memory-gui-profile-${process.pid}`
 const EDGE = process.env.EDGE_PATH ?? 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe'
 const DSH_HOME = process.env.DSH_HOME ?? path.join(os.homedir(), '.dsh')
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+// ===== 真实数据根快照/恢复（设置页破坏性用例前后保持一致） =====
+let ROOT = ''
+let TOKEN = ''
+
+function listBackups() {
+  if (!ROOT) return []
+  try {
+    return readdirSync(path.join(ROOT, 'backups')).filter((n) => n.endsWith('.json')).sort()
+  } catch {
+    return []
+  }
+}
+
+function removeNewBackups(before) {
+  if (!ROOT) return
+  const dir = path.join(ROOT, 'backups')
+  for (const name of listBackups()) {
+    if (before.includes(name)) continue
+    try { rmSync(path.join(dir, name), { force: true }) } catch { /* ignore */ }
+  }
+}
+
+// 先 reset 再写回原 overlay：恢复成「运行前精确状态」（reset 清除测试期间新增键）。
+async function restoreSettingsOverlay(overlay) {
+  if (!TOKEN) return
+  await apiJson('/settings/reset', { method: 'POST', token: TOKEN, body: {} })
+  if (overlay && Object.keys(overlay).length > 0) await apiJson('/settings', { method: 'POST', token: TOKEN, body: overlay })
+}
 
 // 浏览器之外的直连 API（仅本机回环）：用于创建/清理验收临时记忆、核对撤销结果。
 async function apiJson(pathname, { method = 'GET', body, token } = {}) {
@@ -213,6 +244,11 @@ async function main() {
     })()`)
     await sleep(2500)
     check('记忆面板已打开', opened && (await evaluate(`document.querySelector('.dm_page') !== null`)))
+
+    // 记录真实数据根与 token（设置/备份快照恢复用）。
+    const statusDoc = await apiJson('/status')
+    ROOT = statusDoc?.root ?? ''
+    TOKEN = statusDoc?.key ?? ''
 
     // 1b) Tabs：ARIA 关联 + ←/→ 键盘切换跟随焦点（WAI-ARIA tablist 模式）
     const tabsAria = await evaluate(`(() => {
@@ -684,86 +720,134 @@ async function main() {
     check('恢复在线后列表重新加载', (await evaluate(`document.querySelectorAll('.dm_card').length`)) >= 0)
 
     // 8) 设置页：保留份数夹取 + 备份触发重载不覆盖防抖中的草稿（0.24.5）
+    // 破坏性用例保护：快照真实 settings overlay 与 backups 文件集，结束原样恢复并删除本次
+    // 新增备份（0.24.15 起不再 reset 用户设置/裁剪用户历史备份）。
     const settingsBefore = await apiJson('/settings')
+    const overlayBefore = settingsBefore?.overlay ?? {}
     const originalRetention = Number(settingsBefore?.effective?.backupRetention)
-    check('读取原始备份保留份数', Number.isInteger(originalRetention), String(originalRetention))
-    await evaluate(`(() => { const tab = document.querySelector('#dm-tab-settings'); if (tab) tab.click(); return Boolean(tab) })()`)
-    await sleep(1000)
-    check('设置页已打开', await evaluate(`document.querySelector('#dm-panel-settings') !== null && document.querySelectorAll('.dm_numinput').length > 0`))
-    const setRetention = async (value) => evaluate(`(() => {
-      const input = document.querySelectorAll('.dm_numinput')[0]
-      if (!input) return false
-      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
-      setter.call(input, ${JSON.stringify(String(value))})
-      input.dispatchEvent(new Event('input', { bubbles: true }))
-      return true
-    })()`)
-    // 8a) 输入 0：服务端夹取为 1，草稿应回收为 effective（界面值=实际值）。
-    const recallBeforeSettingsSave = requests.filter((u) => u.includes('/recall-preview')).length
-    const setZero = await setRetention(0)
-    await sleep(1800)
-    if (setZero !== true) console.log('  · 设置页保留份数输入框未就绪')
-    check('设置保存后召回预览随之刷新', requests.filter((u) => u.includes('/recall-preview')).length > recallBeforeSettingsSave, `${recallBeforeSettingsSave} -> ${requests.filter((u) => u.includes('/recall-preview')).length}`)
-    const clampedValue = await evaluate(`(() => { const input = document.querySelectorAll('.dm_numinput')[0]; return input ? input.value : null })()`)
-    const clampedDoc = await apiJson('/settings')
-    check('保留份数 0 被夹取为 1 且界面同步', String(clampedValue) === '1' && Number(clampedDoc?.effective?.backupRetention) === 1, `${clampedValue} / ${clampedDoc?.effective?.backupRetention}`)
-    // 8b) 改值后立刻点「立即备份」（600ms 防抖窗内）→ 重载设置不得覆盖草稿。
-    const targetRetention = Math.min(30, originalRetention + 1)
-    await setRetention(targetRetention)
-    await evaluate(`(() => { const b = [...document.querySelectorAll('button')].find(x => /立即备份|Back up now/.test((x.textContent || '').trim())); if (b) b.click(); return Boolean(b) })()`)
-    await sleep(3200)
-    const afterBackupValue = await evaluate(`(() => { const input = document.querySelectorAll('.dm_numinput')[0]; return input ? input.value : null })()`)
-    const afterBackupDoc = await apiJson('/settings')
-    check('备份触发的设置重载不覆盖未保存草稿', String(afterBackupValue) === String(targetRetention) && Number(afterBackupDoc?.effective?.backupRetention) === targetRetention, `${afterBackupValue} / ${afterBackupDoc?.effective?.backupRetention}`)
-    // 还原原始保留份数并切回记忆页。
-    await setRetention(originalRetention)
-    await sleep(1800)
-    const restoredSettings = await apiJson('/settings')
-    check('备份保留份数已还原', Number(restoredSettings?.effective?.backupRetention) === originalRetention, String(restoredSettings?.effective?.backupRetention))
+    const backupsBefore = listBackups()
+    try {
+      check('读取原始备份保留份数', Number.isInteger(originalRetention), String(originalRetention))
+      await evaluate(`(() => { const tab = document.querySelector('#dm-tab-settings'); if (tab) tab.click(); return Boolean(tab) })()`)
+      await sleep(1000)
+      check('设置页已打开', await evaluate(`document.querySelector('#dm-panel-settings') !== null && document.querySelectorAll('.dm_numinput').length > 0`))
+      const setRetention = async (value) => evaluate(`(() => {
+        const input = document.querySelectorAll('.dm_numinput')[0]
+        if (!input) return false
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+        setter.call(input, ${JSON.stringify(String(value))})
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+        return true
+      })()`)
+      const clickButton = async (pattern) => evaluate(`(() => {
+        const b = [...document.querySelectorAll('button')].find(x => ${pattern}.test((x.textContent || '').trim()))
+        if (b) b.click()
+        return Boolean(b)
+      })()`)
+      const readRetentionInput = () => evaluate(`(() => { const input = document.querySelectorAll('.dm_numinput')[0]; return input ? input.value : null })()`)
+      // 8a) 输入 0：服务端夹取为 1，草稿应回收为 effective（界面值=实际值）。
+      const recallBeforeSettingsSave = requests.filter((u) => u.includes('/recall-preview')).length
+      const setZero = await setRetention(0)
+      await sleep(1800)
+      if (setZero !== true) console.log('  · 设置页保留份数输入框未就绪')
+      check('设置保存后召回预览随之刷新', requests.filter((u) => u.includes('/recall-preview')).length > recallBeforeSettingsSave, `${recallBeforeSettingsSave} -> ${requests.filter((u) => u.includes('/recall-preview')).length}`)
+      const clampedValue = await readRetentionInput()
+      const clampedDoc = await apiJson('/settings')
+      check('保留份数 0 被夹取为 1 且界面同步', String(clampedValue) === '1' && Number(clampedDoc?.effective?.backupRetention) === 1, `${clampedValue} / ${clampedDoc?.effective?.backupRetention}`)
+      // 8b) 安全备份：先把「足够大的保留份数」落盘（保证轮转不会删真实历史备份），
+      //     再制造未保存草稿并点「立即备份」，验证重载不覆盖防抖中的草稿。
+      const safeRetention = Math.min(30, Math.max(originalRetention + 1, backupsBefore.length + 2))
+      await setRetention(safeRetention)
+      await sleep(1900)
+      await setRetention(Math.min(30, safeRetention + 1))
+      await sleep(150)
+      const backupCountBeforeTrigger = listBackups().length
+      await clickButton(/立即备份|Back up now/)
+      await sleep(280) // 备份+重载已返回，但 600ms 防抖保存尚未落地
+      const draftAtReload = await readRetentionInput()
+      const docAtReload = await apiJson('/settings')
+      check('备份触发的设置重载不覆盖未保存草稿', String(draftAtReload) === String(Math.min(30, safeRetention + 1)) && Number(docAtReload?.effective?.backupRetention) === safeRetention, `${draftAtReload} / ${docAtReload?.effective?.backupRetention}`)
+      check('备份未裁剪既有历史备份', listBackups().length >= backupCountBeforeTrigger + 1, `${backupCountBeforeTrigger} -> ${listBackups().length}`)
+      await sleep(1700) // 防抖保存落地：草稿按正常路径持久化（而非被重载丢弃）
+      const docAfterDraftSave = await apiJson('/settings')
+      check('备份后未保存草稿仍按正常路径保存', Number(docAfterDraftSave?.effective?.backupRetention) === Math.min(30, safeRetention + 1), String(docAfterDraftSave?.effective?.backupRetention))
+      await setRetention(originalRetention)
+      await sleep(1800)
+      const restoredSettings = await apiJson('/settings')
+      check('备份保留份数已还原', Number(restoredSettings?.effective?.backupRetention) === originalRetention, String(restoredSettings?.effective?.backupRetention))
 
-    // 8c) 保存失败 → footer 显示重试 → 点击重试成功（设置写入状态机 0.24.10）
-    await send('Network.emulateNetworkConditions', { offline: true, latency: 0, downloadThroughput: -1, uploadThroughput: -1 })
-    const failTarget = Math.min(30, originalRetention + 1)
-    await setRetention(failTarget)
-    await sleep(1600)
-    const failState = await evaluate(`(() => ({
-      footer: (document.querySelector('.dm_savestate') || {}).innerText || '',
-      retry: document.querySelector('.dm_linkbtn') !== null,
-      value: (document.querySelectorAll('.dm_numinput')[0] || {}).value || null,
-    }))()`)
-    check('保存失败显示重试而非谎报已保存', failState.retry && /重试|Retry/.test(failState.footer) && String(failState.value) === String(failTarget), JSON.stringify(failState))
-    await send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 })
-    await sleep(400)
-    await evaluate(`(() => { const b = document.querySelector('.dm_linkbtn'); if (b) b.click(); return Boolean(b) })()`)
-    await sleep(1700)
-    const retryState = await evaluate(`(() => ({
-      footer: (document.querySelector('.dm_savestate') || {}).innerText || '',
-      value: (document.querySelectorAll('.dm_numinput')[0] || {}).value || null,
-    }))()`)
-    const retryDoc = await apiJson('/settings')
-    check('失败后重试保存成功且状态回到已保存', /已保存|Saved/.test(retryState.footer) && Number(retryDoc?.effective?.backupRetention) === failTarget, JSON.stringify(retryState))
-    await setRetention(originalRetention)
-    await sleep(1600)
-
-    // 8d) 重置与在途保存互斥：改值后立刻点「恢复默认」→ 默认值生效、不被旧保存响应回滚
-    const defaultsRetention = Number(settingsBefore?.defaults?.backupRetention)
-    await setRetention(Math.min(30, originalRetention + 2))
-    await evaluate(`(() => { const b = [...document.querySelectorAll('.dm_settings button')].find(x => /恢复默认|Reset to defaults/.test((x.textContent || '').trim())); if (b) b.click(); return Boolean(b) })()`)
-    await sleep(2300)
-    const afterReset = await apiJson('/settings')
-    const resetState = await evaluate(`(() => {
-      const footer = (document.querySelector('.dm_savestate') || {}).innerText || ''
-      return {
-        footer,
-        saving: /保存中|Saving/.test(footer),
+      // 8c) 保存失败 → footer 显示重试 → 点击重试成功（设置写入状态机 0.24.10）
+      await send('Network.emulateNetworkConditions', { offline: true, latency: 0, downloadThroughput: -1, uploadThroughput: -1 })
+      const failTarget = Math.min(30, originalRetention + 1)
+      await setRetention(failTarget)
+      await sleep(1600)
+      const failState = await evaluate(`(() => ({
+        footer: (document.querySelector('.dm_savestate') || {}).innerText || '',
+        retry: document.querySelector('.dm_linkbtn') !== null,
         value: (document.querySelectorAll('.dm_numinput')[0] || {}).value || null,
-      }
-    })()`)
-    check('重置后在途保存不回滚默认值', Number(afterReset?.effective?.backupRetention) === defaultsRetention && String(resetState.value) === String(defaultsRetention), JSON.stringify({ ...resetState, effective: afterReset?.effective?.backupRetention }))
-    check('重置后不卡在保存中', resetState.saving === false && /已保存|Saved/.test(resetState.footer), JSON.stringify(resetState))
+      }))()`)
+      check('保存失败显示重试而非谎报已保存', failState.retry && /重试|Retry/.test(failState.footer) && String(failState.value) === String(failTarget), JSON.stringify(failState))
+      await send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 })
+      await sleep(400)
+      await evaluate(`(() => { const b = document.querySelector('.dm_linkbtn'); if (b) b.click(); return Boolean(b) })()`)
+      await sleep(1700)
+      const retryState = await evaluate(`(() => ({
+        footer: (document.querySelector('.dm_savestate') || {}).innerText || '',
+        value: (document.querySelectorAll('.dm_numinput')[0] || {}).value || null,
+      }))()`)
+      const retryDoc = await apiJson('/settings')
+      check('失败后重试保存成功且状态回到已保存', /已保存|Saved/.test(retryState.footer) && Number(retryDoc?.effective?.backupRetention) === failTarget, JSON.stringify(retryState))
+      await setRetention(originalRetention)
+      await sleep(1600)
 
-    await evaluate(`(() => { const tab = document.querySelector('#dm-tab-memories'); if (tab) tab.click(); return Boolean(tab) })()`)
-    await sleep(800)
+      // 8d) 重置与在途保存互斥：改值后立刻点「恢复默认」→ 默认值生效、不被旧保存响应回滚
+      const defaultsRetention = Number(settingsBefore?.defaults?.backupRetention)
+      await setRetention(Math.min(30, originalRetention + 2))
+      await clickButton(/恢复默认|Reset to defaults/)
+      await sleep(2300)
+      const afterReset = await apiJson('/settings')
+      const resetState = await evaluate(`(() => {
+        const footer = (document.querySelector('.dm_savestate') || {}).innerText || ''
+        return {
+          footer,
+          saving: /保存中|Saving/.test(footer),
+          value: (document.querySelectorAll('.dm_numinput')[0] || {}).value || null,
+        }
+      })()`)
+      check('重置后在途保存不回滚默认值', Number(afterReset?.effective?.backupRetention) === defaultsRetention && String(resetState.value) === String(defaultsRetention), JSON.stringify({ ...resetState, effective: afterReset?.effective?.backupRetention }))
+      check('重置后不卡在保存中', resetState.saving === false && /已保存|Saved/.test(resetState.footer), JSON.stringify(resetState))
+
+      // 8e) 慢网络竞态：防抖保存尚未落地时点「恢复默认」→ 旧草稿不得以更新 seq 覆盖 reset（0.24.15）
+      await evaluate(`(() => { const tab = document.querySelector('#dm-tab-settings'); if (tab) tab.click(); return true })()`)
+      await send('Network.emulateNetworkConditions', { offline: false, latency: 1800, downloadThroughput: -1, uploadThroughput: -1 })
+      await setRetention(Math.min(30, defaultsRetention + 2))
+      await sleep(250) // 600ms 防抖窗口内点重置
+      await clickButton(/恢复默认|Reset to defaults/)
+      await sleep(6000)
+      await send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 })
+      await sleep(500)
+      const afterRace = await apiJson('/settings')
+      const raceState = await evaluate(`(() => {
+        const footer = (document.querySelector('.dm_savestate') || {}).innerText || ''
+        return { footer, value: (document.querySelectorAll('.dm_numinput')[0] || {}).value || null }
+      })()`)
+      check('慢网络下「恢复默认」不被在途防抖保存回滚', Number(afterRace?.effective?.backupRetention) === defaultsRetention && String(raceState.value) === String(defaultsRetention) && /已保存|Saved/.test(raceState.footer), JSON.stringify({ ...raceState, effective: afterRace?.effective?.backupRetention }))
+    } finally {
+      // 真实数据根恢复：overlay 原值 + 删除本次新增备份；随后回到记忆页。
+      try {
+        await restoreSettingsOverlay(overlayBefore)
+      } catch (err) {
+        console.error('恢复设置 overlay 失败：', err)
+      }
+      removeNewBackups(backupsBefore)
+      const restoredOverlay = (await apiJson('/settings'))?.overlay ?? {}
+      check('真实设置 overlay 已恢复原值', JSON.stringify(restoredOverlay) === JSON.stringify(overlayBefore), JSON.stringify({ restoredOverlay, overlayBefore }))
+      check('真实 backups 文件集已恢复（无新增残留）', JSON.stringify(listBackups()) === JSON.stringify(backupsBefore), JSON.stringify({ before: backupsBefore, after: listBackups() }))
+      try {
+        await evaluate(`(() => { const tab = document.querySelector('#dm-tab-memories'); if (tab) tab.click(); return Boolean(tab) })()`)
+      } catch { /* ignore */ }
+      await sleep(800)
+    }
 
     // 9) 无 JS 异常 + 截图
     check('页面无未捕获 JS 异常', consoleLines.every((line) => !line.startsWith('exception:')), JSON.stringify(consoleLines.slice(0, 5)))

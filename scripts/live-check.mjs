@@ -5,14 +5,17 @@
  *   node scripts/live-check.mjs --port=51953
  *   node scripts/live-check.mjs            （默认端口 51953，或 env DSH_MEMORY_PORT）
  *
- * 安全：对真实数据根运行。测试条目带唯一标记并在末尾全部 forget 清理；
- * 设置 toggle 到反值验证后还原原值，绝不 reset 用户配置；backup 仅新增备份文件。
+ * 安全：对真实数据根运行。测试条目带唯一标记并在末尾/异常与中断时统一清理；
+ * 设置与备份在启动时快照、清理时原样恢复（先 reset 再写回原 overlay，删除本次新增
+ * 备份文件）；备份前临时抬高保留份数，保证轮转不会删除用户历史备份。
  * 仅打回环地址 127.0.0.1（与任务目标一致，不使用任何代理）。
  */
 import { createHash } from 'node:crypto'
-import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { withLock } from '../lib/lock.js'
+import { atomicWrite } from '../lib/store.js'
 
 const argv = process.argv.slice(2)
 const portArg = argv.find((a) => a.startsWith('--port='))?.split('=')[1] ?? argv.find((a) => /^\d+$/.test(a))
@@ -21,6 +24,9 @@ const BASE = `http://127.0.0.1:${PORT}`
 const API = `${BASE}/plugins/dsh-memory`
 const RUN = `__livecheck_${Date.now().toString(36)}__`
 const CLIENT_PATH = fileURLToPath(new URL('../client/client.js', import.meta.url))
+// 版本断言读 package.json（升版本无需手改脚本）。
+const PKG = JSON.parse(readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8'))
+const EXPECTED_VERSION = String(PKG.version)
 
 let pass = 0
 let fail = 0
@@ -72,17 +78,75 @@ async function main() {
 
   // 1. status：版本与 schema
   let token = ''
-  await check('status 报告 version=0.24.14 / schemaVersion=2 并下发 token', async () => {
+  await check(`status 报告 version=${EXPECTED_VERSION} / schemaVersion=2 并下发 token`, async () => {
     const { status, json } = await req('GET', '/status')
     ok('status HTTP 200', status === 200, `got ${status}`)
     ok('status.ok', json?.ok === true)
-    ok('version === 0.24.14', json?.version === '0.24.14', `got ${json?.version}`)
+    ok(`version === ${EXPECTED_VERSION}`, json?.version === EXPECTED_VERSION, `got ${json?.version}`)
     ok('schemaVersion === 2', json?.schemaVersion === 2, `got ${json?.schemaVersion}`)
     ok('token 非空', typeof json?.key === 'string' && json.key.length > 0)
     token = json?.key ?? ''
     statusRoot = json?.root ?? ''
   })
   if (!token) { console.log('\n无法取得 token，终止。'); finish(); return }
+
+  // ===== 真实数据根快照 + 幂等清理（正常结束/异常/中断都要恢复） =====
+  let settingsSnapshot = null
+  let backupsSnapshot = []
+  let cleaned = false
+  const listBackups = () => {
+    try {
+      return readdirSync(path.join(statusRoot, 'backups')).filter((n) => n.endsWith('.json')).sort()
+    } catch {
+      return []
+    }
+  }
+  const restoreSettings = async () => {
+    await req('POST', '/settings/reset', { token, body: {} })
+    if (settingsSnapshot && Object.keys(settingsSnapshot).length > 0) {
+      await req('POST', '/settings', { token, body: settingsSnapshot })
+    }
+  }
+  const pruneAccessLedger = () => {
+    if (!statusRoot || created.length === 0) return
+    const accessFile = path.join(statusRoot, 'access.json')
+    try {
+      withLock(path.join(statusRoot, '.lock-access'), () => {
+        let ledger = {}
+        try { ledger = JSON.parse(readFileSync(accessFile, 'utf8')) } catch { return }
+        let changed = false
+        for (const id of created) {
+          if (ledger[id]) { delete ledger[id]; changed = true }
+        }
+        if (changed) atomicWrite(accessFile, `${JSON.stringify(ledger, null, 2)}\n`)
+      }, { timeoutMs: 3000 })
+    } catch { /* best-effort */ }
+  }
+  const cleanupAll = async () => {
+    if (cleaned) return
+    cleaned = true
+    for (const id of created) await req('POST', '/forget', { token, body: { id } })
+    pruneAccessLedger()
+    try { await restoreSettings() } catch { /* ignore */ }
+    try {
+      const dir = path.join(statusRoot, 'backups')
+      for (const name of listBackups()) {
+        if (!backupsSnapshot.includes(name)) rmSync(path.join(dir, name), { force: true })
+      }
+    } catch { /* ignore */ }
+  }
+  try {
+    settingsSnapshot = (await req('GET', '/settings')).json?.overlay ?? {}
+    backupsSnapshot = listBackups()
+  } catch { /* ignore */ }
+  const abortAndExit = (code, err) => {
+    if (err !== undefined) console.error('live-check 中断：', err)
+    cleanupAll().catch(() => {}).then(() => finish(code))
+  }
+  process.once('SIGINT', () => { abortAndExit(130) })
+  process.once('SIGTERM', () => { abortAndExit(143) })
+  process.once('uncaughtException', (err) => { abortAndExit(1, err) })
+  process.once('unhandledRejection', (err) => { abortAndExit(1, err) })
 
   // 2. CRUD 往返（写路由包 {result}；save 返回 {entry, deduplicated}）
   let idA = ''
@@ -421,15 +485,35 @@ async function main() {
   })
 
   // 5. backup / export / import dry-run / workspaces
-  await check('backup / export / import dry-run / workspaces', async () => {
+  await check('backup / export / import dry-run / workspaces（不裁剪历史备份，0.24.15）', async () => {
+    // 先抬高保留份数再备份：确保轮转不会删除用户已有备份（清理阶段会恢复原设置）。
+    const settingsNow = (await req('GET', '/settings')).json
+    const retentionNow = Number(settingsNow?.effective?.backupRetention) || 7
+    const safeRetention = Math.max(retentionNow, backupsSnapshot.length + 2)
+    await req('POST', '/settings', { token, body: { backupRetention: safeRetention } })
+    const beforeTrigger = listBackups().length
     const bk = await req('POST', '/backup', { token, body: {} })
     ok('backup 返回 file', typeof bk.json?.result?.file === 'string')
+    ok('backup 未裁剪既有历史备份', listBackups().length >= beforeTrigger + 1, `${beforeTrigger} -> ${listBackups().length}`)
     const ex = await req('GET', '/export')
     ok('export format', ex.json?.format === 'dsh-memory-export')
     const im = await req('POST', '/import', { token, body: { dryRun: true, entries: [{ content: `${RUN} 导入预览`, scope: 'global' }] } })
     ok('import dryRun imported=1', im.json?.result?.dryRun === true && im.json?.result?.imported === 1)
     const ws = await req('GET', '/workspaces')
     ok('workspaces 数组', Array.isArray(ws.json?.workspaces))
+  })
+
+  await check('>1MB 导入备份可恢复（0.24.15）', async () => {
+    const bigContent = `${RUN} 大备份 ` + 'x'.repeat(1_200_000)
+    const dry = await req('POST', '/import', { token, body: { dryRun: true, entries: [{ content: bigContent, scope: 'global' }] } })
+    ok('大 body dryRun HTTP 200', dry.status === 200, `got ${dry.status}`)
+    ok('大 body dryRun 返回预览计划', dry.json?.result?.imported === 1 && Array.isArray(dry.json?.result?.entries))
+    const real = await req('POST', '/import', { token, body: { entries: [{ content: bigContent, scope: 'global' }] } })
+    ok('大 body 落盘 HTTP 200', real.status === 200, `got ${real.status}`)
+    ok('落盘响应不回传 entries', real.status === 200 && real.json?.result?.entries === undefined)
+    const found = await req('GET', `/entries?query=${encodeURIComponent(`${RUN} 大备份`)}&scope=global`)
+    for (const e of found.json?.entries ?? []) created.push(e.id)
+    ok('大备份条目已建立', (found.json?.entries ?? []).length === 1, JSON.stringify(found.json).slice(0, 160))
   })
 
   await check('POST /import 拒绝非法 expires（0.24.1）', async () => {
@@ -472,37 +556,30 @@ async function main() {
     ok('bundle 含 0.24.5 设置解包与标签收敛', code.includes('unwrapResult') && code.includes('parseTags'))
     ok('bundle 含 0.24.5 ARIA Tabs', code.includes('dm-panel-settings') && code.includes('onTabKey'))
     // 0.24.10：设置写入状态机（失败重试、重置互斥）。
+    ok('bundle 含 0.24.15 大备份导入', code.includes('IMPORT_MAX_BYTES') && code.includes('IMPORT_TIMEOUT_MS'))
     ok('bundle 含 0.24.14 刷新解耦', code.includes('defaultViewSelection') && code.includes('refreshRecall'))
     ok('bundle 含 0.24.12 可访问性与导入', code.includes('parseImportText') && code.includes('closeToast') && code.includes('onCategoryKey'))
     ok('bundle 含 0.24.11 面板正确性', code.includes('savedToastKey') && code.includes('exportParams') && code.includes('filterByTag') && code.includes('emptyScopeTitle'))
     ok('bundle 含 0.24.10 设置状态机', code.includes('settingsStatusNext') && code.includes('dm_linkbtn'))
   })
 
-  // 7. 清理测试条目
-  await check('清理测试条目', async () => {
-    for (const id of created) await req('POST', '/forget', { token, body: { id } })
+  // 7. 清理测试条目 + 恢复设置/备份快照（正常结束与异常中断共用同一幂等清理）
+  await check('清理测试条目并恢复设置/备份快照', async () => {
+    await cleanupAll()
     const left = await req('GET', `/entries?query=${encodeURIComponent(RUN)}&include_superseded=true&include_archived=true&include_expired=true`)
     ok('测试条目已全部清理', (left.json?.entries ?? []).length === 0, `残留 ${(left.json?.entries ?? []).length}`)
-    // 账本里也清掉本次测试条目，避免长期积累（best-effort）。
-    try {
-      const accessFile = path.join(statusRoot, 'access.json')
-      const ledger = JSON.parse(readFileSync(accessFile, 'utf8'))
-      let changed = false
-      for (const id of created) {
-        if (ledger[id]) { delete ledger[id]; changed = true }
-      }
-      if (changed) writeFileSync(accessFile, `${JSON.stringify(ledger, null, 2)}\n`, 'utf8')
-      ok('账本测试条目已清理', true)
-    } catch { ok('账本测试条目已清理', true) }
+    const restoredOverlay = (await req('GET', '/settings')).json?.overlay ?? {}
+    ok('设置 overlay 已恢复原值', JSON.stringify(restoredOverlay) === JSON.stringify(settingsSnapshot), JSON.stringify({ restoredOverlay, settingsSnapshot }))
+    ok('backups 无本次新增残留', listBackups().every((n) => backupsSnapshot.includes(n)), JSON.stringify({ before: backupsSnapshot, after: listBackups() }))
   })
 
   finish()
 }
 
-function finish() {
+function finish(exitCode) {
   console.log(`\n结果：${pass} 通过，${fail} 失败`)
   if (failures.length) console.log('失败项：\n  - ' + failures.join('\n  - '))
-  process.exit(fail > 0 ? 1 : 0)
+  process.exit(typeof exitCode === 'number' ? exitCode : (fail > 0 ? 1 : 0))
 }
 
 main().catch((err) => { console.error('live-check 异常：', err); process.exit(1) })

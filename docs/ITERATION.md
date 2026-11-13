@@ -23,7 +23,7 @@ This file is the self-iteration ledger for dsh-memory: per-round increments, ver
 |---|---|---|
 | `tests/*.test.mjs` | 纯逻辑/服务/路由/存储/锁/设置/守卫/客户端纯函数 | `node --test tests/*.test.mjs` |
 | `scripts/live-check.mjs` | 运行中宿主回环 API 全链路＋客户端 bundle rev | `--port=` 或 `DSH_MEMORY_PORT`；测试条目自动清理、设置 toggle 后还原 |
-| `scripts/gui-check.mjs` | 真实浏览器面板：过滤请求参数、下拉键盘、弹窗 Esc 草稿 | `--url=`；Edge headless + CDP；cookie 由 `<DSH_HOME>/.credentials.yaml` 自签；只读＋可逆操作 |
+| `scripts/gui-check.mjs` | 真实浏览器面板：过滤请求参数、下拉键盘、弹窗 Esc 草稿 | `--url=`；Edge headless + CDP；cookie 由 `<DSH_HOME>/.credentials.yaml` 自签；临时记忆清理，设置/备份用例前后快照恢复（0.24.15 起） |
 
 环境注意：GUI 端口每次启动不同，以运行时上下文为准；PowerShell 5.1 输出中文需 `[Console]::OutputEncoding=[Text.Encoding]::UTF8`；`git push` 的 stderr 进度可能被 PS 报 NonZeroExit，需看内容判断。
 
@@ -39,7 +39,7 @@ This file is the self-iteration ledger for dsh-memory: per-round increments, ver
 - [x] **`memory_update` 同时带 `scope`（移动）时 `supersedes` 被静默丢弃**（0.24.2）。
 - [x] **导入跨作用域 id 唯一性**（0.24.2）：导入前扫描全部已占用 id。
 - [x] **`export` 以目录为权威**（0.24.2）。
-- [ ] **`detectSecret` 只查 content**：tags 可绕过机密硬拒。
+- [x] **`detectSecret` 只查 content**：tags 可绕过机密硬拒（0.24.6 已修复：正文＋标签统一检查）。
 
 ### P2 性能
 
@@ -62,7 +62,7 @@ This file is the self-iteration ledger for dsh-memory: per-round increments, ver
 - [x] **非法 scope 回 400**（0.24.6）：`entries`/`stats`/`similar` 统一校验，service 抛 `invalid`。
 - [x] **`update` 不刷新 workspaces/index.json 的 `lastSeen`**（0.24.6）。
 - [x] **`workingDirectory` 在 `apply` 时一次性捕获**（0.24.6）：改为每次 `ctx.get`，晚就绪/跟随 cd 均生效，并有 fake-ctx 集成回归。
-- [x] **命中语义口径对齐**（0.24.6）：明确检索命中写 `last_access`/`hit_count`，注入不写盘；DETAIL 已修正。
+- [x] **命中语义口径对齐**（0.24.6 明确检索命中写 `last_access`/`hit_count`；0.24.7 起注入命中同样入 `access.json` 账本）。
 - [x] **机密检查只查正文**（0.24.6）：正文＋标签统一硬拒。
 - [x] **命中簿记迁移到独立 `access.json` 账本**（0.24.7）：`withLock` 保护＋原子写＋签名缓存；不再改写条目 Markdown（消除读-改-写窗口与写放大）；检索与系统提示注入均入账（节流 ≤1 次/小时）；旧文件命中字段兼容、坏账本自愈。
 
@@ -94,6 +94,41 @@ This file is the self-iteration ledger for dsh-memory: per-round increments, ver
 **待验证**
 - [x] `defaultView='workspace'` 时若 `SessionSummary.cwd` 缺失且 `/cwd` 晚返回，`viewInitialized` 已置 true → 默认视图不生效（0.24.14 已修复：等 cwd 解析后再应用）。
 - [ ] 撤销删除使用列表快照；若删除前条目已被 agent 更新，撤销会回滚为旧内容（已知限制；未来若引入 trash 语义再处理）。
+
+### 第三轮双端审计 backlog（2026-11-13，基于 0.24.14）
+
+0.24.15 已清「脚本零污染 + 备份可恢复」：gui-check 设置/备份用例前后快照恢复真实 overlay 与 backups、live-check 幂等清理＋SIGINT/异常恢复＋账本锁内清理＋版本读 package.json；写路由 body 上限 1MB→32MB、导入落盘响应不再回传全量 entries、客户端导入预检 32MB + 超时 180s；修复「恢复默认」被防抖保存在慢网络下回滚、defaultView 使用权威 /cwd 后再 ready。其余按优先级：
+
+**P1**
+- [ ] 脚本彻底隔离：默认只读/临时 `DSH_HOME` 跑破坏性用例，`--fail-at=` 失败注入，前后数据根快照 diff=0 自检。
+- [ ] import 落盘非原子：中途 IO 失败＝半套恢复 + 500 原样泄漏路径；需预检/回滚或结构化 `failed` 列表（code=io，消息脱敏）。
+- [ ] 大库读路径：`searchDetailed`/`stats` 各两遍全量扫描（5000 条约 1s 冻结宿主）→ 单遍 `collectEntries` 同时产出 visible/hidden/byStatus。
+
+**P2**
+- [ ] 相似查重 O(N²)（2000+ 条冻结数秒）→ 共享特征倒排候选 + 扫描上限/分片。
+- [ ] 大导入写放大 + 同步锁：每条 ensureMeta/读写 index.json；`touchAccess` 锁等待 5s 冻结事件循环 → 合并索引写、簿记短超时、busy 503。
+- [ ] `access.json` 无 GC：手工删文件后同 id 重导入继承幽灵命中；账本无界增长 → prune（list/status/backup/import 后惰性）。
+- [ ] `backups/` 按任意 `*.json` 轮转与 lastBackup：会删用户手放导出、外来未来 mtime 永久阻塞自动备份 → 只匹配 `dsh-memory-*.json`。
+- [ ] v1→v2 迁移的强制备份失败被静默吞掉；`maybeAutoBackup` 不可写抛错 → 降级 + status 暴露 migrationPending/backupError。
+- [ ] 导入悬垂 `superseded_by/supersedes` 指针使条目默认永久隐藏 → 丢弃不存在目标的指针并计数 repaired。
+- [ ] 常驻 tabpanel 导致 `/recall-preview` 初始化与设置保存各多一次（隐藏面板仍挂载即加载）→ RecallPreview 仅激活时加载。
+- [ ] 撤销吐司：倒计时条不随新吐司重启（Toast key 未传给组件）；消失后焦点掉 body；hover/focus 不暂停计时。
+- [ ] 分页时区块计数＝当前页条数，与统计条总数矛盾。
+- [ ] 批量选择浮栏在 DOM 末尾，键盘用户实际不可达（移入工具栏附近 + aria-live）。
+- [ ] 设置页滑杆拖动触发整页（含常驻列表）逐帧重渲染 → 本地值 + 提交时 onChange。
+- [ ] 大库导入可能超过客户端 15s 超时（0.24.15 导入单独 180s 已缓解，仍无进度/幂等确认）。
+
+**P3**
+- [ ] 删除「损坏的后继文件」不清理前驱 `superseded_by`，旧记忆永久隐藏。
+- [ ] hidden 归类顺序（superseded→archived→expired）与 `entryStatus`（→expired→archived）不一致。
+- [ ] `/stats` 不接收 status/include_*，「全部状态」视图下头部总数与列表不一致。
+- [ ] 编辑/删除确认弹窗写请求期间无「进行中」反馈（最长 15s 静默）。
+- [ ] 搜索框清空按钮 aria-label 误用「清除筛选」；标签过滤输入框无清空入口。
+- [ ] live-check bundle 标记仍为字符串包含断言（版本已动态化）。
+
+**待验证**
+- [ ] 常驻 tabpanel 共享单一滚动容器：切设置页会把列表 scrollTop 夹小，切回无法恢复。
+- [ ] `backup()` 导出无锁快照：导入持 `.lock-import` 写盘期间可能备份到半批数据；同毫秒两次备份同名覆盖；`atomicWrite` 失败残留临时文件。
 
 ### 明确不做
 

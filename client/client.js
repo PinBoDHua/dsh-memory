@@ -352,6 +352,10 @@ function settingsStatusNext(status, event) {
   var UNDO_MS = 6000
   // 回环请求超时：宿主事件循环被大导入等阻塞或连接半开时，面板不能永久转圈/禁用按钮。
   var REQUEST_TIMEOUT_MS = 15000
+// 导入/恢复备份可能很大（1500 条约 1.4MB），预检上限与服务端写路由一致（32MB），
+// 否则用户会看到「请求数据过大」而实际备份完全可用。请求超时对导入单独放宽。
+var IMPORT_MAX_BYTES = 32 * 1024 * 1024
+var IMPORT_TIMEOUT_MS = 180000
   var TOAST_QUEUE_MAX = 3
 
   var ZH = {
@@ -1214,9 +1218,11 @@ function settingsStatusNext(status, event) {
       function createApi(tokenRef) {
         function request(path, options) {
           var opts = Object.assign({ credentials: 'same-origin', cache: 'no-store' }, options)
+          var timeoutMs = Number(opts.timeoutMs) > 0 ? Number(opts.timeoutMs) : REQUEST_TIMEOUT_MS
+          delete opts.timeoutMs
           // 超时即中止：超时/网络失败统一转成带 code 的错误，交给 errorText 本地化。
           if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
-            opts.signal = AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+            opts.signal = AbortSignal.timeout(timeoutMs)
           }
           return fetch(path, opts).catch(function (err) {
             var timedOut = err && (err.name === 'TimeoutError' || err.name === 'AbortError')
@@ -1244,11 +1250,12 @@ function settingsStatusNext(status, event) {
             })
           })
         }
-        function post(path, input) {
+        function post(path, input, timeoutMs) {
           return request(path, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'X-RPC-Key': tokenRef.current },
             body: JSON.stringify(input || {}),
+            timeoutMs: timeoutMs,
           })
         }
         return {
@@ -1267,7 +1274,7 @@ function settingsStatusNext(status, event) {
           save: function (input) { return post(API_BASE + '/save', input) },
           update: function (input) { return post(API_BASE + '/update', input) },
           forget: function (input) { return post(API_BASE + '/forget', input) },
-          import: function (input) { return post(API_BASE + '/import', input) },
+          import: function (input) { return post(API_BASE + '/import', input, IMPORT_TIMEOUT_MS) },
         }
       }
 
@@ -2257,12 +2264,13 @@ function settingsStatusNext(status, event) {
             setWorkspaces(doc.workspaces || [])
             var ref = currentSessionRef(ctx)
             setCurrentCwd(ref.cwd)
-            // 对齐会话有效目录（跟随 cd，与 agent 工具一致）；失败回退初始目录。
-            if (ref.id) {
-              api.cwd(ref.id).then(function (c) {
-                if (c && typeof c.cwd === 'string' && c.cwd !== '') setCurrentCwd(c.cwd)
-              }).catch(function () {})
-            }
+            // 等权威 cwd（跟随 cd）解析完再置 ready：否则首屏会用会话快照的旧 cwd
+            // 拉一次列表，且 defaultView='workspace' 会永久锁在旧目录。
+            if (!ref.id) return undefined
+            return api.cwd(ref.id).then(function (c) {
+              if (c && typeof c.cwd === 'string' && c.cwd !== '') setCurrentCwd(c.cwd)
+            }).catch(function () { /* /cwd 不可用时回退会话快照 */ })
+          }).then(function () {
             setPhase('ready')
           }).catch(function (err) {
             setErrorText(errorText(err, t))
@@ -2321,7 +2329,9 @@ function settingsStatusNext(status, event) {
         // 单次保存（防抖到期/失败重试共用）：seq 让重置/重载失效在途响应，
         // token 保证「保存中」只在最后一次请求结束时清除（不会卡死或被旧响应提前清掉）。
         var saveDraft = useCallback(function () {
-          if (!draftRef.current) return
+          // 防抖到期时用户意图可能已改变（比如刚点了「恢复默认」）：dirty 已被清掉就
+          // 不再落盘，否则旧草稿会以更新的 seq 覆盖 reset 结果。
+          if (!draftRef.current || !dirtyRef.current) return
           dirtyRef.current = false
           var seq = ++settingsSeq.current
           var token = ++saveTokenRef.current
@@ -2360,17 +2370,20 @@ function settingsStatusNext(status, event) {
 
         function resetSettings() {
           if (busy) return
-          // 让在途保存/加载的响应失效：重置结果不能被旧保存响应回滚。
-          ++settingsSeq.current
+          // 让在途保存/加载与已排队的防抖保存都失效：重置结果不能被旧草稿回滚。
+          dirtyRef.current = false
+          var seq = ++settingsSeq.current
           applySettingsEvent({ type: 'reset-start' })
           setBusy(true)
           api.resetSettings().then(function (view) {
+            if (seq !== settingsSeq.current) return
             setSettings(view)
             setDraft(view.effective)
             dirtyRef.current = false
             applySettingsEvent({ type: 'reset-ok' })
             showToast('ok', t('resetDone'))
           }).catch(function (err) {
+            if (seq !== settingsSeq.current) return
             applySettingsEvent({ type: 'reset-fail', error: errorText(err, t) })
             writeFailure(err)
           }).then(function () { setBusy(false) })
@@ -2635,7 +2648,7 @@ function settingsStatusNext(status, event) {
           var file = e.target.files && e.target.files[0]
           e.target.value = ''
           if (!file || busy) return
-          if (file.size > 1024 * 1024) {
+          if (file.size > IMPORT_MAX_BYTES) {
             showToast('error', t('errBodyTooLarge'))
             return
           }

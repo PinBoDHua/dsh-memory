@@ -49,7 +49,7 @@ Cross-session long-term memory for DeepSeek Harness: durable user preferences, p
 ├── meta.json                 # 存储元数据：schemaVersion/createdAt（首次写入时创建）
 ├── access.json               # 命中账本：id → { at, count }（检索/注入命中，节流 ≤1 次/小时；可选）
 ├── settings.json             # 设置覆盖层（可选；缺失＝用默认/profile 基线）
-├── backups/                  # 自动/手动备份的全量导出 JSON（按保留份数裁剪）
+├── backups/                  # 自动/手动备份的全量记忆导出 JSON（按保留份数裁剪；不含设置/账本元数据）
 ├── global/<id>.md
 └── workspaces/
     ├── index.json            # 目录哈希 → 工作区路径对照（仅供排查）
@@ -132,7 +132,7 @@ profile 插件行 `config`（`cordis.patch.yml` 中 `id: dsh-memory` 条目）�
 - 自动记录依赖模型遵循注入指引与动态提示，不是后台独立提取（零额外模型调用）。
 - 记忆按 home 共享：同一台机器上的所有 profile 看到同一份记忆。
 - 移动仅支持 global ↔ 当前工作区（工具按会话有效目录，面板按所选工作区）；不支持在两个不同工作区之间直接移动。
-- 导入时，工作区路径未知（索引损坏）的 workspace 条目会被拒绝（no-workspace）；可手工把文件放回对应目录。
+- 导入时，工作区条目优先按权威 `workspaceKey` 定位目录——索引损坏/缺失（cwd 未知）也能恢复到原工作区；只有**旧格式导出（无 workspaceKey）且 cwd 缺失**的条目会被拒绝（no-workspace），可手工把文件放回对应目录。
 - 面板「当前工作区」已与会话有效目录对齐：初始取 SessionSummary.cwd，再经 `/cwd` 路由按 workingDirectory 服务（跟随 cd）刷新，与 agent 工具口径一致；agent 侧对 workingDirectory 按次实时查询（服务晚于插件就绪也能生效），服务不可用时回退初始目录。
 - 索引损坏导致路径未知的工作区（cwd:null）在下拉中显示为「未知工作区」但不可选；其记忆在该工作区为会话工作目录时仍对 agent 工具与召回注入可见，也可直接编辑对应目录下的文件。
 - 与 DSH 既有机制互补：不接管 goals、skills、AGENTS.md，也不索引会话历史。

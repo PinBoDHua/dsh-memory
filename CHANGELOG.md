@@ -3,6 +3,20 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.24.15] - 2026-11-13
+
+### 修复 Fixed（第三轮审计：脚本零污染 + 备份可恢复）
+- **备份恢复通道 1MB 上限**：写路由 body 上限 1MB→32MB（1500 条备份约 1.4MB，此前「有备份但恢复不了」）；客户端导入文件预检同步 32MB、导入请求超时单独放宽到 180s。
+- **导入落地响应瘦身**：落盘模式不再回传全量 `entries`（客户端只用计数），大导入少一次 MB 级序列化与传输；dryRun 仍返回预览计划。
+- **gui-check 不再破坏真实数据**：设置页重置/备份用例运行前快照真实 `settings` overlay 与 `backups/` 文件集，结束原样恢复 overlay 并删除本次新增备份；备份前先把足够大的保留份数落盘，轮转不再删除用户历史备份；新增「慢网络下恢复默认不被防抖保存回滚」回归。
+- **live-check 失败安全**：幂等清理改为正常结束 + 异常 + SIGINT/SIGTERM 共用；settings 快照恢复、本次新增备份删除、账本清理改走跨进程锁 + 原子写；版本断言改读 `package.json`；备份前临时抬高保留份数避免裁剪历史备份；新增「>1MB 导入备份可恢复」端到端检查。
+- **慢网络重置竞态**：`resetSettings` 清 dirty 并让在途响应失效、`saveDraft` 在 dirty 已清时不再落盘——「恢复默认」不会被防抖中的旧草稿以更新 seq 覆盖。
+- **defaultView 权威 cwd**：`loadInitial` 等 `/cwd` 解析（跟随 cd）后再置 ready，避免默认视图锁在会话快照的旧目录、首屏多一轮列表请求。
+- 文档纠错：workspaceKey 导入语义、注入命中也入账、detectSecret 已修 tags、备份仅含记忆条目、gui-check 安全说明。
+
+### 新增 Added
+- routes 测试：>1MB import body 200 全量落盘、落盘响应不含 entries / dryRun 含；413 上限同步为 32MB。
+
 ## [0.24.14] - 2026-11-13
 
 ### 修复 Fixed
