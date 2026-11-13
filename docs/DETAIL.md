@@ -25,7 +25,7 @@ Cross-session long-term memory for DeepSeek Harness: durable user preferences, p
 
 - 入口：左侧边栏「记忆」图标 → 主区域面板（与 Plugins 页同级），含「记忆 / 设置」双标签。
 - 视觉：「记忆星丛 Memory Atlas」——靛紫渐变主色＋分类三色（偏好琥珀/事实湛蓝/决策翡翠）＋玫红警示；环境光晕背景、品牌徽章、分类色轨卡片＋图标勋章、悬停浮起、入场级联动画、骨架屏、星座插画空态、吸顶毛玻璃工具栏、自定义滚动条；全部下拉为自定义无障碍 listbox（portal 浮层、图标＋选中勾、完整键盘导航），彻底主题化、无系统原生弹出层；深色跟随宿主 `body[data-ds-dark-theme]`，动效尊重 `prefers-reduced-motion`（并可在设置中关闭），窄屏响应式。
-- 记忆标签能力：作用域切换（全局＋当前工作区 / 仅全局 / 各已知工作区）、统计条（总数＋分类分布条＋计数筛选 chips＋全局/工作区计数）、关键词搜索（300ms 防抖、相关度排序、`/` 快捷聚焦、一键清空）、分页（每页条数可设 20/50/100）、新建/编辑（内容字数统计、分类单选卡片、标签、作用域、Ctrl/⌘+Enter 保存）、删除二次确认＋6 秒撤销（单条/批量，原样恢复 id/时间戳）、批量选择浮栏（Esc 清除）、标签点击直达搜索、相对时间（可设绝对时间，悬停见绝对时间）、条目详情（点击正文展开：创建/更新时间、来源会话、复制 id）、导出 JSON、导入（dry-run 预览瓦片＋确认）、图标吐司（动作按钮＋倒计时进度条）。
+- 记忆标签能力：作用域切换（全局＋当前工作区 / 仅全局 / 各已知工作区）、统计条（总数＋分类分布条＋计数筛选 chips＋全局/工作区计数）、关键词搜索（300ms 防抖、相关度排序、`/` 快捷聚焦、一键清空）、分页（每页条数可设 20/50/100）、新建/编辑（内容字数统计、分类单选卡片、标签、作用域、编辑含来源选择「显式要求/主动沉淀」、Ctrl/⌘+Enter 保存）、删除二次确认＋6 秒撤销（单条/批量，原样恢复 id/时间戳）、批量选择浮栏（Esc 清除）、标签点击直达搜索、相对时间（可设绝对时间，悬停见绝对时间）、条目详情（点击正文展开：创建/更新时间、来源会话、复制 id）、导出 JSON、导入（dry-run 预览瓦片＋确认）、图标吐司（动作按钮＋倒计时进度条）。
 - 设置标签能力：见下「设置 Settings」。
 - 数据面：宿主 `webServer` 命名路由 `/plugins/dsh-memory/{status,entries,workspaces,cwd,stats,export,settings,settings/reset,backup,save,update,forget,import}`，浏览器同源 fetch；进程级 token（status 下发），写操作校验 `X-RPC-Key`，全部路由仅回环可达。
 - 一个操作，两个调用方：面板与 agent 工具调用同一 `lib/service.js`，语义与失败原因完全一致。
@@ -35,9 +35,9 @@ Cross-session long-term memory for DeepSeek Harness: durable user preferences, p
 
 | 工具 | 作用 |
 |---|---|
-| `memory_save` | 写入一条记忆（content 必填；category=preference/fact/decision；scope=global/workspace，默认 workspace；tags 可选；origin=manual/auto；supersedes=旧id 取代；expires=YYYY-MM-DD；pinned）。同作用域完全相同的内容自动去重（仅针对未取代条目）。 |
+| `memory_save` | 写入一条记忆（content 必填；category=preference/fact/decision；scope=global/workspace，默认 workspace；tags 可选；origin 必填 manual/auto；supersedes=旧id 取代；expires=YYYY-MM-DD；pinned）。同作用域完全相同的内容自动去重（仅针对未取代条目）。 |
 | `memory_search` | 关键词检索（大小写不敏感、多词 AND、CJK bigram 模糊），非空查询按相关度×衰减排序；空查询＝按更新时间列出；可按 scope/category 过滤，limit 默认 20；include_superseded/include_expired/include_archived 找回隐藏态（默认 false）。 |
-| `memory_update` | 按 id 新覆旧（content/category/tags 可选更新）；可选 `scope` 在 global ↔ 当前工作区之间移动；supersedes 取代另一条、expires 设过期日（空串清除）、pinned 钉选、archived 归档/恢复。 |
+| `memory_update` | 按 id 新覆旧（content/category/tags 可选更新）；可选 `scope` 在 global ↔ 当前工作区之间移动；supersedes 取代另一条、expires 设过期日（空串清除）、pinned 钉选、archived 归档/恢复、origin 修正来源标记。 |
 | `memory_forget` | 按 id 永久删除。 |
 
 ## 存储 Storage
@@ -73,7 +73,7 @@ pinned: true
 这条项目使用 pnpm 而不是 npm。
 ```
 
-v2 可选字段（`origin`/`supersedes`/`superseded_by`/`superseded_at`/`expires`/`pinned`/`archived`/`last_access`/`hit_count`）**稀疏存储**：仅在显式设置时写入文件，旧文件无需改写、读取时懒缺省（缺 origin 视为 manual、缺 pinned/archived 视为 false）。
+v2 可选字段（`origin`/`supersedes`/`superseded_by`/`superseded_at`/`expires`/`pinned`/`archived`/`last_access`/`hit_count`）**稀疏存储**：仅在显式设置时写入文件，旧文件无需改写、读取时懒缺省（缺 origin 视为 manual、缺 pinned/archived 视为 false）；origin 可经 `memory_update` 或面板编辑弹窗显式修正（0.10.0 起 save 工具必填 origin，面板文案「显式要求/主动沉淀」）。
 
 写入为「临时文件＋改名」的原子写；每次操作实时重读磁盘，因此 DSH 运行中手工编辑文件也会立即生效。损坏的文件会被跳过而不是报错。
 

@@ -60,11 +60,11 @@ async function main() {
 
   // 1. status：版本与 schema
   let token = ''
-  await check('status 报告 version=0.9.0 / schemaVersion=2 并下发 token', async () => {
+  await check('status 报告 version=0.10.0 / schemaVersion=2 并下发 token', async () => {
     const { status, json } = await req('GET', '/status')
     ok('status HTTP 200', status === 200, `got ${status}`)
     ok('status.ok', json?.ok === true)
-    ok('version === 0.9.0', json?.version === '0.9.0', `got ${json?.version}`)
+    ok('version === 0.10.0', json?.version === '0.10.0', `got ${json?.version}`)
     ok('schemaVersion === 2', json?.schemaVersion === 2, `got ${json?.schemaVersion}`)
     ok('token 非空', typeof json?.key === 'string' && json.key.length > 0)
     token = json?.key ?? ''
@@ -82,6 +82,23 @@ async function main() {
     if (idA) created.push(idA)
     const q = await req('GET', `/entries?query=${encodeURIComponent(RUN)}`)
     ok('entries 检索命中', (q.json?.entries ?? []).some((e) => e.id === idA))
+  })
+
+  await check('update origin 修正往返（0.10.0）', async () => {
+    const up = await req('POST', '/update', { token, body: { id: idA, origin: 'manual' } })
+    ok('update origin HTTP 200', up.status === 200, `got ${up.status}`)
+    ok('update 返回 origin=manual', up.json?.result?.origin === 'manual', JSON.stringify(up.json))
+    const q = await req('GET', `/entries?query=${encodeURIComponent(RUN)}`)
+    ok('entries 反映 origin=manual', (q.json?.entries ?? []).some((e) => e.id === idA && e.origin === 'manual'))
+    const back = await req('POST', '/update', { token, body: { id: idA, origin: 'auto' } })
+    ok('origin 还原 auto', back.json?.result?.origin === 'auto')
+  })
+
+  await check('save 缺 origin 服务层兜底 manual（0.10.0）', async () => {
+    const { json } = await req('POST', '/save', { token, body: { content: `${RUN} 缺省来源`, scope: 'global' } })
+    const idD = json?.result?.entry?.id ?? ''
+    if (idD) created.push(idD)
+    ok('缺 origin 兜底 manual', json?.result?.entry?.origin === 'manual', JSON.stringify(json))
   })
 
   let idB = ''
@@ -157,7 +174,8 @@ async function main() {
     const b = await fetch(url)
     const code = await b.text()
     ok('bundle HTTP 200', b.status === 200, `got ${b.status} rev=${rev}`)
-    ok('bundle 含 0.9.0 新代码标记 autoExtractHint', code.includes('autoExtractHint'))
+    ok('bundle 含 0.9.0 代码标记 autoExtractHint', code.includes('autoExtractHint'))
+    ok('bundle 含 0.10.0 新文案 显式要求/Requested', code.includes('显式要求') && code.includes('Requested'))
   })
 
   // 7. 清理测试条目

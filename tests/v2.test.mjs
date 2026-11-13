@@ -206,6 +206,16 @@ test('service.update archives/restores; save rejects invalid expires', () => {
   assert.throws(() => service.save({ content: 'x', scope: 'global', expires: '2026-02-30' }), (e) => e.code === 'invalid')
 })
 
+test('service.update corrects origin; invalid origin rejected; save fallback stays manual', () => {
+  const { service } = tmpService()
+  const { entry } = service.save({ content: '来源修正', scope: 'global' })
+  assert.equal(entry.origin, 'manual', 'service-layer fallback stays manual when origin omitted')
+  const updated = service.update({ id: entry.id, origin: 'auto' })
+  assert.equal(updated.origin, 'auto')
+  assert.equal(service.list({ scope: 'global' })[0].origin, 'auto')
+  assert.throws(() => service.update({ id: entry.id, origin: 'bogus' }), (e) => e.code === 'invalid')
+})
+
 test('service.stats reports byStatus breakdown', () => {
   const { service } = tmpService()
   service.save({ content: '活跃', scope: 'global' })

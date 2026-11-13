@@ -299,8 +299,9 @@
     originLabel: '来源',
     originFilterLabel: '来源筛选',
     originAll: '全部来源',
-    originAuto: '自动',
-    originManual: '手动',
+    originAuto: '主动沉淀',
+    originManual: '显式要求',
+    originEditHint: '显式要求＝你在对话中明确让记；主动沉淀＝agent 自行沉淀，便于审阅撤销。',
     statusFilterLabel: '状态筛选',
     statusActive: '活跃',
     statusSuperseded: '被取代',
@@ -470,7 +471,8 @@
     originFilterLabel: 'Filter by origin',
     originAll: 'All origins',
     originAuto: 'Auto',
-    originManual: 'Manual',
+    originManual: 'Requested',
+    originEditHint: 'Requested = you explicitly asked to remember; Auto = agent-initiated, reviewable and revocable.',
     statusFilterLabel: 'Filter by status',
     statusActive: 'Active',
     statusSuperseded: 'Superseded',
@@ -1236,6 +1238,17 @@
             draft.scope === 'workspace' && workspaceTarget
               ? h('div', { className: 'dm_hint', style: { marginTop: 4 } }, t('workspaceTarget') + ': ' + workspaceTarget)
               : null),
+          !isCreate ? h('div', { className: 'dm_field' },
+            h('label', { className: 'dm_label', htmlFor: 'dm-origin' }, h(Icon, { name: 'zap', size: 13 }), t('originLabel')),
+            h(Select, {
+              id: 'dm-origin', ariaLabel: t('originLabel'), disabled: props.busy, value: draft.origin || 'manual',
+              onChange: function (v) { field('origin', v) },
+              options: [
+                { value: 'manual', label: t('originManual'), icon: 'edit' },
+                { value: 'auto', label: t('originAuto'), icon: 'zap' },
+              ],
+            }),
+            h('div', { className: 'dm_hint', style: { marginTop: 4 } }, t('originEditHint'))) : null,
           h('div', { className: 'dm_field' },
             h('label', { className: 'dm_label', htmlFor: 'dm-tags' }, h(Icon, { name: 'tag', size: 13 }), t('tagsLabel')),
             h('input', { id: 'dm-tags', className: 'dm_input', disabled: props.busy, value: draft.tags, onChange: function (e) { field('tags', e.target.value) }, onKeyDown: onKeySave })),
@@ -1892,11 +1905,11 @@
 
         function openCreate() {
           if (busy) return
-          setEditor({ mode: 'create', content: '', category: 'fact', tags: '', scope: workspaceTarget && selection !== 'global' ? 'workspace' : 'global', pinned: false, expires: '' })
+          setEditor({ mode: 'create', content: '', category: 'fact', tags: '', scope: workspaceTarget && selection !== 'global' ? 'workspace' : 'global', pinned: false, expires: '', origin: 'manual' })
         }
         function openEdit(entry) {
           if (busy) return
-          setEditor({ mode: 'edit', id: entry.id, content: entry.content, category: entry.category, tags: (entry.tags || []).join(', '), scope: entry.scope, pinned: !!entry.pinned, expires: entry.expires || '' })
+          setEditor({ mode: 'edit', id: entry.id, content: entry.content, category: entry.category, tags: (entry.tags || []).join(', '), scope: entry.scope, pinned: !!entry.pinned, expires: entry.expires || '', origin: originOf(entry) })
         }
         function openDelete(entry) {
           if (busy) return
@@ -1965,7 +1978,7 @@
               expires: editor.expires || undefined,
             })
           } else {
-            promise = api.update({ id: editor.id, content: editor.content.trim(), category: editor.category, tags: tags, scope: editor.scope, workspace: workspaceTarget, pinned: !!editor.pinned, expires: editor.expires || '' })
+            promise = api.update({ id: editor.id, content: editor.content.trim(), category: editor.category, tags: tags, scope: editor.scope, workspace: workspaceTarget, pinned: !!editor.pinned, expires: editor.expires || '', origin: editor.origin })
           }
           promise.then(function (payload) {
             if (editorRef.current === started) setEditor(null)

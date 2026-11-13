@@ -56,7 +56,7 @@ function dataRoot() {
 
 /** 自动提取提示阈值：距上次记忆写入的装配评估次数（活动代理量）。 */
 const HINT_THRESHOLD = 3
-const HINT_TEXT = '本会话已有一段时间未写入记忆。若出现了值得长期保留的新稳定偏好/项目事实/决策（且非代码可推导、非短期任务指令），请用 memory_save 沉淀（主动沉淀传 origin=auto）；信息变化可用 supersedes 取代旧条目。若无则忽略此提示。'
+const HINT_TEXT = '本会话已有一段时间未写入记忆。若出现了值得长期保留的新稳定偏好/项目事实/决策（且非代码可推导、非短期任务指令），请用 memory_save 沉淀（origin 必填：主动沉淀=auto）；信息变化可用 supersedes 取代旧条目。若无则忽略此提示。'
 
 export function apply(ctx, rawConfig) {
   const config = resolveConfig(rawConfig)
@@ -104,7 +104,7 @@ export function apply(ctx, rawConfig) {
 
   const saveTool = {
     name: 'memory_save',
-    description: '把一条值得长期记住的事实写入跨会话记忆（一事一条）。用户偏好→scope=global，项目事实/决策→scope=workspace。主动沉淀传 origin=auto；信息变化可 supersedes=旧id 取代（保留历史）。密码/密钥/token 会被拒绝。Save one durable fact to cross-session memory; credentials are rejected.',
+    description: '把一条值得长期记住的事实写入跨会话记忆（一事一条）。用户偏好→scope=global，项目事实/决策→scope=workspace。origin 必填：manual=用户显式要求，auto=你主动沉淀（便于用户审阅撤销）；信息变化可 supersedes=旧id 取代（保留历史）。密码/密钥/token 会被拒绝。Save one durable fact to cross-session memory; origin is required (manual=user-requested, auto=agent-initiated); credentials are rejected.',
     parameters: {
       type: 'object',
       properties: {
@@ -112,12 +112,12 @@ export function apply(ctx, rawConfig) {
         category: { type: 'string', enum: ['preference', 'fact', 'decision'], description: '分类：preference=用户偏好 fact=事实 decision=决策（默认 fact）' },
         scope: { type: 'string', enum: ['global', 'workspace'], description: 'global=用户级，跨项目共享；workspace=仅当前工作区（默认 workspace）' },
         tags: { type: 'array', items: { type: 'string' }, description: '可选检索关键词 Optional search keywords' },
-        origin: { type: 'string', enum: ['manual', 'auto'], description: '来源：manual=用户显式要求（默认）；auto=你主动沉淀（便于用户审阅撤销）' },
+        origin: { type: 'string', enum: ['manual', 'auto'], description: '来源（必填）：manual=用户显式要求；auto=你主动沉淀（便于用户审阅撤销）Origin (required): manual=user explicitly requested; auto=agent-initiated for review' },
         supersedes: { type: 'string', description: '可选：要取代的旧记忆 id；旧记忆标记被取代、默认隐藏，历史保留 Optional id of the memory this supersedes' },
         expires: { type: 'string', description: '可选过期日 YYYY-MM-DD（UTC、当日含；到期隐藏不删除、可恢复）Optional expiry date' },
         pinned: { type: 'boolean', description: '可选：钉选常驻（预算内优先注入、免衰减）Optional pin for always-inject' },
       },
-      required: ['content'],
+      required: ['content', 'origin'],
       additionalProperties: false,
     },
     output: {
@@ -136,7 +136,7 @@ export function apply(ctx, rawConfig) {
         type: 'text',
         text: value.deduplicated
           ? `已有相同记忆，未重复写入：${value.id} (duplicate; existing memory kept)`
-          : `已记录记忆 ${value.id} [${value.category}/${value.scope}${value.origin === 'auto' ? '/auto' : ''}] (memory saved)`,
+          : `已记录记忆 ${value.id} [${value.category}/${value.scope}/${value.origin}] (memory saved)`,
       }],
     },
     isConcurrencySafe: () => false,
@@ -227,7 +227,7 @@ export function apply(ctx, rawConfig) {
 
   const updateTool = {
     name: 'memory_update',
-    description: '按 id 更新一条记忆（新覆旧）：信息变化时原地更新，而不是新增重复条目；可选 scope 在 global 与当前工作区之间移动；可 supersedes 取代另一条、archived 归档/恢复、expires 设过期日（空串清除）、pinned 钉选。Update a memory by id; optional supersede/archive/expire/pin.',
+    description: '按 id 更新一条记忆（新覆旧）：信息变化时原地更新，而不是新增重复条目；可选 scope 在 global 与当前工作区之间移动；可 supersedes 取代另一条、archived 归档/恢复、expires 设过期日（空串清除）、pinned 钉选、origin 修正来源标记。Update a memory by id; optional supersede/archive/expire/pin/origin.',
     parameters: {
       type: 'object',
       properties: {
@@ -240,6 +240,7 @@ export function apply(ctx, rawConfig) {
         expires: { type: 'string', description: '可选过期日 YYYY-MM-DD；空串清除 Optional expiry; empty string clears' },
         pinned: { type: 'boolean', description: '可选：钉选/取消钉选 Optional pin/unpin' },
         archived: { type: 'boolean', description: '可选：true 归档（默认隐藏）/false 恢复 Optional archive/restore' },
+        origin: { type: 'string', enum: ['manual', 'auto'], description: '可选：修正来源标记 manual=用户显式要求 / auto=主动沉淀 Optional: correct the origin mark' },
       },
       required: ['id'],
       additionalProperties: false,
@@ -247,7 +248,7 @@ export function apply(ctx, rawConfig) {
     output: {
       schema: {
         type: 'object',
-        properties: { id: { type: 'string' }, updated: { type: 'string' }, scope: { type: 'string' } },
+        properties: { id: { type: 'string' }, updated: { type: 'string' }, scope: { type: 'string' }, origin: { type: 'string' } },
         required: ['id', 'updated', 'scope'],
       },
       render: (_args, value) => [{ type: 'text', text: `已更新记忆 ${value.id} [${value.scope}]（新覆旧）(memory updated)` }],
@@ -265,10 +266,11 @@ export function apply(ctx, rawConfig) {
         expires: args.expires,
         pinned: args.pinned,
         archived: args.archived,
+        origin: args.origin,
         workspace: cwdOf(session),
       })
       noteWrite(session)
-      return { id: entry.id, updated: entry.updated, scope: entry.scope }
+      return { id: entry.id, updated: entry.updated, scope: entry.scope, origin: entry.origin }
     },
   }
 

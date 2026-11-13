@@ -3,6 +3,21 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.10.0] - 2026-11-13
+
+### 变更 Changed
+- **`memory_save` origin 必填**：schema `required` 加入 `origin`，描述明示 manual=用户显式要求 / auto=主动沉淀，杜绝漏传静默落默认；服务层 `saveEntry` 缺省仍兜底 manual（导入/直接调用语义不变）。
+- **来源徽章文案**：zh「手动/自动」→「显式要求/主动沉淀」，en「Manual」→「Requested」（Auto 不变）；仅显示层，存储与工具枚举值仍为 manual/auto，零迁移；徽章/筛选/详情统一生效。
+- `memory_save` 会话渲染常显 origin（原先仅 auto 加后缀）。
+- 注入指引与自动提取动态提示措辞对齐 origin 必填。
+
+### 新增 Added
+- `memory_update` 可选 `origin` 参数：修正来源标记（服务层早已支持，工具面补齐）。
+- 面板编辑弹窗来源选择（显式要求/主动沉淀，默认当前值，附语义提示）；新建弹窗固定「显式要求」（面板新建即用户手动操作）。
+
+### 修复 Fixed
+- 旧版（v1）写入的条目缺 origin，被懒缺省一律显示「手动」，agent 主动沉淀的旧记忆因此误标（用户 asleep 时不可能手动操作）；存量数据已显式补写 origin 纠正（数据侧），文案与工具面补齐防止再犯。
+
 ## [0.9.0] - 2026-11-13
 
 ### 新增 Added
@@ -132,6 +147,8 @@ All notable changes to this project are documented here. Format follows Keep a C
 - 系统提示注入：指引＋字符预算内召回（`interpolate: false` 保护用户内容）。
 - 隐私护栏：密码/密钥/token 规则检测硬拒写。
 
+[0.10.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.9.0...v0.10.0
+[0.9.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.8.1...v0.9.0
 [0.8.1]: https://github.com/PinBoDHua/dsh-memory/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.6.0...v0.7.0
