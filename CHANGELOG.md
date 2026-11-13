@@ -3,6 +3,18 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.24.8] - 2026-11-13
+
+### 修复 Fixed（第二轮双端审计的条目健壮性批次）
+- **文件名是 id 权威**：`parseEntry` 此前优先取 frontmatter `id`，复制/改名/手改文件后会出现重复 id，`forget` 删掉另一条记忆、`update` 覆盖另一条正文、残留文件无法删除。现在与「目录是 scope 权威」同一口径，id 以文件名为准，frontmatter id 仅兼容无文件名上下文，写回时自动修正。
+- **UTF-8 BOM 条目不再静默消失**：Windows 记事本保存的 BOM/CRLF 文件此前解析失败被跳过（记忆从注入/检索/面板消失且不可删），现在先 strip BOM 再按 CRLF 归一解析，可读、可检索、可删除。
+- **损坏文件可按 id 删除**：`forget` 在解析失败时按文件路径兜底删除，坏文件不再永久残留、占用存储统计且不可管理。
+- **access.json 余影清理**：删除条目时同步移除其命中账本记录；否则重新导入同 id 的新记忆会继承已删除条目的 `last_access`/`hit_count`（幽灵命中影响排序/统计），账本也只会增不减。
+- **解析缓存签名抗 Windows tick 碰撞**：`mtime/ctime/size` 在 Windows ~15.6ms 文件时间粒度下同一 tick 内可能完全相同，热路径会长期返回陈旧内容；签名追加 `ino/birthtimeMs`（stat 已在手，零额外 IO），原子写/删除重建必然可辨。
+
+### 新增 Added
+- `tests/entry-robustness.test.mjs`（5 条）：文件名权威、BOM/CRLF、坏文件删除、账本余影清理、tick 碰撞下的缓存失效；live-check 增加 BOM/CRLF 可见性、坏文件删除、账本清理端到端检查。
+
 ## [0.24.7] - 2026-11-13
 
 ### 变更 Changed

@@ -10,7 +10,7 @@
  * 仅打回环地址 127.0.0.1（与任务目标一致，不使用任何代理）。
  */
 import { createHash } from 'node:crypto'
-import { readFileSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -62,11 +62,11 @@ async function main() {
 
   // 1. status：版本与 schema
   let token = ''
-  await check('status 报告 version=0.24.7 / schemaVersion=2 并下发 token', async () => {
+  await check('status 报告 version=0.24.8 / schemaVersion=2 并下发 token', async () => {
     const { status, json } = await req('GET', '/status')
     ok('status HTTP 200', status === 200, `got ${status}`)
     ok('status.ok', json?.ok === true)
-    ok('version === 0.24.7', json?.version === '0.24.7', `got ${json?.version}`)
+    ok('version === 0.24.8', json?.version === '0.24.8', `got ${json?.version}`)
     ok('schemaVersion === 2', json?.schemaVersion === 2, `got ${json?.schemaVersion}`)
     ok('token 非空', typeof json?.key === 'string' && json.key.length > 0)
     token = json?.key ?? ''
@@ -234,6 +234,54 @@ async function main() {
     const second = await req('GET', `/entries?query=${encodeURIComponent(`${RUN} 账本命中`)}`)
     const hitEntry = (second.json?.entries ?? []).find((e) => e.id === id)
     ok('再次检索可见命中计数（账本叠加）', Boolean(hitEntry) && hitEntry.hit_count >= 1, JSON.stringify(hitEntry))
+  })
+
+  await check('手工文件健壮性：BOM/CRLF、文件名权威、坏文件可删、账本清理（0.24.8）', async () => {
+    const stamp = Date.now().toString(36)
+    const bomId = `m-livebom-${stamp}`
+    const brokenId = `m-livebroken-${stamp}`
+    const bomFile = path.join(statusRoot, 'global', `${bomId}.md`)
+    const brokenFile = path.join(statusRoot, 'global', `${brokenId}.md`)
+    const nowIso = new Date().toISOString()
+    try {
+      // 1) BOM + CRLF + frontmatter id 与文件名不一致：应以文件名解析出来。
+      const bomText = [
+        '\uFEFF---',
+        'id: m-deadbeef', // 与文件名不一致，应被忽略
+        'category: fact',
+        'scope: global',
+        'tags: []',
+        `created: ${nowIso}`,
+        `updated: ${nowIso}`,
+        'source: ',
+        '---',
+        '',
+        `${RUN} 记事本保存的条目`,
+        '',
+      ].join('\r\n')
+      writeFileSync(bomFile, bomText, 'utf8')
+      const found = await req('GET', `/entries?query=${encodeURIComponent(`${RUN} 记事本保存的条目`)}`)
+      ok('BOM/CRLF 条目可见', (found.json?.entries ?? []).some((e) => e.id === bomId), JSON.stringify((found.json?.entries ?? []).map((e) => e.id)))
+      ok('文件名权威（非 frontmatter id）', !(found.json?.entries ?? []).some((e) => e.id === 'm-deadbeef'))
+      // 2) 坏文件可按 id 删除。
+      writeFileSync(brokenFile, 'not frontmatter', 'utf8')
+      const delBroken = await req('POST', '/forget', { token, body: { id: brokenId } })
+      ok('损坏文件可按 id 删除', delBroken.status === 200 && delBroken.json?.result?.deleted === true, JSON.stringify(delBroken.json))
+      ok('损坏文件已消失', !existsSync(brokenFile))
+    } finally {
+      try { if (existsSync(bomFile)) await req('POST', '/forget', { token, body: { id: bomId } }) } catch { /* ignore */ }
+      try { if (existsSync(bomFile)) rmSync(bomFile, { force: true }) } catch { /* ignore */ }
+      try { rmSync(brokenFile, { force: true }) } catch { /* ignore */ }
+    }
+    // 3) forget 清理账本余影。
+    const sv = await req('POST', '/save', { token, body: { content: `${RUN} 账本清理`, scope: 'global', origin: 'auto' } })
+    const id = sv.json?.result?.entry?.id ?? ''
+    if (id) created.push(id)
+    await req('GET', `/entries?query=${encodeURIComponent(`${RUN} 账本清理`)}`)
+    await req('POST', '/forget', { token, body: { id } })
+    let ledger = {}
+    try { ledger = JSON.parse(readFileSync(path.join(statusRoot, 'access.json'), 'utf8')) } catch { /* ignore */ }
+    ok('forget 后账本记录已清理', ledger[id] === undefined, JSON.stringify(ledger[id]))
   })
 
   await check('update origin 修正往返（0.10.0）', async () => {

@@ -66,9 +66,32 @@ This file is the self-iteration ledger for dsh-memory: per-round increments, ver
 - [x] **机密检查只查正文**（0.24.6）：正文＋标签统一硬拒。
 - [x] **命中簿记迁移到独立 `access.json` 账本**（0.24.7）：`withLock` 保护＋原子写＋签名缓存；不再改写条目 Markdown（消除读-改-写窗口与写放大）；检索与系统提示注入均入账（节流 ≤1 次/小时）；旧文件命中字段兼容、坏账本自愈。
 
-### 新审计（下一轮）
+### 第二轮双端审计 backlog（2026-11-13，基于 0.24.7）
 
-P1–P4 已全部清空。下一轮开始新一轮双端只读审计（宿主 `index.js`＋`lib/*`、客户端 `client/client.js`、DSH 宿主契约、真实数据/并发场景），把新发现按 P1–P4 记入本节，再恢复「每轮一个可验证增量」。
+0.24.8 已清掉条目健壮性 5 项（文件名 id 权威、BOM/CRLF、坏文件可删、账本余影、Windows tick 缓存碰撞），其余按优先级：
+
+**P1**
+- [ ] **export/import 保真**：导出缺权威 `workspaceKey`（只带索引 `cwd`）——索引损坏时工作区条目 `workspace:null` 被导入拒绝（备份丢条目）、索引陈旧时恢复到错误工作区。修法：导出附 `workspaceKey`，导入按 key 落盘，`cwd` 仅作展示/补索引。
+- [ ] **设置写入状态机**：`resetSettings`/`backupNow` 与在途自动保存无互斥（重置可能被旧响应回滚）；`saving` 在 seq 被推进时可能永久卡「保存中」；保存失败无脏标记/重试。
+
+**P2**
+- [ ] 客户端消费 `revived:true`：实际「复活为活跃」的保存目前显示成「已有相同记忆，未重复写入」。
+- [ ] 导出范围与视图一致：视图「全局＋当前工作区」却导出全部工作区（隐私/预期落差），需明确文案或支持 `{scope:'all', workspace}`。
+- [ ] 空工作区空态误报「记忆库还是空的」（`filtered` 未含 scope）。
+- [ ] 卡片操作按钮 busy 期间未禁用（点击静默无反馈）。
+- [ ] 卡片标签点击改为精确 `tag=` 过滤（当前塞进全文 query）。
+- [ ] 删除/批量删除后焦点丢失、撤销吐司对键盘用户不可达（可聚焦到 `.dm_toast_action`）。
+- [ ] 导入：BOM JSON 解析失败；读文件失败/解析失败/格式错误归因混同；读文件窗口未置 busy。
+- [ ] 每次列表刷新都重取 recall-preview（注入徽章失败即清空），可拆分刷新时机并保留旧值。
+- [ ] ARIA 细节：类别 radiogroup 无方向键；非激活 tab 的 `aria-controls` 指向已卸载面板；吐司关闭按钮读作「取消」。
+- [ ] 路由收到非对象 JSON（`null`/数组/标量）→ 500 internal，应回 400。
+- [ ] move 去重把「已被取代」条目算冲突（与 save 语义不一致）。
+- [ ] `withLock` 大导入临界区可超 `staleMs=10s`；且不支持 async 回调（Promise 会提前释锁），可显式传更长 staleMs/超时或检测 thenable。
+- [ ] 注入装配 `selectInjection` 被算两遍；缓存 FIFO 在条目数 >4096 时退化（可复用选择结果、提高上限或分段淘汰）。
+
+**待验证**
+- [ ] `defaultView='workspace'` 时若 `SessionSummary.cwd` 缺失且 `/cwd` 晚返回，`viewInitialized` 已置 true → 默认视图不生效。
+- [ ] 撤销删除使用列表快照；若删除前条目已被 agent 更新，撤销会回滚为旧内容（需服务端返回被删条目或 trash 语义）。
 
 ### 明确不做
 
