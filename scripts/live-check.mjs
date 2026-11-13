@@ -62,11 +62,11 @@ async function main() {
 
   // 1. status：版本与 schema
   let token = ''
-  await check('status 报告 version=0.24.5 / schemaVersion=2 并下发 token', async () => {
+  await check('status 报告 version=0.24.6 / schemaVersion=2 并下发 token', async () => {
     const { status, json } = await req('GET', '/status')
     ok('status HTTP 200', status === 200, `got ${status}`)
     ok('status.ok', json?.ok === true)
-    ok('version === 0.24.5', json?.version === '0.24.5', `got ${json?.version}`)
+    ok('version === 0.24.6', json?.version === '0.24.6', `got ${json?.version}`)
     ok('schemaVersion === 2', json?.schemaVersion === 2, `got ${json?.schemaVersion}`)
     ok('token 非空', typeof json?.key === 'string' && json.key.length > 0)
     token = json?.key ?? ''
@@ -181,6 +181,40 @@ async function main() {
     writeFileSync(file, text.replace('手工编辑正文', '手工编辑正文已改'), 'utf8')
     const after = await req('GET', `/entries?query=${encodeURIComponent(`${RUN} 手工编辑正文已改`)}`)
     ok('外部改写后立即可见', (after.json?.entries ?? []).some((e) => e.id === id), JSON.stringify((after.json?.entries ?? []).map((e) => e.content)))
+  })
+
+  await check('非法作用域返回 400（0.24.6）', async () => {
+    for (const name of ['entries', 'stats', 'similar']) {
+      const r = await req('GET', `/${name}?scope=bogus`)
+      ok(`${name} scope=bogus HTTP 400`, r.status === 400, `got ${r.status}`)
+      ok(`${name} scope=bogus code=invalid`, r.json?.code === 'invalid', JSON.stringify(r.json))
+    }
+  })
+
+  await check('标签中的机密被硬拒（0.24.6）', async () => {
+    const r = await req('POST', '/save', { token, body: { content: `${RUN} 标签机密`, scope: 'global', origin: 'auto', tags: ['safe', 'ghp_' + 'a'.repeat(24)] } })
+    ok('save 标签机密 HTTP 400', r.status === 400, `got ${r.status}`)
+    ok('save 标签机密 code=secret', r.json?.code === 'secret', JSON.stringify(r.json))
+  })
+
+  await check('工作区条目 update 刷新索引 lastSeen（0.24.6）', async () => {
+    const wsCwd = 'D:\\Questions'
+    const sv = await req('POST', '/save', { token, body: { content: `${RUN} 工作区索引`, scope: 'workspace', workspace: wsCwd, origin: 'auto' } })
+    const id = sv.json?.result?.entry?.id ?? ''
+    try {
+      ok('工作区 save 返回 id', id.startsWith('m-'))
+      const before = await req('GET', '/workspaces')
+      const findKey = (doc) => (doc?.workspaces ?? []).find((w) => typeof w.cwd === 'string' && w.cwd.toLowerCase().endsWith('questions'))
+      const beforeSeen = findKey(before.json)?.lastSeen
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      const up = await req('POST', '/update', { token, body: { id, content: `${RUN} 工作区索引更新`, workspace: wsCwd } })
+      ok('update workspace HTTP 200', up.status === 200, `got ${up.status}`)
+      const after = await req('GET', '/workspaces')
+      const afterSeen = findKey(after.json)?.lastSeen
+      ok('lastSeen 被刷新', Boolean(afterSeen) && Boolean(beforeSeen) && afterSeen >= beforeSeen, `${beforeSeen} -> ${afterSeen}`)
+    } finally {
+      await req('POST', '/forget', { token, body: { id, workspace: wsCwd } })
+    }
   })
 
   await check('update origin 修正往返（0.10.0）', async () => {

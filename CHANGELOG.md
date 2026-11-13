@@ -3,6 +3,18 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.24.6] - 2026-11-13
+
+### 修复 Fixed
+- **机密检查覆盖标签**：此前硬拒只检查正文，`memory_save`/`memory_update`/导入可把 `ghp_…` 之类的令牌放进 tags 落盘并被检索。现在正文与标签统一检查，标签命中同样返回 `code=secret`；正常标签不受影响。
+- **非法作用域返回 400**：`memory_search`/面板 `GET /entries|stats|similar?scope=bogus` 此前由 store 抛无 code 的 Error 变成 500；现在检索类接口统一校验 `scope ∈ {all, global, workspace}`，非法值回 `400 invalid`。
+- **工作区条目更新不刷新索引**：`memory_update` 更新工作区条目后 `workspaces/index.json` 的 `lastSeen` 不再停滞（面板工作区排序/最近使用据此）；`firstSeen` 保持不变。
+- **workingDirectory 晚就绪**：会话有效目录解析改为每次实时查询 `ctx.get('workingDirectory')`（此前在 apply 时一次性捕获，服务晚于插件就绪时 cd 后仍会用旧目录，导致工作区记忆写错位置）；回退 `session.header.cwd` 的行为不变，新增纯函数 `resolveSessionCwd` 与集成回归（fake ctx 验证晚就绪 + cd 后写入新工作区）。
+- **文档口径对齐**：明确命中簿记只在检索命中时写 `last_access`/`hit_count`（注入不落盘，避免每次系统提示装配写文件），修正 DETAIL 中「检索/注入命中簿记」的表述。
+
+### 新增 Added
+- `tests/hardening.test.mjs`：标签机密硬拒、非法 scope 400（service＋路由）、update 刷新 lastSeen、`resolveSessionCwd` 与 apply 晚就绪集成回归；live-check 增加标签机密、非法 scope、lastSeen 刷新端到端检查。
+
 ## [0.24.5] - 2026-11-13
 
 ### 修复 Fixed

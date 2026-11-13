@@ -59,11 +59,16 @@ This file is the self-iteration ledger for dsh-memory: per-round increments, ver
 
 ### P4 边角
 
-- [ ] `GET /entries?scope=bogus`、`/stats?scope=bogus` 返回 500 而非 400（store 抛无 code 的 Error）。
-- [ ] `update` 不刷新 workspaces/index.json 的 `lastSeen`。
-- [ ] `workingDirectory` 在 `apply` 时一次性捕获；若服务晚于插件就绪则永久回退 header cwd（待运行时验证，修法为 `cwdOf` 内每次 `ctx.get`）。
-- [ ] 详情里 `last_access`/`hit_count` 等展示与检索命中语义核对（注入命中是否也应簿记，文档与实现口径对齐）。
-- [ ] 命中簿记迁移到独立 `access.json` 账本（`withLock` 保护），彻底消除单条文件读-改-写窗口与写放大。
+- [x] **非法 scope 回 400**（0.24.6）：`entries`/`stats`/`similar` 统一校验，service 抛 `invalid`。
+- [x] **`update` 不刷新 workspaces/index.json 的 `lastSeen`**（0.24.6）。
+- [x] **`workingDirectory` 在 `apply` 时一次性捕获**（0.24.6）：改为每次 `ctx.get`，晚就绪/跟随 cd 均生效，并有 fake-ctx 集成回归。
+- [x] **命中语义口径对齐**（0.24.6）：明确检索命中写 `last_access`/`hit_count`，注入不写盘；DETAIL 已修正。
+- [x] **机密检查只查正文**（0.24.6）：正文＋标签统一硬拒。
+- [ ] **命中簿记迁移到独立 `access.json` 账本**（`withLock` 保护），彻底消除单条文件读-改-写窗口与写放大；届时可评估是否让注入命中以每小时节流方式入账。
+
+### 新审计（可选）
+
+P1–P4 清空后做一次新的双端只读审计（宿主 `index.js`＋`lib/*`、客户端 `client/client.js`、DSH 宿主契约）补充 backlog；每轮一个可验证增量。
 
 ### 明确不做
 

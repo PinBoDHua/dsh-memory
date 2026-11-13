@@ -121,6 +121,21 @@ export function renderForgetResult(value) {
   return [{ type: 'text', text: `已忘记记忆 ${value.id} (memory forgotten)` }]
 }
 
+/**
+ * 会话有效目录解析（纯函数）：workingDirectory 服务是权威（会跟随 cd），
+ * 缺失/异常时回退到不可变的 session.header.cwd。调用方每次实时传入服务引用——
+ * apply 时一次性捕获可能早于该服务就绪，会让 cd 后的工作区口径永久停留在旧目录。
+ */
+export function resolveSessionCwd(workingDirectory, session) {
+  if (!session) return undefined
+  try {
+    const effective = workingDirectory?.get?.(session)
+    if (typeof effective === 'string' && effective !== '') return effective
+  } catch { /* 回退 header fall back to the immutable header */ }
+  const original = session.header?.cwd
+  return typeof original === 'string' && original !== '' ? original : undefined
+}
+
 export function apply(ctx, rawConfig) {
   const config = resolveConfig(rawConfig)
   if (!config.enabled) return
@@ -136,22 +151,16 @@ export function apply(ctx, rawConfig) {
     if (typeof fresh === 'string' && fresh !== '') liveVersion = fresh
   } catch { /* 读取失败时保留模块级 version fall back to module-level version */ }
 
-  // workingDirectory 服务是会话有效目录的权威来源（会跟随 cd）；
-  // 可选查找，缺失时回退到不可变的 session.header.cwd。
-  let workingDirectory
-  try {
-    workingDirectory = ctx.get('workingDirectory')
-  } catch {
-    workingDirectory = undefined
-  }
+  // workingDirectory 服务是会话有效目录的权威来源（会跟随 cd）；每次实时查询，
+  // 不缓存 apply 时的引用（服务可能晚于插件就绪；ctx.get 为 Map 查表，开销可忽略）。
   const cwdOf = (session) => {
-    if (!session) return undefined
+    let workingDirectory
     try {
-      const effective = workingDirectory?.get?.(session)
-      if (typeof effective === 'string' && effective !== '') return effective
-    } catch { /* 回退 header fall back to the immutable header */ }
-    const original = session.header?.cwd
-    return typeof original === 'string' && original !== '' ? original : undefined
+      workingDirectory = ctx.get('workingDirectory')
+    } catch {
+      workingDirectory = undefined
+    }
+    return resolveSessionCwd(workingDirectory, session)
   }
   const sessionOf = (exec) => exec?.agent?.session
 
