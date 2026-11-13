@@ -315,6 +315,35 @@ test('move: duplicate content in target scope is rejected, source intact', () =>
   assert.equal(store.listScope(root, 'workspace', CWD_A).length, 1)
 })
 
+test('move: superseded duplicate in target scope does not block the move', () => {
+  const root = tmpRoot()
+  // 目标作用域里先有一条同内容、已被取代的条目（默认不可见，不应算冲突）。
+  const { entry: dup } = store.saveEntry(root, { content: '同内容（隐藏）', scope: 'workspace', cwd: CWD_A })
+  const { entry: successor } = store.saveEntry(root, { content: '后继内容', scope: 'workspace', cwd: CWD_A })
+  store.updateEntry(root, successor.id, { supersedes: dup.id }, CWD_A)
+  assert.equal(store.findEntry(root, dup.id, CWD_A).superseded_by, successor.id)
+  const { entry } = store.saveEntry(root, { content: '同内容（隐藏）', scope: 'global' })
+  const moved = store.moveEntry(root, entry.id, 'workspace', CWD_A)
+  assert.equal(moved.scope, 'workspace')
+  assert.equal(store.listScope(root, 'workspace', CWD_A).length, 3)
+  // 活跃同内容仍然拒绝。
+  const { entry: activeDup } = store.saveEntry(root, { content: '后继内容', scope: 'global' })
+  assert.throws(() => store.moveEntry(root, activeDup.id, 'workspace', CWD_A), (err) => err.code === 'duplicate')
+})
+
+test('render: provided selection is reused instead of recomputed', () => {
+  const entries = [
+    { id: 'm-a', scope: 'global', category: 'fact', content: '条目甲', updated: '2026-01-01T00:00:00.000Z' },
+    { id: 'm-b', scope: 'global', category: 'fact', content: '条目乙', updated: '2026-01-01T00:00:00.000Z' },
+  ]
+  // 故意给一个与 entries 自然排序无关的 selection：若被重算，甲/乙都会按默认
+  // 预算注入；复用后只应出现乙 + 未注入计数。
+  const text = renderSection(entries, { selection: { selected: [entries[1]], omitted: 7 } })
+  assert.ok(text.includes('条目乙'))
+  assert.ok(!text.includes('条目甲'))
+  assert.ok(text.includes('另有 7 条记忆未注入'))
+})
+
 test('move: applies content/category/tags patch together with the move', () => {
   const root = tmpRoot()
   const { entry } = store.saveEntry(root, { content: '旧内容', scope: 'global' })

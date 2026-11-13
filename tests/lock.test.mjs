@@ -34,6 +34,15 @@ test('withLock releases the lock when the body throws', () => {
   assert.ok(!fs.existsSync(lockPath))
 })
 
+test('withLock rejects async callbacks and still releases the lock', () => {
+  const lockPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-memory-lock-')), '.lock')
+  assert.throws(() => withLock(lockPath, async () => 'late'), /不支持异步|async callbacks/)
+  assert.equal(fs.existsSync(lockPath), false, 'lock released after rejecting async body')
+  // 锁仍可正常获取。
+  assert.equal(withLock(lockPath, () => 'ok'), 'ok')
+  assert.equal(fs.existsSync(lockPath), false)
+})
+
 test('withLock creates a missing parent directory (fresh data root)', () => {
   const root = tmpRoot()
   const lockPath = path.join(root, 'workspaces', '.lock')

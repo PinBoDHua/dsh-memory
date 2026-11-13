@@ -284,6 +284,23 @@ test('oversized body maps to 413 body-too-large, not invalid-json', async () => 
   assert.equal(res.json().error, 'body-too-large')
 })
 
+test('non-object JSON bodies map to 400 invalid-json (not 500)', async () => {
+  const { handlers } = setup()
+  const auth = { 'x-rpc-key': TOKEN }
+  for (const body of ['null', '[]', '[1,2]', '42', '"str"', 'true']) {
+    const res = fakeRes()
+    await handlers.save(fakeReq({ method: 'POST', url: '/plugins/dsh-memory/save', headers: auth, body }), res)
+    assert.equal(res.statusCode, 400, body)
+    assert.equal(res.json().error, 'invalid-json', body)
+    assert.equal(res.json().code, undefined, body)
+  }
+  // 空 body 仍按 {} 处理：由 service 给出语义错误 400 invalid。
+  const empty = fakeRes()
+  await handlers.save(fakeReq({ method: 'POST', url: '/plugins/dsh-memory/save', headers: auth }), empty)
+  assert.equal(empty.statusCode, 400)
+  assert.equal(empty.json().code, 'invalid')
+})
+
 test('update with invalid category maps to 400 invalid (not 500)', async () => {
   const { service, handlers } = setup()
   const auth = { 'x-rpc-key': TOKEN }

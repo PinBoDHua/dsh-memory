@@ -42,6 +42,16 @@ async function req(method, path, { body, token, base = API } = {}) {
   return { status: res.status, json }
 }
 
+// 原样发送 body（用于验证非对象 JSON / 坏 JSON 的路由错误映射）。
+async function reqRaw(method, path, { raw, token, base = API } = {}) {
+  const headers = { 'Content-Type': 'application/json' }
+  if (token) headers['X-RPC-Key'] = token
+  const res = await fetch(`${base}${path}`, { method, headers, body: raw })
+  let json = null
+  try { json = await res.json() } catch { /* non-JSON */ }
+  return { status: res.status, json }
+}
+
 // rev 配方（与宿主 dsh-client-modules artifactRevision 一致）：
 // sha1(domain + \0 + 各段「字节长度:内容」) 取前 12 位；输入 mtimeMs/ctimeMs/size。
 function framedHash(domain, parts) {
@@ -62,11 +72,11 @@ async function main() {
 
   // 1. status：版本与 schema
   let token = ''
-  await check('status 报告 version=0.24.12 / schemaVersion=2 并下发 token', async () => {
+  await check('status 报告 version=0.24.13 / schemaVersion=2 并下发 token', async () => {
     const { status, json } = await req('GET', '/status')
     ok('status HTTP 200', status === 200, `got ${status}`)
     ok('status.ok', json?.ok === true)
-    ok('version === 0.24.12', json?.version === '0.24.12', `got ${json?.version}`)
+    ok('version === 0.24.13', json?.version === '0.24.13', `got ${json?.version}`)
     ok('schemaVersion === 2', json?.schemaVersion === 2, `got ${json?.schemaVersion}`)
     ok('token 非空', typeof json?.key === 'string' && json.key.length > 0)
     token = json?.key ?? ''
@@ -189,6 +199,17 @@ async function main() {
       ok(`${name} scope=bogus HTTP 400`, r.status === 400, `got ${r.status}`)
       ok(`${name} scope=bogus code=invalid`, r.json?.code === 'invalid', JSON.stringify(r.json))
     }
+  })
+
+  await check('非对象 JSON body 返回 400 invalid-json（0.24.13）', async () => {
+    for (const raw of ['null', '[]', '[1,2]', '42', '"str"']) {
+      const r = await reqRaw('POST', '/save', { token, raw })
+      ok(`save body=${raw} HTTP 400`, r.status === 400, `got ${r.status}`)
+      ok(`save body=${raw} error=invalid-json`, r.json?.error === 'invalid-json', JSON.stringify(r.json))
+    }
+    const settingsNull = await reqRaw('POST', '/settings', { token, raw: 'null' })
+    ok('settings body=null HTTP 400', settingsNull.status === 400, `got ${settingsNull.status}`)
+    ok('settings body=null error=invalid-json', settingsNull.json?.error === 'invalid-json', JSON.stringify(settingsNull.json))
   })
 
   await check('标签中的机密被硬拒（0.24.6）', async () => {

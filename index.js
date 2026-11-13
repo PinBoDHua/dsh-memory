@@ -399,16 +399,19 @@ export function apply(ctx, rawConfig) {
       const entries = service.list({ scope: 'all', workspace: cwd })
       const recall = service.recallConfig()
       // 注入命中入账：记录实际被注入系统提示的条目（access.json 账本节流 ≤1 次/小时/条目）。
+      // 同一次 selectInjection 结果复用到 renderSection，避免装配路径重复排序/预算计算。
+      let selection
       if (recall.autoInject) {
         try {
-          const { selected } = selectInjection(entries, { budgetChars: recall.injectionBudgetChars, decayEnabled: recall.decayEnabled })
-          service.recordHits(selected)
+          selection = selectInjection(entries, { budgetChars: recall.injectionBudgetChars, decayEnabled: recall.decayEnabled })
+          service.recordHits(selection.selected)
         } catch { /* best-effort：簿记失败不影响装配 */ }
       }
       return renderSection(entries, {
         autoInject: recall.autoInject,
         budgetChars: recall.injectionBudgetChars,
         decayEnabled: recall.decayEnabled,
+        selection,
       })
     } catch {
       return GUIDANCE

@@ -84,10 +84,10 @@ This file is the self-iteration ledger for dsh-memory: per-round increments, ver
 - [x] 导入：BOM JSON 解析失败；读文件失败/解析失败/格式错误归因混同；读文件窗口未置 busy（0.24.12：`parseImportText` + 读窗口 busy + 三种错误分开）。
 - [ ] 每次列表刷新都重取 recall-preview（注入徽章失败即清空），可拆分刷新时机并保留旧值。
 - [x] ARIA 细节：类别 radiogroup 无方向键；非激活 tab 的 `aria-controls` 指向已卸载面板；吐司关闭按钮读作「取消」（0.24.12）。
-- [ ] 路由收到非对象 JSON（`null`/数组/标量）→ 500 internal，应回 400。
-- [ ] move 去重把「已被取代」条目算冲突（与 save 语义不一致）。
-- [ ] `withLock` 大导入临界区可超 `staleMs=10s`；且不支持 async 回调（Promise 会提前释锁），可显式传更长 staleMs/超时或检测 thenable。
-- [ ] 注入装配 `selectInjection` 被算两遍；缓存 FIFO 在条目数 >4096 时退化（可复用选择结果、提高上限或分段淘汰）。
+- [x] 路由收到非对象 JSON（`null`/数组/标量）→ 500 internal，应回 400（0.24.13：`readJsonBody` 只接受 JSON 对象）。
+- [x] move 去重把「已被取代」条目算冲突（与 save 语义不一致）（0.24.13）。
+- [x] `withLock` 大导入临界区可超 `staleMs=10s`；且不支持 async 回调（0.24.13：导入显式 30s/120s；async 回调抛错）。
+- [x] 注入装配 `selectInjection` 被算两遍（0.24.13：复用选择结果）；剩余：缓存 FIFO 在条目数 >4096 时退化（可提高上限或分段淘汰）。
 
 **待验证**
 - [ ] `defaultView='workspace'` 时若 `SessionSummary.cwd` 缺失且 `/cwd` 晚返回，`viewInitialized` 已置 true → 默认视图不生效。

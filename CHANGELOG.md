@@ -3,6 +3,17 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.24.13] - 2026-11-13
+
+### 修复 Fixed（第二轮审计 P3：宿主边界加固）
+- **写路由非对象 JSON → 400**：`readJsonBody` 现在只接受 JSON 对象，`null`/数组/标量按 `invalid-json` 400 返回；此前会在 service 解构处抛 TypeError 变成 500，并把 JS 异常文案泄漏给客户端。
+- **move 去重对齐 save 语义**：目标作用域里「已被取代」的同内容条目默认不可见，不再阻止移动；活跃同内容仍按 `duplicate` 拒绝。
+- **withLock 边界**：显式检测 async 回调（Promise 会提前放锁，等于无互斥）并抛错；批量导入临界区显式放宽为 `timeoutMs=30s / staleMs=120s`，避免大导入时被另一进程判为陈旧抢锁。
+- **注入装配只算一次**：系统提示装配路径把 `selectInjection` 结果同时用于命中簿记与 `renderSection`（此前同一批记忆的排序/预算计算做两遍）。
+
+### 新增 Added
+- 单测：非对象 body 全部 400（`null/[]/[1,2]/42/"str"/true`，空 body 仍走语义 400）、async 回调被拒且锁已释放、move 忽略被取代同内容条目、`renderSection` 复用外部 selection；live-check 增加非对象 body 的原样请求校验。
+
 ## [0.24.12] - 2026-11-13
 
 ### 修复 Fixed（第二轮审计 P2：可访问性与导入健壮性）
