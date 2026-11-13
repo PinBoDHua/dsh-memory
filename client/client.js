@@ -146,13 +146,41 @@
     if (code === 'invalid') return 'errInvalid'
     if (code === 'no-workspace') return 'errNoWorkspace'
     if (code === 'duplicate') return 'errDuplicate'
+    if (code === 'timeout') return 'errTimeout'
+    if (code === 'network') return 'errNetwork'
+    if (code === 'bad-response') return 'errBadResponse'
     var msg = err.message
     if (msg === 'unauthorized') return 'errUnauthorized'
     if (msg === 'loopback-only') return 'errLoopback'
     if (msg === 'invalid-json') return 'errInvalidJson'
     if (msg === 'body-too-large') return 'errBodyTooLarge'
+    if (msg === 'timeout') return 'errTimeout'
+    if (msg === 'bad-response') return 'errBadResponse'
     if (err.status === 403) return 'errUnauthorized'
     return null
+  }
+
+  // 撤销吐司优先：当前 toast 带撤销动作且未到期时，普通提示排队稍后展示，
+  // 避免删除后 6 秒内任意其它操作把「撤销」挤掉（删除不可逆）。
+  function shouldQueueToast(current, incoming, now) {
+    if (!current || !incoming) return false
+    if (!current.action || incoming.action) return false
+    var until = Number(current.until)
+    return !isFinite(until) || now < until
+  }
+
+  // 批量删除结果归类（Promise.allSettled）：成功项可撤销、失败项汇报原因。
+  function partitionSettled(items, settled) {
+    var ok = []
+    var failed = []
+    var list = Array.isArray(items) ? items : []
+    var results = Array.isArray(settled) ? settled : []
+    for (var i = 0; i < list.length; i++) {
+      var result = results[i]
+      if (result && result.status === 'fulfilled') ok.push(list[i])
+      else failed.push({ entry: list[i], error: result ? result.reason : undefined })
+    }
+    return { ok: ok, failed: failed }
   }
 
   function validateImportDoc(doc) {
@@ -220,7 +248,7 @@
     return (mb < 10 ? mb.toFixed(1) : Math.round(mb)) + ' MB'
   }
 
-  var helpers = { validateDraft: validateDraft, groupEntries: groupEntries, nextToken: nextToken, entriesParams: entriesParams, buildEntriesQuery: buildEntriesQuery, workspaceOptions: workspaceOptions, errorKeyFor: errorKeyFor, validateImportDoc: validateImportDoc, importSummary: importSummary, pageSlice: pageSlice, entryDetailRows: entryDetailRows, relativeTime: relativeTime, formatBytes: formatBytes, isExpired: isExpired, statusOf: statusOf, originOf: originOf, statusQueryFlags: statusQueryFlags }
+  var helpers = { validateDraft: validateDraft, groupEntries: groupEntries, nextToken: nextToken, entriesParams: entriesParams, buildEntriesQuery: buildEntriesQuery, workspaceOptions: workspaceOptions, errorKeyFor: errorKeyFor, shouldQueueToast: shouldQueueToast, partitionSettled: partitionSettled, validateImportDoc: validateImportDoc, importSummary: importSummary, pageSlice: pageSlice, entryDetailRows: entryDetailRows, relativeTime: relativeTime, formatBytes: formatBytes, isExpired: isExpired, statusOf: statusOf, originOf: originOf, statusQueryFlags: statusQueryFlags }
 
   // ===== node 测试导出（CJS） =====
   if (typeof module !== 'undefined' && module.exports) {
@@ -234,6 +262,9 @@
   var NS = 'dsh-memory'
   var PAGE_SIZE = 50
   var UNDO_MS = 6000
+  // 回环请求超时：宿主事件循环被大导入等阻塞或连接半开时，面板不能永久转圈/禁用按钮。
+  var REQUEST_TIMEOUT_MS = 15000
+  var TOAST_QUEUE_MAX = 3
 
   var ZH = {
     nav: '记忆',
@@ -280,6 +311,8 @@
     similarSaved: '已保存；检测到 {n} 条相似记忆（{id}），建议核对是否重复',
     deleted: '已删除',
     deletedN: '已删除 {n} 条',
+    deletedPartial: '已删除 {n} 条，{m} 条失败',
+    deleteFailed: '删除失败',
     undo: '撤销',
     undone: '已恢复 {n} 条记忆',
     undoFailed: '恢复失败',
@@ -302,6 +335,10 @@
     errInvalidJson: '请求数据无效',
     errBodyTooLarge: '文件过大（超过 1 MB），请拆分后导入',
     errRefreshed: '凭证已刷新，请重试',
+    errTimeout: '请求超时，请重试',
+    errNetwork: '网络异常，请检查连接后重试',
+    errBadResponse: '响应格式异常，请重试',
+    errStaleSelection: '所选记忆已不在当前列表，已清除选择',
     pagePrev: '上一页',
     pageNext: '下一页',
     pageInfo: '第 {page} 页',
@@ -479,6 +516,8 @@
     similarSaved: 'Saved; {n} similar memory found ({id}) — review for duplicates',
     deleted: 'Deleted',
     deletedN: 'Deleted {n}',
+    deletedPartial: 'Deleted {n}, {m} failed',
+    deleteFailed: 'Delete failed',
     undo: 'Undo',
     undone: 'Restored {n} memories',
     undoFailed: 'Restore failed',
@@ -501,6 +540,10 @@
     errInvalidJson: 'Invalid request data',
     errBodyTooLarge: 'File too large (over 1 MB); split it before importing',
     errRefreshed: 'Credentials refreshed; please retry',
+    errTimeout: 'Request timed out; please retry',
+    errNetwork: 'Network error; check your connection and retry',
+    errBadResponse: 'Unexpected response; please retry',
+    errStaleSelection: 'Selected memories are no longer in this list; selection cleared',
     pagePrev: 'Previous',
     pageNext: 'Next',
     pageInfo: 'Page {page}',
@@ -1057,7 +1100,18 @@
       // ===== API（同源 fetch + token 生命周期） =====
       function createApi(tokenRef) {
         function request(path, options) {
-          return fetch(path, Object.assign({ credentials: 'same-origin', cache: 'no-store' }, options)).then(function (res) {
+          var opts = Object.assign({ credentials: 'same-origin', cache: 'no-store' }, options)
+          // 超时即中止：超时/网络失败统一转成带 code 的错误，交给 errorText 本地化。
+          if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+            opts.signal = AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+          }
+          return fetch(path, opts).catch(function (err) {
+            var timedOut = err && (err.name === 'TimeoutError' || err.name === 'AbortError')
+            var wrapped = new Error(timedOut ? 'timeout' : 'network')
+            wrapped.code = timedOut ? 'timeout' : 'network'
+            wrapped.cause = err
+            throw wrapped
+          }).then(function (res) {
             return res.json().catch(function () { return null }).then(function (payload) {
               tokenRef.current = nextToken(tokenRef.current, { status: res.status, payload: payload })
               if (!res.ok) {
@@ -1065,6 +1119,13 @@
                 err.status = res.status
                 err.code = payload && payload.code
                 throw err
+              }
+              // 200 但非 JSON（代理/半截响应）：显式报错，避免下游 TypeError 被当正文展示。
+              if (payload === null) {
+                var bad = new Error('bad-response')
+                bad.code = 'bad-response'
+                bad.status = res.status
+                throw bad
               }
               return payload
             })
@@ -1881,6 +1942,8 @@
         var audit = auditState[0]; var setAudit = auditState[1]
         var toastState = useState(null)
         var toast = toastState[0]; var setToast = toastState[1]
+        var toastRef = useRef(null)
+        var toastQueueRef = useRef([])
         var busyState = useState(false)
         var busy = busyState[0]; var setBusy = busyState[1]
         var errorState = useState('')
@@ -1913,9 +1976,33 @@
         var settingsSeq = useRef(0)
         var pageSize = (settings && settings.effective && settings.effective.pageSize) || PAGE_SIZE
 
+        function dismissToast() {
+          var queued = toastQueueRef.current.shift()
+          if (queued) {
+            toastRef.current = Object.assign({}, queued, { until: Date.now() + (queued.duration || 2600) })
+            setToast(toastRef.current)
+          } else {
+            toastRef.current = null
+            setToast(null)
+          }
+        }
+
         function showToast(kind, text, action) {
           toastSeq.current += 1
-          setToast({ id: toastSeq.current, kind: kind, text: text, action: action, duration: action ? UNDO_MS : 2600 })
+          var duration = action ? UNDO_MS : 2600
+          var next = {
+            id: toastSeq.current, kind: kind, text: text, duration: duration,
+            until: Date.now() + duration,
+            action: action ? { label: action.label, run: function () { dismissToast(); action.run() } } : undefined,
+          }
+          if (shouldQueueToast(toastRef.current, next, Date.now())) {
+            // 撤销吐司优先：普通提示排队稍后展示（只保留最近几条，避免堆积）。
+            toastQueueRef.current.push(next)
+            while (toastQueueRef.current.length > TOAST_QUEUE_MAX) toastQueueRef.current.shift()
+            return
+          }
+          toastRef.current = next
+          setToast(next)
         }
 
         // 列表＋统计请求：seq 守卫防乱序；「全部」＝全局＋当前工作区。
@@ -1940,6 +2027,10 @@
             if (sliced.items.length === 0 && page > 0) { setPage(page - 1); return }
             // 来源/标签/状态均服务端过滤（分页口径一致）。
             setEntries(sliced.items)
+            // 批量选择与列表同步：条目被删除/归档/过滤掉后不再保留在选中集合。
+            var visibleIds = {}
+            for (var vi = 0; vi < sliced.items.length; vi++) visibleIds[sliced.items[vi].id] = true
+            setSelected(function (prev) { return prev.filter(function (id) { return visibleIds[id] === true }) })
             setHasMore(sliced.hasMore)
             setListError('')
           }).catch(function (err) {
@@ -2064,10 +2155,10 @@
           return function () { clearTimeout(timer) }
         }, [phase, query, categoryFilter, originFilter, tagFilter, statusFilter, page, selection, currentCwd, refreshEntries])
 
-        // toast 自动消失（时长按 toast 自带 duration）
+        // toast 自动消失（时长按 toast 自带 duration）；撤销吐司到期后继续展示排队提示。
         useEffect(function () {
           if (!toast) return undefined
-          var timer = setTimeout(function () { setToast(null) }, toast.duration || 2600)
+          var timer = setTimeout(dismissToast, toast.duration || 2600)
           return function () { clearTimeout(timer) }
         }, [toast])
 
@@ -2121,7 +2212,12 @@
         function openBulkDelete() {
           if (busy) return
           var chosen = entries.filter(function (e) { return selected.indexOf(e.id) !== -1 })
-          if (chosen.length === 0) return
+          if (chosen.length === 0) {
+            // 选中项已不在当前列表（被归档/删除/过滤）：清空选择并说明，避免按钮死点。
+            setSelected([])
+            showToast('error', t('errStaleSelection'))
+            return
+          }
           setConfirm({ entries: chosen })
         }
 
@@ -2198,22 +2294,36 @@
         }
 
         // 删除（单条/批量）→ 确认 → forget → 撤销吐司（import 原样恢复 id/时间戳）。
+        // 批量删除逐项结算：单项失败不阻断其余项；成功项仍可撤销，失败项汇报原因。
         function handleDelete() {
           if (busy || !confirm) return
           var started = confirm
           var targets = started.entries
           var wsTarget = workspaceTarget
           setBusy(true)
-          Promise.all(targets.map(function (e) {
+          var calls = targets.map(function (e) {
             return api.forget({ id: e.id, workspace: e.scope === 'workspace' ? wsTarget : undefined })
-          })).then(function () {
+          })
+          Promise.allSettled(calls).then(function (settled) {
             if (confirmRef.current === started) setConfirm(null)
+            var outcome = partitionSettled(targets, settled)
             setSelected([])
-            var text = targets.length === 1 ? t('deleted') : t('deletedN').replace('{n}', String(targets.length))
-            showToast('ok', text, {
-              label: t('undo'),
-              run: function () { restoreEntries(targets, wsTarget) },
-            })
+            // 成功项先从当前页移除，不必等刷新（刷新也仍会执行）。
+            var removed = {}
+            for (var i = 0; i < outcome.ok.length; i++) removed[outcome.ok[i].id] = true
+            setEntries(function (prev) { return prev.filter(function (e) { return removed[e.id] !== true }) })
+            if (outcome.ok.length > 0) {
+              var text = outcome.ok.length === 1 ? t('deleted') : t('deletedN').replace('{n}', String(outcome.ok.length))
+              var action = { label: t('undo'), run: function () { restoreEntries(outcome.ok, wsTarget) } }
+              if (outcome.failed.length > 0) {
+                text = t('deletedPartial').replace('{n}', String(outcome.ok.length)).replace('{m}', String(outcome.failed.length)) + '：' + errorText(outcome.failed[0].error, t)
+                showToast('error', text, action)
+              } else {
+                showToast('ok', text, action)
+              }
+            } else if (outcome.failed.length > 0) {
+              showToast('error', t('deleteFailed') + '：' + errorText(outcome.failed[0].error, t))
+            }
             return refreshRef.current()
           }).then(function () {
             return refreshWorkspaces()
@@ -2522,7 +2632,7 @@
           confirm ? h(ConfirmModal, { entries: confirm.entries, t: t, busy: busy, onConfirm: handleDelete, onClose: function () { if (!busy) setConfirm(null) } }) : null,
           importPlan ? h(ImportModal, { plan: importPlan.plan, mode: importPlan.mode, t: t, busy: busy, onConfirm: confirmImport, onModeChange: changeImportMode, onClose: function () { if (!busy) setImportPlan(null) } }) : null,
           audit ? h(AuditModal, { pairs: audit.pairs, t: t, busy: busy, onSupersede: handleSupersedePair, onDismiss: dismissPair, onClose: function () { if (!busy) setAudit(null) } }) : null,
-          toast ? h(Toast, { toast: toast, t: t, raised: selected.length > 0, onClose: function () { setToast(null) } }) : null)
+          toast ? h(Toast, { toast: toast, t: t, raised: selected.length > 0, onClose: dismissToast }) : null)
       }
 
       return {

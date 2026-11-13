@@ -48,11 +48,11 @@ This file is the self-iteration ledger for dsh-memory: per-round increments, ver
 
 ### P3 客户端健壮性
 
-- [ ] **fetch 无超时/无取消**：请求挂起时首屏骨架或全局 busy 永久卡死；`AbortSignal.timeout` + 超时文案 + `finally` 清理。
-- [ ] **删除失败路径**：批量删除部分失败后不刷新列表、不给撤销（`writeFailure` 吞错）；`allSettled` 后仍刷新并对成功项给撤销。
+- [x] **fetch 无超时/无取消**（0.24.4）：15s `AbortSignal.timeout`；超时/网络/坏响应统一映射本地化错误并中止，不再永久骨架或 busy 卡死。
+- [x] **删除失败路径**（0.24.4）：`Promise.allSettled` 逐项结算，成功后立即移除并刷新/保留撤销，失败项汇报，全部失败提示删除失败。
+- [x] **撤销 toast 被后续 toast 覆盖**（0.24.4）：撤销吐司未到期时普通提示排队（最多 3 条），点击撤销先出队再恢复。
+- [x] **批量选择与列表刷新同步**（0.24.4）：列表刷新后选中集合与当前页求交；选中项全失效时清空选择并提示。
 - [ ] **设置保存一致性**：服务端夹取值不回收（输入 0 实际存 1）、`backupNow` 触发的 `loadSettings` 会覆盖防抖窗内草稿、保存失败仍显示「已保存」。
-- [ ] **批量选择与列表刷新同步**：选中的条目被归档/过滤消失后浮栏仍显示，点「删除所选」静默无操作。
-- [ ] **撤销 toast 被后续 toast 覆盖**：6 秒删除撤销可能被任意其它操作挤掉。
 - [ ] **标签数量/长度**：客户端无 12 个上限/64 字符提示与去重，服务端静默截断。
 - [ ] **设置页加载失败永久骨架**：`loadSettings` catch 为空、无重试；召回预览旧响应可覆盖新响应。
 - [ ] **WAI-ARIA Tabs 模式**：`role=tablist/tab` 无 `aria-controls`/roving tabIndex/方向键，面板无 `role=tabpanel`。

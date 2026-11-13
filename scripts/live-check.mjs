@@ -62,11 +62,11 @@ async function main() {
 
   // 1. status：版本与 schema
   let token = ''
-  await check('status 报告 version=0.24.3 / schemaVersion=2 并下发 token', async () => {
+  await check('status 报告 version=0.24.4 / schemaVersion=2 并下发 token', async () => {
     const { status, json } = await req('GET', '/status')
     ok('status HTTP 200', status === 200, `got ${status}`)
     ok('status.ok', json?.ok === true)
-    ok('version === 0.24.3', json?.version === '0.24.3', `got ${json?.version}`)
+    ok('version === 0.24.4', json?.version === '0.24.4', `got ${json?.version}`)
     ok('schemaVersion === 2', json?.schemaVersion === 2, `got ${json?.schemaVersion}`)
     ok('token 非空', typeof json?.key === 'string' && json.key.length > 0)
     token = json?.key ?? ''
@@ -326,6 +326,9 @@ async function main() {
     // 0.24.1：面板列表请求构造器必须序列化 origin/tag/status，否则过滤不生效。
     ok('bundle 含 0.24.1 修复 entriesParams', code.includes('entriesParams'))
     ok('bundle 序列化 origin/tag/status', code.includes('p.origin') && code.includes('p.tag') && code.includes('p.status'))
+    // 0.24.4：请求超时/网络错误映射、撤销吐司优先队列、批量删除逐项结算。
+    ok('bundle 含 0.24.4 超时与队列修复', code.includes('REQUEST_TIMEOUT_MS') && code.includes('AbortSignal') && code.includes('errTimeout'))
+    ok('bundle 含 0.24.4 撤销队列与删除结算', code.includes('shouldQueueToast') && code.includes('partitionSettled'))
   })
 
   // 7. 清理测试条目

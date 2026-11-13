@@ -29,6 +29,18 @@ const EDGE = process.env.EDGE_PATH ?? 'C:\\Program Files (x86)\\Microsoft\\Edge\
 const DSH_HOME = process.env.DSH_HOME ?? path.join(os.homedir(), '.dsh')
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
+// 浏览器之外的直连 API（仅本机回环）：用于创建/清理验收临时记忆、核对撤销结果。
+async function apiJson(pathname, { method = 'GET', body, token } = {}) {
+  const headers = { 'Content-Type': 'application/json' }
+  if (token) headers['X-RPC-Key'] = token
+  const res = await fetch(new URL(`/plugins/dsh-memory${pathname}`, BASE), {
+    method,
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
+  })
+  return res.json().catch(() => null)
+}
+
 // ===== 浏览器会话 cookie 自签（host: dsh-client-connection browser-session） =====
 const b64url = (buf) => Buffer.from(buf).toString('base64').replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/u, '')
 
@@ -308,7 +320,104 @@ async function main() {
       await sleep(400)
     }
 
-    // 6) 无 JS 异常 + 截图
+    // 6) 删除撤销吐司优先级 + 撤销恢复（0.24.4）：删除后的撤销不能被后续提示挤掉。
+    const marker = `__gui_undo_${Date.now().toString(36)}__`
+    let createdIds = []
+    try {
+      const status = await apiJson('/status')
+      const token = status && status.key
+      const a = await apiJson('/save', { method: 'POST', token, body: { content: `${marker} A`, scope: 'global', origin: 'auto' } })
+      const b = await apiJson('/save', { method: 'POST', token, body: { content: `${marker} B`, scope: 'global', origin: 'auto' } })
+      const idA = a?.result?.entry?.id
+      const idB = b?.result?.entry?.id
+      createdIds = [idA, idB].filter(Boolean)
+      check('API 创建两条验收临时记忆', createdIds.length === 2, JSON.stringify(createdIds))
+
+      // 搜索标记让两条临时记忆出现在列表。
+      await evaluate(`(() => {
+        const input = document.querySelector('input.dm_search')
+        if (!input) return false
+        input.focus()
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+        setter.call(input, ${JSON.stringify(marker)})
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+        return true
+      })()`)
+      await sleep(1400)
+      const cards = await evaluate(`[...document.querySelectorAll('.dm_card')].map(el => (el.innerText || '').replace(/\\s+/g, ' '))`)
+      check('临时记忆出现在面板列表', cards.filter((text) => text.includes(marker)).length === 2, JSON.stringify(cards.length))
+
+      // 删除 A（卡片内「删除」→ 确认弹窗危险按钮）。
+      await evaluate(`(() => {
+        const card = [...document.querySelectorAll('.dm_card')].find(el => (el.innerText || '').includes(${JSON.stringify(`${marker} A`)}))
+        if (!card) return false
+        const btn = [...card.querySelectorAll('button')].find(b => (b.textContent || '').trim() === '删除' || (b.textContent || '').trim() === 'Delete')
+        if (btn) btn.click()
+        return Boolean(btn)
+      })()`)
+      await sleep(500)
+      await evaluate(`(() => { const btn = document.querySelector('.dm_btn_danger_solid'); if (btn) btn.click(); return Boolean(btn) })()`)
+      await sleep(1000)
+      const afterDelete = await evaluate(`(() => ({ text: (document.querySelector('.dm_toast_text') || {}).textContent || '', hasAction: document.querySelector('.dm_toast_action') !== null }))()`)
+      check('删除后出现带撤销的吐司', afterDelete.hasAction && /删除|Delete/.test(afterDelete.text), JSON.stringify(afterDelete))
+
+      // 立即触发另一条普通提示（对 B 钉选）：撤销吐司不应被覆盖，普通提示排队。
+      await evaluate(`(() => {
+        const card = [...document.querySelectorAll('.dm_card')].find(el => (el.innerText || '').includes(${JSON.stringify(`${marker} B`)}))
+        if (!card) return false
+        const btn = [...card.querySelectorAll('button')].find(b => (b.textContent || '').trim() === '钉选' || (b.textContent || '').trim() === 'Pin')
+        if (btn) btn.click()
+        return Boolean(btn)
+      })()`)
+      await sleep(600)
+      const afterPin = await evaluate(`(() => ({ text: (document.querySelector('.dm_toast_text') || {}).textContent || '', hasAction: document.querySelector('.dm_toast_action') !== null }))()`)
+      check('后续普通提示不覆盖撤销吐司', afterPin.hasAction && afterPin.text === afterDelete.text, JSON.stringify(afterPin))
+
+      // 点撤销 → A 通过 import 原样恢复（id/时间戳不变）。
+      await evaluate(`(() => { const btn = document.querySelector('.dm_toast_action'); if (btn) btn.click(); return Boolean(btn) })()`)
+      await sleep(1400)
+      const listAfterUndo = await apiJson(`/entries?query=${encodeURIComponent(marker)}&scope=global&include_superseded=true&include_expired=true&include_archived=true`)
+      check('撤销后记忆恢复且 id 不变', (listAfterUndo?.entries || []).some((e) => e.id === idA), JSON.stringify((listAfterUndo?.entries || []).map((e) => e.id)))
+      const queuedText = await evaluate(`(document.querySelector('.dm_toast_text') || {}).textContent || ''`)
+      check('排队的普通提示随后展示', /钉选|Pin/.test(queuedText) || queuedText.length > 0, queuedText)
+    } finally {
+      // 清理验收临时记忆（失败路径也要清）。
+      try {
+        const status = await apiJson('/status')
+        for (const id of createdIds) await apiJson('/forget', { method: 'POST', token: status?.key, body: { id } })
+        const left = await apiJson(`/entries?query=${encodeURIComponent(marker)}&scope=global&include_superseded=true&include_expired=true&include_archived=true`)
+        check('验收临时记忆已清理', (left?.entries || []).length === 0, JSON.stringify((left?.entries || []).map((e) => e.id)))
+      } catch (err) {
+        check('验收临时记忆已清理', false, String(err))
+      }
+      // 清空搜索框，恢复面板常态。
+      await evaluate(`(() => {
+        const input = document.querySelector('input.dm_search')
+        if (!input) return false
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+        setter.call(input, '')
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+        return true
+      })()`).catch(() => {})
+      await sleep(600)
+    }
+
+    // 7) 网络失败：离线时请求快速失败并显示可重试错误，而不是永久骨架/卡死。
+    await send('Network.emulateNetworkConditions', { offline: true, latency: 0, downloadThroughput: -1, uploadThroughput: -1 })
+    await evaluate(`(() => { const chips = [...document.querySelectorAll('.dm_chips .dm_chip')]; if (chips[1]) chips[1].click(); return Boolean(chips[1]) })()`)
+    await sleep(1500)
+    const offlineError = await evaluate(`(() => {
+      const el = document.querySelector('.dm_empty')
+      return el ? (el.innerText || '').replace(/\\s+/g, ' ').slice(0, 160) : ''
+    })()`)
+    check('网络失败显示可重试错误（不卡死）', /网络异常|Network error|失败|Failed/.test(offlineError), offlineError)
+    await send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 })
+    await sleep(600)
+    await evaluate(`(() => { const chips = [...document.querySelectorAll('.dm_chips .dm_chip')]; if (chips[0]) chips[0].click(); return Boolean(chips[0]) })()`)
+    await sleep(1200)
+    check('恢复在线后列表重新加载', (await evaluate(`document.querySelectorAll('.dm_card').length`)) >= 0)
+
+    // 8) 无 JS 异常 + 截图
     check('页面无未捕获 JS 异常', consoleLines.every((line) => !line.startsWith('exception:')), JSON.stringify(consoleLines.slice(0, 5)))
     const shot = await send('Page.captureScreenshot', { format: 'png' })
     writeFileSync(SHOT, Buffer.from(shot.data, 'base64'))

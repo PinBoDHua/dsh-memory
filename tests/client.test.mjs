@@ -7,7 +7,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import helpers from '../client/client.js'
 
-const { validateDraft, groupEntries, nextToken, entriesParams, buildEntriesQuery, workspaceOptions, errorKeyFor, validateImportDoc, importSummary, pageSlice, entryDetailRows, relativeTime, formatBytes, isExpired, statusOf, originOf, statusQueryFlags } = helpers
+const { validateDraft, groupEntries, nextToken, entriesParams, buildEntriesQuery, workspaceOptions, errorKeyFor, shouldQueueToast, partitionSettled, validateImportDoc, importSummary, pageSlice, entryDetailRows, relativeTime, formatBytes, isExpired, statusOf, originOf, statusQueryFlags } = helpers
 
 test('validateDraft accepts a complete draft and rejects bad ones', () => {
   assert.deepEqual(validateDraft({ content: '一条事实', category: 'fact' }), { ok: true })
@@ -176,12 +176,51 @@ test('errorKeyFor maps service and route errors to locale keys', () => {
   assert.equal(errorKeyFor({ code: 'invalid', message: '记忆内容不能为空…' }), 'errInvalid')
   assert.equal(errorKeyFor({ code: 'no-workspace', message: '…' }), 'errNoWorkspace')
   assert.equal(errorKeyFor({ code: 'duplicate', message: '…' }), 'errDuplicate')
+  // 0.24.4：超时/网络/坏响应（fetch 无响应时不再永久转圈）。
+  assert.equal(errorKeyFor({ code: 'timeout', message: 'timeout' }), 'errTimeout')
+  assert.equal(errorKeyFor({ code: 'network', message: 'network' }), 'errNetwork')
+  assert.equal(errorKeyFor({ code: 'bad-response', message: 'bad-response' }), 'errBadResponse')
+  assert.equal(errorKeyFor({ message: 'timeout' }), 'errTimeout')
   assert.equal(errorKeyFor({ status: 403, message: 'unauthorized' }), 'errUnauthorized')
   assert.equal(errorKeyFor({ status: 403, message: 'loopback-only' }), 'errLoopback')
   assert.equal(errorKeyFor({ status: 400, message: 'invalid-json' }), 'errInvalidJson')
   assert.equal(errorKeyFor({ status: 413, message: 'body-too-large' }), 'errBodyTooLarge')
   assert.equal(errorKeyFor({ status: 500, message: 'boom' }), null)
   assert.equal(errorKeyFor(null), null)
+})
+
+test('shouldQueueToast protects an unexpired undo toast from plain toasts', () => {
+  const now = 1000
+  const undo = { action: { label: '撤销' }, until: 7000 }
+  assert.equal(shouldQueueToast(undo, { text: '已钉选' }, now), true)
+  assert.equal(shouldQueueToast(undo, { text: '已复制' }, 6999), true)
+  // 已到期：不再保护。
+  assert.equal(shouldQueueToast(undo, { text: 'x' }, 7000), false)
+  // 新提示也是撤销动作时允许替换；没有撤销吐司时正常展示。
+  assert.equal(shouldQueueToast(undo, { action: { label: '撤销' } }, now), false)
+  assert.equal(shouldQueueToast(null, { text: 'x' }, now), false)
+  assert.equal(shouldQueueToast({ text: '普通', until: 7000 }, { text: 'x' }, now), false)
+  assert.equal(shouldQueueToast(undo, null, now), false)
+})
+
+test('partitionSettled splits batch delete results into deletable and failed', () => {
+  const items = [{ id: 'a' }, { id: 'b' }, { id: 'c' }]
+  const settled = [
+    { status: 'fulfilled' },
+    { status: 'rejected', reason: new Error('not-found') },
+    { status: 'fulfilled' },
+  ]
+  const out = partitionSettled(items, settled)
+  assert.deepEqual(out.ok.map((e) => e.id), ['a', 'c'])
+  assert.equal(out.failed.length, 1)
+  assert.equal(out.failed[0].entry.id, 'b')
+  assert.equal(out.failed[0].error.message, 'not-found')
+  // 边界：空输入/缺项按失败处理，避免静默丢项。
+  assert.deepEqual(partitionSettled([], []), { ok: [], failed: [] })
+  const partial = partitionSettled([{ id: 'x' }, { id: 'y' }], [{ status: 'fulfilled' }])
+  assert.deepEqual(partial.ok.map((e) => e.id), ['x'])
+  assert.equal(partial.failed[0].entry.id, 'y')
+  assert.deepEqual(partitionSettled(null, null), { ok: [], failed: [] })
 })
 
 test('validateImportDoc accepts only dsh-memory export v1 documents', () => {

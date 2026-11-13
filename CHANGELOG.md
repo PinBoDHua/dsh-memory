@@ -3,6 +3,18 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.24.4] - 2026-11-13
+
+### 修复 Fixed
+- **请求超时/网络失败不再卡死面板**：面板所有回环请求加 15s 超时（`AbortSignal.timeout`，超时中止），超时/网络失败/200 非 JSON 响应统一转成带 code 的错误并本地化（新增「请求超时 / 网络异常 / 响应格式异常」中英文案）。此前请求挂起会让首屏骨架或全局 busy 永久卡住、只能刷新页面。
+- **批量删除部分失败**：删除改为逐项结算（`Promise.allSettled`）——单项失败不再让整批「静默无操作」：成功项立即从列表移除、刷新列表/工作区并保留撤销（通过 import 原样恢复 id/时间戳），失败项在吐司里汇报原因；全部失败显示「删除失败」。
+- **撤销吐司被后续提示覆盖**：删除后的 6 秒撤销不再被任意普通提示挤掉——撤销吐司未到期时普通提示进入队列（最多 3 条），撤销到期/点击后再依次展示；点撤销先出队再执行恢复。
+- **批量选择与列表不同步**：列表刷新后把选中集合与当前页条目求交，条目被归档/删除/过滤掉后不再残留；「删除所选」在选中项已全部不在列表时清除选择并提示，而不是按钮死点。
+
+### 新增 Added
+- 客户端纯函数 `shouldQueueToast`（撤销吐司优先级判定）与 `partitionSettled`（批量删除逐项结果归类）＋单测；`errTimeout/errNetwork/errBadResponse` 映射测试。
+- GUI 验收脚本新增 4 组真实浏览器场景（删除撤销不被覆盖、撤销恢复 id 不变、离线网络错误可重试、恢复在线重载），GUI 检查 15→24 项。
+
 ## [0.24.3] - 2026-11-13
 
 ### 变更 Changed
