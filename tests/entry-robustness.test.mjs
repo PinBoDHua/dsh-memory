@@ -109,6 +109,29 @@ test('forget clears the access ledger; re-importing the same id starts with clea
   assert.equal(entry.last_access, undefined)
 })
 
+test('forgetting a damaged successor restores predecessors (no dangling superseded_by)', () => {
+  const { root, service } = tmpService()
+  const globalDir = path.join(root, 'global')
+  fs.mkdirSync(globalDir, { recursive: true })
+  const now = new Date().toISOString()
+  // 前驱 X 指向一个无法解析的坏文件 Y；若 forget(Y) 不清理指针，X 会永久隐藏。
+  store.writeEntry(root, {
+    id: 'm-pred-1',
+    category: 'fact',
+    scope: 'global',
+    tags: [],
+    created: now,
+    updated: now,
+    source: '',
+    content: '前驱记忆',
+    superseded_by: 'm-broken-9',
+  })
+  fs.writeFileSync(path.join(globalDir, 'm-broken-9.md'), 'not frontmatter at all', 'utf8')
+  assert.equal(service.forget({ id: 'm-broken-9' }).deleted, true)
+  assert.ok(service.search({ scope: 'global' }).some((e) => e.id === 'm-pred-1'), 'predecessor visible again')
+  assert.equal(store.findEntry(root, 'm-pred-1', undefined).superseded_by, undefined)
+})
+
 test('entry cache invalidates on inode change even when mtime/ctime/size collide', () => {
   const { root, service } = tmpService()
   store.clearEntryCache()

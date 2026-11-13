@@ -294,6 +294,54 @@ test('concurrent import fails fast with retryable busy instead of freezing on th
   assert.ok(elapsed < 5000, `lock wait ${elapsed}ms (expected ~3s cap)`)
 })
 
+test('backup refuses quickly (busy, no partial snapshot) while another process holds the import lock', () => {
+  const { root, service } = tmpService()
+  service.save({ content: '备份锁测试', scope: 'global' })
+  const lock = path.join(root, '.lock-import')
+  fs.mkdirSync(lock, { recursive: true })
+  const started = Date.now()
+  let err = null
+  try {
+    service.backup()
+  } catch (e) {
+    err = e
+  }
+  const elapsed = Date.now() - started
+  fs.rmSync(lock, { recursive: true, force: true })
+  assert.ok(err && err.code === 'busy', `expected busy, got ${err && err.code}`)
+  assert.ok(elapsed < 3000, `lock wait ${elapsed}ms (expected ~500ms cap)`)
+  const dir = path.join(root, 'backups')
+  assert.equal(fs.existsSync(dir) ? fs.readdirSync(dir).length : 0, 0, 'no partial backup written')
+  assert.match(String(service.status().backupError || ''), /备份失败/)
+  // 锁释放后恢复正常。
+  const ok = service.backup()
+  assert.ok(ok.file)
+})
+
+test('two backups created in the same millisecond do not overwrite each other', () => {
+  const { root, service } = tmpService()
+  service.save({ content: '同毫秒备份', scope: 'global' })
+  const RealDate = globalThis.Date
+  const fixed = RealDate.parse('2026-05-01T12:00:00.000Z')
+  globalThis.Date = class extends RealDate {
+    constructor(...args) {
+      if (args.length === 0) super(fixed)
+      else super(...args)
+    }
+    static now() { return fixed }
+  }
+  try {
+    const a = service.backup()
+    const b = service.backup()
+    assert.notEqual(a.file, b.file, 'same-timestamp backups must get unique names')
+    const dir = path.join(root, 'backups')
+    assert.ok(fs.existsSync(path.join(dir, a.file)))
+    assert.ok(fs.existsSync(path.join(dir, b.file)))
+  } finally {
+    globalThis.Date = RealDate
+  }
+})
+
 test('stats honours status/include_* so filtered view totals match the list', () => {
   const { service } = tmpService()
   const archived = service.save({ content: '归档统计条目', scope: 'global' })

@@ -49,7 +49,7 @@ Cross-session long-term memory for DeepSeek Harness: durable user preferences, p
 ├── meta.json                 # 存储元数据：schemaVersion/createdAt（首次写入时创建）
 ├── access.json               # 命中账本：id → { at, count }（检索/注入命中，节流 ≤1 次/小时；可选）
 ├── settings.json             # 设置覆盖层（可选；缺失＝用默认/profile 基线）
-├── backups/                  # 自动/手动备份的全量记忆导出 JSON（只轮转插件自己的 dsh-memory-<时间戳>.json；不含设置/账本元数据）
+├── backups/                  # 自动/手动备份的全量记忆导出 JSON（只轮转插件自己的 dsh-memory-<时间戳>.json；备份与导入共用写锁、同毫秒文件名去重；不含设置/账本元数据）
 ├── global/<id>.md
 └── workspaces/
     ├── index.json            # 目录哈希 → 工作区路径对照（仅供排查）
@@ -76,7 +76,7 @@ pinned: true
 
 v2 可选字段（`origin`/`supersedes`/`superseded_by`/`superseded_at`/`expires`/`pinned`/`archived`/`last_access`/`hit_count`）**稀疏存储**：仅在显式设置时写入文件，旧文件无需改写、读取时懒缺省（缺 origin 视为 manual、缺 pinned/archived 视为 false）；origin 可经 `memory_update` 或面板编辑弹窗显式修正（0.10.0 起 save 工具必填 origin，面板文案「显式要求/主动沉淀」）。
 
-写入为「临时文件＋改名」的原子写；每次操作实时重读磁盘，因此 DSH 运行中手工编辑文件也会立即生效。**文件名是 id 权威、所在目录是 scope 权威**（frontmatter 里的 id/scope 仅兼容无上下文解析，写回时自动修正）——复制/改名/手改不会让一条记忆「变成」另一条。UTF-8 BOM 与 CRLF 手改文件可正常解析；损坏文件会被跳过而不是报错，但仍可按 id 删除，不留不可管理的孤儿文件。条目解析结果带进程内缓存（签名＝路径＋mtime/ctime/size/ino/birthtimeMs，规避 Windows 文件时间 tick 碰撞）：热路径只 `statSync`、不重复读文件与解析；手工编辑、其它进程原子写、删除都会改变签名并自动失效；LRU 淘汰（命中提升到队尾），上限 8192 条（可用 `DSH_MEMORY_ENTRY_CACHE_LIMIT` 调小用于压测）。命中簿记（`last_access`/`hit_count`）写入独立 `access.json` 账本（原子写＋跨进程锁、读取带签名缓存），**不再改写条目 Markdown**——没有单文件读-改-写窗口，也不会覆盖并发写入的正文；账本损坏按空处理并在下次命中时自愈，删除条目时同步清理其账本记录，并在启动与导入后惰性清理「已无对应文件」的幽灵记录（避免同 id 重新导入继承旧命中、账本无界增长）。
+写入为「临时文件＋改名」的原子写（失败时清理临时文件，不在数据目录留垃圾）；每次操作实时重读磁盘，因此 DSH 运行中手工编辑文件也会立即生效。**文件名是 id 权威、所在目录是 scope 权威**（frontmatter 里的 id/scope 仅兼容无上下文解析，写回时自动修正）——复制/改名/手改不会让一条记忆「变成」另一条。UTF-8 BOM 与 CRLF 手改文件可正常解析；损坏文件会被跳过而不是报错，但仍可按 id 删除，不留不可管理的孤儿文件（删除损坏文件时同步清理其它条目指向它的取代指针，避免前驱永久隐藏）。条目解析结果带进程内缓存（签名＝路径＋mtime/ctime/size/ino/birthtimeMs，规避 Windows 文件时间 tick 碰撞）：热路径只 `statSync`、不重复读文件与解析；手工编辑、其它进程原子写、删除都会改变签名并自动失效；LRU 淘汰（命中提升到队尾），上限 8192 条（可用 `DSH_MEMORY_ENTRY_CACHE_LIMIT` 调小用于压测）。命中簿记（`last_access`/`hit_count`）写入独立 `access.json` 账本（原子写＋跨进程锁、读取带签名缓存），**不再改写条目 Markdown**——没有单文件读-改-写窗口，也不会覆盖并发写入的正文；账本损坏按空处理并在下次命中时自愈，删除条目时同步清理其账本记录，并在启动与导入后惰性清理「已无对应文件」的幽灵记录（避免同 id 重新导入继承旧命中、账本无界增长）。
 
 并发与版本化：记忆按 home 共享，多个 DSH 进程可能同时写入。`index.json` 的读-改-写、`access.json` 命中账本与批量导入的落盘阶段由跨进程写锁保护（原子 mkdir 互斥；持锁进程崩溃留下的陈旧锁按 mtime 自愈；获取超时抛错；批量导入显式放宽 stale/timeout 以覆盖大导入；锁是同步临界区，async 回调会被显式拒绝以免提前放锁）。面板一次刷新会同时请求 entries 与 stats：两者共用单遍 `collectEntries`（一次列目录＋一次遍历产出可见集/隐藏计数/状态分布），大库下不再各自两遍全量遍历；两者使用同一组过滤参数（status/include_*/category/origin/tag），过滤视图下统计头与列表一致；隐藏计数按 `entryStatus` 优先级归类（superseded→expired→archived），与状态 chips 同口径。相似查重使用内容特征倒排候选，避免 O(N²)。单条保存/更新本身是原子文件写，id 唯一，不需要锁。`meta.json` 记录 `schemaVersion`（当前 2）；加载时若检测到旧 v1 数据，先强制备份一次（即使自动备份关闭）再升级 meta 锚点，新字段懒缺省、不逐文件改写，旧记忆零丢失。缺失或损坏时自动重建，不影响读写。HTTP 写路由只接受 JSON 对象 body，非对象（null/数组/标量）统一 400 `invalid-json`。
 

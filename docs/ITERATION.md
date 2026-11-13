@@ -119,7 +119,7 @@ This file is the self-iteration ledger for dsh-memory: per-round increments, ver
 - [ ] 大库导入可能超过客户端 15s 超时（0.24.15 导入单独 180s 已缓解，仍无进度/幂等确认）。
 
 **P3**
-- [ ] 删除「损坏的后继文件」不清理前驱 `superseded_by`，旧记忆永久隐藏。
+- [x] 删除「损坏的后继文件」不清理前驱 `superseded_by`，旧记忆永久隐藏（0.24.21：两分支共用取代指针清理）。
 - [x] hidden 归类顺序（superseded→archived→expired）与 `entryStatus`（→expired→archived）不一致（0.24.20：统一按 entryStatus 优先级，含双态条目）。
 - [x] `/stats` 不接收 status/include_*，「全部状态」视图下头部总数与列表不一致（0.24.20：stats 与列表同参数，客户端统计请求同步 status/include/category/origin/tag）。
 - [x] 编辑/删除确认弹窗写请求期间无「进行中」反馈（0.24.19：显示保存中/删除中）。
@@ -128,7 +128,7 @@ This file is the self-iteration ledger for dsh-memory: per-round increments, ver
 
 **待验证**
 - [ ] 常驻 tabpanel 共享单一滚动容器：切设置页会把列表 scrollTop 夹小，切回无法恢复。
-- [ ] `backup()` 导出无锁快照：导入持 `.lock-import` 写盘期间可能备份到半批数据；同毫秒两次备份同名覆盖；`atomicWrite` 失败残留临时文件。
+- [x] `backup()` 导出无锁快照：导入持 `.lock-import` 写盘期间可能备份到半批数据；同毫秒两次备份同名覆盖；`atomicWrite` 失败残留临时文件（0.24.21：备份与导入共用锁、唯一文件名、失败清理临时文件）。
 
 ### 明确不做
 

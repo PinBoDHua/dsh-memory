@@ -331,6 +331,22 @@ test('move: superseded duplicate in target scope does not block the move', () =>
   assert.throws(() => store.moveEntry(root, activeDup.id, 'workspace', CWD_A), (err) => err.code === 'duplicate')
 })
 
+test('atomicWrite cleans its temp file on failure; uniqueFileName avoids collisions', () => {
+  const root = tmpRoot()
+  const dir = path.join(root, 'files')
+  fs.mkdirSync(dir, { recursive: true })
+  const target = path.join(dir, 'file.json')
+  fs.mkdirSync(target) // 目标是目录 → rename 失败
+  assert.throws(() => store.atomicWrite(target, 'data'))
+  assert.deepEqual(fs.readdirSync(dir).filter((n) => n.includes('.tmp-')), [], 'no temp leftovers')
+
+  assert.equal(store.uniqueFileName(dir, 'dsh-memory-2026.json'), 'dsh-memory-2026.json')
+  fs.writeFileSync(path.join(dir, 'dsh-memory-2026.json'), 'x')
+  assert.equal(store.uniqueFileName(dir, 'dsh-memory-2026.json'), 'dsh-memory-2026-1.json')
+  fs.writeFileSync(path.join(dir, 'dsh-memory-2026-1.json'), 'x')
+  assert.equal(store.uniqueFileName(dir, 'dsh-memory-2026.json'), 'dsh-memory-2026-2.json')
+})
+
 test('collectEntries single pass matches legacy filterEntries visible/hidden/byStatus', () => {
   const root = tmpRoot()
   const { entry: pinned } = store.saveEntry(root, { content: '检索关键词甲', scope: 'global', pinned: true })

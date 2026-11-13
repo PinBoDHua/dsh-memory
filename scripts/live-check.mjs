@@ -510,6 +510,21 @@ async function main() {
     ok('workspaces 数组', Array.isArray(ws.json?.workspaces))
   })
 
+  await check('备份在导入锁期间快速失败（busy，0.24.21）', async () => {
+    const lock = path.join(statusRoot, '.lock-import')
+    try {
+      mkdirSync(lock, { recursive: true })
+      const started = Date.now()
+      const r = await req('POST', '/backup', { token, body: {} })
+      const elapsed = Date.now() - started
+      ok('backup busy HTTP 503', r.status === 503, `got ${r.status}`)
+      ok('backup busy code=busy', r.json?.code === 'busy', JSON.stringify(r.json))
+      ok('backup busy 快速返回（≤3s）', elapsed < 3000, `${elapsed}ms`)
+    } finally {
+      try { rmSync(lock, { recursive: true, force: true }) } catch { /* ignore */ }
+    }
+  })
+
   await check('隐藏归类与统计/列表同口径（0.24.20）', async () => {
     const sv = await req('POST', '/save', { token, body: { content: `${RUN} 双态条目`, scope: 'global', origin: 'auto' } })
     const id = sv.json?.result?.entry?.id ?? ''

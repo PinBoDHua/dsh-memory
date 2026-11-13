@@ -3,6 +3,17 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.24.21] - 2026-11-13
+
+### 修复 Fixed（第三轮审计剩余边角）
+- **删除损坏后继文件会清理前驱取代指针**：`forget` 的坏文件兜底分支此前只删文件，其它条目里的 `superseded_by: <坏文件 id>` 仍在 → 前驱记忆永久隐藏且工具无法修复。现在两分支共用 `clearSupersedeReferences`（best-effort 清理 `superseded_by/superseded_at/supersedes`）。
+- **备份快照与导入互斥**：`backup()` 与批量导入共用 `.lock-import`（≤500ms），锁忙返回可重试 `busy`（503）而不是静默保存「半批」快照；显式备份失败仍写 `status.backupError`，自动备份降级。
+- **同毫秒备份不互相覆盖**：备份文件名经 `uniqueFileName` 去重（`-1/-2…`），同毫秒两次备份都会保留。
+- **atomicWrite 失败不留临时文件**：写入/改名失败时清理 `.tmp-*`，用户数据目录不再积累垃圾临时文件。
+
+### 新增 Added
+- 测试：损坏后继 forget 后前驱恢复可见且无悬垂指针、导入锁期间 backup 快速 busy 且零文件写入、同毫秒两次备份文件名唯一、atomicWrite 失败无临时残留、`uniqueFileName` 冲突递增；live-check 增加「备份在导入锁期间快速失败」真机检查。
+
 ## [0.24.20] - 2026-11-13
 
 ### 修复 Fixed（第三轮审计 P3：展示口径一致性）
