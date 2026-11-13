@@ -3,6 +3,15 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.17.0] - 2026-11-13
+
+### 新增 Added
+- **作用域感知导出**：`service.export({scope,workspace})` 与 `GET /export?scope=&workspace=` 支持按作用域导出——`all` 全量（默认，向后兼容，自动备份/立即备份不受影响）、`global` 仅全局、`workspace` 指定工作区（缺 cwd 报 no-workspace，非法 scope 报 invalid）。便于单独分享/迁移全局偏好或某工作区记忆。
+- 面板「导出」跟随当前作用域选择（全部=全量、仅全局=全局、工作区=该工作区），文件名含作用域标签，吐司显示导出条数。
+
+### 变更 Changed
+- 导出吐司由「已导出全部记忆」改为「已导出 {n} 条记忆」（中英）。
+
 ## [0.16.0] - 2026-11-13
 
 ### 新增 Added
@@ -206,6 +215,7 @@ All notable changes to this project are documented here. Format follows Keep a C
 - 系统提示注入：指引＋字符预算内召回（`interpolate: false` 保护用户内容）。
 - 隐私护栏：密码/密钥/token 规则检测硬拒写。
 
+[0.17.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.13.0...v0.14.0

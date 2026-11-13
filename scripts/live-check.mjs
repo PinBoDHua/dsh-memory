@@ -60,11 +60,11 @@ async function main() {
 
   // 1. status：版本与 schema
   let token = ''
-  await check('status 报告 version=0.16.0 / schemaVersion=2 并下发 token', async () => {
+  await check('status 报告 version=0.17.0 / schemaVersion=2 并下发 token', async () => {
     const { status, json } = await req('GET', '/status')
     ok('status HTTP 200', status === 200, `got ${status}`)
     ok('status.ok', json?.ok === true)
-    ok('version === 0.16.0', json?.version === '0.16.0', `got ${json?.version}`)
+    ok('version === 0.17.0', json?.version === '0.17.0', `got ${json?.version}`)
     ok('schemaVersion === 2', json?.schemaVersion === 2, `got ${json?.schemaVersion}`)
     ok('token 非空', typeof json?.key === 'string' && json.key.length > 0)
     token = json?.key ?? ''
@@ -198,6 +198,12 @@ async function main() {
     ok('workspaces 数组', Array.isArray(ws.json?.workspaces))
   })
 
+  await check('GET /export 作用域过滤（0.17.0）', async () => {
+    const g = await req('GET', '/export?scope=global')
+    ok('export global format', g.json?.format === 'dsh-memory-export')
+    ok('export global 仅全局条目', (g.json?.entries ?? []).every((e) => e.scope === 'global' && e.workspace === null))
+  })
+
   // 6. 客户端分发 rev：按宿主配方从 client.js stat 计算 rev，取 bundle 验证含新代码
   await check('客户端 bundle 按 rev 分发且含新代码', async () => {
     const rev = clientRev()
@@ -211,6 +217,7 @@ async function main() {
     ok('bundle 含 0.12.0 新文案 auditTitle', code.includes('auditTitle'))
     ok('bundle 含 0.14.0 新文案 recallTitle', code.includes('recallTitle'))
     ok('bundle 含 0.16.0 新文案 statusAll/jumpToEntry', code.includes('statusAll') && code.includes('jumpToEntry'))
+    ok('bundle 含 0.17.0 新文案 已导出 {n} 条记忆', code.includes('已导出 {n} 条记忆'))
   })
 
   // 7. 清理测试条目

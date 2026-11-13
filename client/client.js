@@ -344,7 +344,7 @@
     workspaceTarget: '写入工作区',
     export: '导出',
     import: '导入',
-    exportDone: '已导出全部记忆',
+    exportDone: '已导出 {n} 条记忆',
     importTitle: '导入记忆',
     importNew: '新增',
     importDup: '重复跳过',
@@ -535,7 +535,7 @@
     workspaceTarget: 'Writes to workspace',
     export: 'Export',
     import: 'Import',
-    exportDone: 'All memories exported',
+    exportDone: 'Exported {n} memories',
     importTitle: 'Import memories',
     importNew: 'New',
     importDup: 'Duplicates skipped',
@@ -1053,7 +1053,7 @@
           stats: function (params) { return request(API_BASE + '/stats' + buildEntriesQuery(params)) },
           similar: function (params) { return request(API_BASE + '/similar' + buildEntriesQuery(params)) },
           recallPreview: function (workspace) { return request(API_BASE + '/recall-preview' + (workspace ? '?workspace=' + encodeURIComponent(workspace) : '')) },
-          export: function () { return request(API_BASE + '/export') },
+          export: function (params) { return request(API_BASE + '/export' + buildEntriesQuery(params || {})) },
           settings: function () { return request(API_BASE + '/settings') },
           saveSettings: function (input) { return post(API_BASE + '/settings', input) },
           resetSettings: function () { return post(API_BASE + '/settings/reset', {}) },
@@ -2178,17 +2178,18 @@
         function handleExport() {
           if (busy) return
           setBusy(true)
-          api.export().then(function (doc) {
+          var scopeParams = selection === 'global' ? { scope: 'global' } : selection === 'all' ? { scope: 'all' } : { scope: 'workspace', workspace: selection }
+          api.export(scopeParams).then(function (doc) {
             var blob = new Blob([JSON.stringify(doc, null, 2)], { type: 'application/json' })
             var url = URL.createObjectURL(blob)
             var a = document.createElement('a')
             a.href = url
-            a.download = 'dsh-memory-export-' + new Date().toISOString().slice(0, 10) + '.json'
+            a.download = 'dsh-memory-export-' + scopeParams.scope + '-' + new Date().toISOString().slice(0, 10) + '.json'
             document.body.appendChild(a)
             a.click()
             a.remove()
             setTimeout(function () { URL.revokeObjectURL(url) }, 1000)
-            showToast('ok', t('exportDone'))
+            showToast('ok', t('exportDone').replace('{n}', String((doc.entries || []).length)))
           }).catch(writeFailure).then(function () { setBusy(false) })
         }
 
