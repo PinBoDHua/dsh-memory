@@ -60,11 +60,11 @@ async function main() {
 
   // 1. status：版本与 schema
   let token = ''
-  await check('status 报告 version=0.20.0 / schemaVersion=2 并下发 token', async () => {
+  await check('status 报告 version=0.21.0 / schemaVersion=2 并下发 token', async () => {
     const { status, json } = await req('GET', '/status')
     ok('status HTTP 200', status === 200, `got ${status}`)
     ok('status.ok', json?.ok === true)
-    ok('version === 0.20.0', json?.version === '0.20.0', `got ${json?.version}`)
+    ok('version === 0.21.0', json?.version === '0.21.0', `got ${json?.version}`)
     ok('schemaVersion === 2', json?.schemaVersion === 2, `got ${json?.schemaVersion}`)
     ok('token 非空', typeof json?.key === 'string' && json.key.length > 0)
     token = json?.key ?? ''
@@ -168,6 +168,11 @@ async function main() {
     ok('默认有隐藏匹配', def.json?.hidden?.total >= 1)
     const inc = await req('GET', `/entries?query=${encodeURIComponent(RUN)}&include_superseded=true&include_expired=true&include_archived=true`)
     ok('全 include 后 hidden.total=0', inc.json?.hidden?.total === 0)
+  })
+
+  await check('GET /entries 来源过滤（0.21.0）', async () => {
+    const a = await req('GET', `/entries?query=${encodeURIComponent(RUN)}&origin=auto`)
+    ok('origin=auto 仅自动条目', (a.json?.entries ?? []).every((e) => (e.origin || 'manual') === 'auto'))
   })
 
   // 3. stats byStatus

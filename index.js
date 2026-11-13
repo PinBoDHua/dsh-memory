@@ -183,13 +183,15 @@ export function apply(ctx, rawConfig) {
 
   const searchTool = {
     name: 'memory_search',
-    description: '检索跨会话记忆：关键词大小写不敏感、多词须全部命中（中文支持模糊），非空查询按相关度×新近度排序；空查询＝按更新时间列出。默认隐藏被取代/已过期/已归档条目，可用 include_* 找回。返回 {entries, hidden}：hidden 统计被隐藏的匹配数（提示可用 include_* 找回的历史）；offset 分页。Search cross-session memory; returns {entries, hidden} with hidden-match counts; hidden (superseded/expired/archived) entries excluded by default; offset paginates.',
+    description: '检索跨会话记忆：关键词大小写不敏感、多词须全部命中（中文支持模糊），非空查询按相关度×新近度排序；空查询＝按更新时间列出；可按 scope/category/origin/tag 过滤。默认隐藏被取代/已过期/已归档条目，可用 include_* 找回。返回 {entries, hidden}：hidden 统计被隐藏的匹配数（提示可用 include_* 找回的历史）；offset 分页。Search cross-session memory; filter by scope/category/origin/tag; returns {entries, hidden} with hidden-match counts; hidden (superseded/expired/archived) entries excluded by default; offset paginates.',
     parameters: {
       type: 'object',
       properties: {
         query: { type: 'string', description: '关键词，空格分词；留空列出全部 Keywords; empty lists all' },
         scope: { type: 'string', enum: ['global', 'workspace', 'all'], description: '检索范围（默认 all=全局+当前工作区）' },
         category: { type: 'string', enum: ['preference', 'fact', 'decision'], description: '按分类过滤 Optional category filter' },
+        origin: { type: 'string', enum: ['manual', 'auto'], description: '按来源过滤（manual=显式要求 / auto=主动沉淀）Filter by origin' },
+        tag: { type: 'string', description: '按标签精确过滤（大小写不敏感）Filter by exact tag (case-insensitive)' },
         limit: { type: 'integer', description: '最多返回条数（默认 20）Max results (default 20)' },
         offset: { type: 'integer', description: '分页偏移，跳过前 N 条（默认 0）Pagination offset (default 0)' },
         include_superseded: { type: 'boolean', description: '包含被取代的历史条目（默认 false）Include superseded history' },
@@ -256,6 +258,8 @@ export function apply(ctx, rawConfig) {
         query: args.query ?? '',
         scope: args.scope ?? 'all',
         category: args.category,
+        origin: args.origin,
+        tag: args.tag,
         workspace: cwdOf(sessionOf(exec)),
         limit: args.limit ?? 20,
         offset: args.offset ?? 0,

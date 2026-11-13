@@ -3,6 +3,11 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.21.0] - 2026-11-13
+
+### 新增 Added
+- **检索精确过滤**：`memory_search` 与 `GET /entries` 新增 `origin`（manual/auto）与 `tag`（大小写不敏感精确匹配）过滤参数，贯穿 `store.filterEntries`/`searchEntries`、`service.search`/`searchDetailed`（隐藏计数同口径）。便于 agent 审阅自动沉淀的记忆（origin=auto）或按标签精准切片。
+
 ## [0.20.0] - 2026-11-13
 
 ### 新增 Added
@@ -237,6 +242,7 @@ All notable changes to this project are documented here. Format follows Keep a C
 - 系统提示注入：指引＋字符预算内召回（`interpolate: false` 保护用户内容）。
 - 隐私护栏：密码/密钥/token 规则检测硬拒写。
 
+[0.21.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.17.0...v0.18.0
