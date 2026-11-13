@@ -58,23 +58,13 @@
     return entry && entry.origin === 'auto' ? 'auto' : 'manual'
   }
 
-  // 选中隐藏态筛选时放宽对应 include_*；active/pinned 不需要服务端参数。
+  // 选中隐藏态筛选时放宽对应 include_*；pinned 与状态正交，需放宽全部隐藏态；active 不需要服务端参数。
   function statusQueryFlags(status) {
-    if (status === 'all') return { include_superseded: true, include_expired: true, include_archived: true }
+    if (status === 'all' || status === 'pinned') return { include_superseded: true, include_expired: true, include_archived: true }
     if (status === 'superseded') return { include_superseded: true }
     if (status === 'expired') return { include_expired: true }
     if (status === 'archived') return { include_archived: true }
     return {}
-  }
-
-  // 来源/状态筛选在客户端过滤当前页（服务端仅负责放宽隐藏态）。
-  function matchesFilters(entry, filters, now) {
-    var e = entry || {}
-    var f = filters || {}
-    if (f.status === 'pinned') { if (!e.pinned) return false }
-    else if (f.status && f.status !== 'active' && f.status !== 'all' && statusOf(e, now) !== f.status) return false
-    if (f.origin && originOf(e) !== f.origin) return false
-    return true
   }
 
   function groupEntries(entries) {
@@ -210,7 +200,7 @@
     return (mb < 10 ? mb.toFixed(1) : Math.round(mb)) + ' MB'
   }
 
-  var helpers = { validateDraft: validateDraft, groupEntries: groupEntries, nextToken: nextToken, buildEntriesQuery: buildEntriesQuery, workspaceOptions: workspaceOptions, errorKeyFor: errorKeyFor, validateImportDoc: validateImportDoc, importSummary: importSummary, pageSlice: pageSlice, entryDetailRows: entryDetailRows, relativeTime: relativeTime, formatBytes: formatBytes, isExpired: isExpired, statusOf: statusOf, originOf: originOf, statusQueryFlags: statusQueryFlags, matchesFilters: matchesFilters }
+  var helpers = { validateDraft: validateDraft, groupEntries: groupEntries, nextToken: nextToken, buildEntriesQuery: buildEntriesQuery, workspaceOptions: workspaceOptions, errorKeyFor: errorKeyFor, validateImportDoc: validateImportDoc, importSummary: importSummary, pageSlice: pageSlice, entryDetailRows: entryDetailRows, relativeTime: relativeTime, formatBytes: formatBytes, isExpired: isExpired, statusOf: statusOf, originOf: originOf, statusQueryFlags: statusQueryFlags }
 
   // ===== node 测试导出（CJS） =====
   if (typeof module !== 'undefined' && module.exports) {
@@ -1898,7 +1888,7 @@
           if (selection === 'global') scopeParams.scope = 'global'
           else if (selection === 'all') { scopeParams.scope = 'all'; scopeParams.workspace = currentCwd }
           else { scopeParams.scope = 'workspace'; scopeParams.workspace = selection }
-          var params = Object.assign({}, scopeParams, { query: query, category: categoryFilter, origin: originFilter, tag: tagFilter, limit: pageSize + 1, offset: page * pageSize }, statusQueryFlags(statusFilter))
+          var params = Object.assign({}, scopeParams, { query: query, category: categoryFilter, origin: originFilter, tag: tagFilter, status: statusFilter, limit: pageSize + 1, offset: page * pageSize }, statusQueryFlags(statusFilter))
           var statsParams = Object.assign({}, scopeParams, { query: query })
           return Promise.all([api.entries(params), api.stats(statsParams), api.recallPreview(currentCwd).catch(function () { return null })]).then(function (results) {
             if (seq !== seqRef.current) return
@@ -1910,8 +1900,8 @@
             var sliced = pageSlice(doc.entries, pageSize)
             // 当前页被删空（如删掉末页最后一条）→ 自动回退一页，避免误导性空态。
             if (sliced.items.length === 0 && page > 0) { setPage(page - 1); return }
-            // 状态筛选在客户端过滤当前页；来源/标签已服务端过滤（分页口径一致）。
-            setEntries(sliced.items.filter(function (e) { return matchesFilters(e, { status: statusFilter }) }))
+            // 来源/标签/状态均服务端过滤（分页口径一致）。
+            setEntries(sliced.items)
             setHasMore(sliced.hasMore)
             setListError('')
           }).catch(function (err) {

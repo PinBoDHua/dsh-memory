@@ -60,11 +60,11 @@ async function main() {
 
   // 1. status：版本与 schema
   let token = ''
-  await check('status 报告 version=0.23.0 / schemaVersion=2 并下发 token', async () => {
+  await check('status 报告 version=0.24.0 / schemaVersion=2 并下发 token', async () => {
     const { status, json } = await req('GET', '/status')
     ok('status HTTP 200', status === 200, `got ${status}`)
     ok('status.ok', json?.ok === true)
-    ok('version === 0.23.0', json?.version === '0.23.0', `got ${json?.version}`)
+    ok('version === 0.24.0', json?.version === '0.24.0', `got ${json?.version}`)
     ok('schemaVersion === 2', json?.schemaVersion === 2, `got ${json?.schemaVersion}`)
     ok('token 非空', typeof json?.key === 'string' && json.key.length > 0)
     token = json?.key ?? ''
@@ -173,6 +173,12 @@ async function main() {
   await check('GET /entries 来源过滤（0.21.0）', async () => {
     const a = await req('GET', `/entries?query=${encodeURIComponent(RUN)}&origin=auto`)
     ok('origin=auto 仅自动条目', (a.json?.entries ?? []).every((e) => (e.origin || 'manual') === 'auto'))
+  })
+
+  await check('GET /entries 状态服务端过滤（0.24.0）', async () => {
+    const a = await req('GET', `/entries?query=${encodeURIComponent(RUN)}&status=active`)
+    const today = new Date().toISOString().slice(0, 10)
+    ok('status=active 仅活跃条目', (a.json?.entries ?? []).every((e) => !e.superseded_by && !e.archived && !(e.expires && e.expires < today)))
   })
 
   // 3. stats byStatus

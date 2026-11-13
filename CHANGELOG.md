@@ -3,6 +3,15 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.24.0] - 2026-11-13
+
+### 变更 Changed
+- **状态过滤改服务端**：面板状态筛选（活跃/被取代/已过期/已归档/已钉选/全部）由客户端逐页过滤改为服务端 `status` 后置过滤（`GET /entries?status=`），修复状态过滤下分页条数波动；`pinned` 现放宽全部隐藏态，不再漏掉钉选的归档/过期/被取代条目。移除客户端 `matchesFilters`（来源/标签/状态均已服务端）。
+- **状态优先级口径统一**：新增 `store.entryStatus`（被取代 > 已过期 > 已归档 > 活跃，pinned 正交），`service.stats` 的 byStatus 改用同一口径（此前 archived 优先于 expired，与面板 statusOf 不一致）。
+
+### 新增 Added
+- `store.entryStatus` 纯函数＋状态服务端过滤回归测试（`tests/status-filter.test.mjs`）。
+
 ## [0.23.0] - 2026-11-13
 
 ### 变更 Changed
@@ -258,6 +267,7 @@ All notable changes to this project are documented here. Format follows Keep a C
 - 系统提示注入：指引＋字符预算内召回（`interpolate: false` 保护用户内容）。
 - 隐私护栏：密码/密钥/token 规则检测硬拒写。
 
+[0.24.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.23.0...v0.24.0
 [0.23.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.22.0...v0.23.0
 [0.22.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/PinBoDHua/dsh-memory/compare/v0.20.0...v0.21.0

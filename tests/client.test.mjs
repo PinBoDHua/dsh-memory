@@ -7,7 +7,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import helpers from '../client/client.js'
 
-const { validateDraft, groupEntries, nextToken, buildEntriesQuery, workspaceOptions, errorKeyFor, validateImportDoc, importSummary, pageSlice, entryDetailRows, relativeTime, formatBytes, isExpired, statusOf, originOf, statusQueryFlags, matchesFilters } = helpers
+const { validateDraft, groupEntries, nextToken, buildEntriesQuery, workspaceOptions, errorKeyFor, validateImportDoc, importSummary, pageSlice, entryDetailRows, relativeTime, formatBytes, isExpired, statusOf, originOf, statusQueryFlags } = helpers
 
 test('validateDraft accepts a complete draft and rejects bad ones', () => {
   assert.deepEqual(validateDraft({ content: '一条事实', category: 'fact' }), { ok: true })
@@ -211,49 +211,11 @@ test('statusQueryFlags maps hidden statuses to include_* params', () => {
   assert.deepEqual(statusQueryFlags('expired'), { include_expired: true })
   assert.deepEqual(statusQueryFlags('archived'), { include_archived: true })
   assert.deepEqual(statusQueryFlags('active'), {})
-  assert.deepEqual(statusQueryFlags('pinned'), {})
+  assert.deepEqual(statusQueryFlags('pinned'), { include_superseded: true, include_expired: true, include_archived: true })
   assert.deepEqual(statusQueryFlags(''), {})
   assert.deepEqual(statusQueryFlags(undefined), {})
 })
 
-test('matchesFilters combines status and origin filters', () => {
-  const now = Date.parse('2026-11-13T12:00:00Z')
-  const active = { id: 'a' }
-  const auto = { id: 'b', origin: 'auto' }
-  const pinned = { id: 'c', pinned: true, origin: 'auto' }
-  const superseded = { id: 'd', superseded_by: 'x' }
-  const archived = { id: 'e', archived: true }
-  assert.equal(matchesFilters(active, {}, now), true)
-  assert.equal(matchesFilters(active, { status: 'active' }, now), true)
-  // 活跃视图的隐藏态由服务端排除，客户端不再二次过滤
-  assert.equal(matchesFilters(superseded, { status: 'active' }, now), true)
-  assert.equal(matchesFilters(superseded, { status: 'superseded' }, now), true)
-  assert.equal(matchesFilters(active, { status: 'superseded' }, now), false)
-  assert.equal(matchesFilters(archived, { status: 'archived' }, now), true)
-  assert.equal(matchesFilters(pinned, { status: 'pinned' }, now), true)
-  assert.equal(matchesFilters(active, { status: 'pinned' }, now), false)
-  assert.equal(matchesFilters(auto, { origin: 'auto' }, now), true)
-  assert.equal(matchesFilters(active, { origin: 'auto' }, now), false)
-  assert.equal(matchesFilters(active, { origin: 'manual' }, now), true)
-  assert.equal(matchesFilters(pinned, { status: 'pinned', origin: 'auto' }, now), true)
-  assert.equal(matchesFilters(pinned, { status: 'pinned', origin: 'manual' }, now), false)
-  assert.equal(matchesFilters(null, {}, now), true)
-})
-
 test('statusQueryFlags: all reveals every hidden state', () => {
   assert.deepEqual(statusQueryFlags('all'), { include_superseded: true, include_expired: true, include_archived: true })
-})
-
-test('matchesFilters: all status passes every entry regardless of state', () => {
-  const now = Date.parse('2026-11-13T12:00:00Z')
-  const entries = [
-    { id: 'a' },
-    { id: 'd', superseded_by: 'x' },
-    { id: 'e', archived: true },
-    { id: 'f', expires: '2020-01-01' },
-    { id: 'c', pinned: true },
-  ]
-  for (const e of entries) assert.equal(matchesFilters(e, { status: 'all' }, now), true)
-  assert.equal(matchesFilters({ id: 'g', origin: 'auto' }, { status: 'all', origin: 'manual' }, now), false)
-  assert.equal(matchesFilters({ id: 'h', origin: 'manual' }, { status: 'all', origin: 'manual' }, now), true)
 })
