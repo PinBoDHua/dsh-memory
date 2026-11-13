@@ -20,6 +20,7 @@ import { createHash, createHmac } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { snapshotDataRoot, diffSnapshots } from './data-snapshot.mjs'
 
 const argv = process.argv.slice(2)
 const argOf = (name) => argv.find((a) => a.startsWith(`--${name}=`))?.split('=').slice(1).join('=')
@@ -250,6 +251,8 @@ async function main() {
     const statusDoc = await apiJson('/status')
     ROOT = statusDoc?.root ?? ''
     TOKEN = statusDoc?.key ?? ''
+    // 运行前后用户数据零差异自检（快照默认排除 access.json/index.json 等派生数据）。
+    const dataSnapshotBefore = snapshotDataRoot(ROOT)
 
     // 1b) Tabs：ARIA 关联 + ←/→ 键盘切换跟随焦点（WAI-ARIA tablist 模式）
     const tabsAria = await evaluate(`(() => {
@@ -934,6 +937,9 @@ async function main() {
 
     // 9) 无 JS 异常 + 截图
     check('页面无未捕获 JS 异常', consoleLines.every((line) => !line.startsWith('exception:')), JSON.stringify(consoleLines.slice(0, 5)))
+    // 真实数据根前后一致（临时记忆已清理、设置/备份已恢复）。
+    const dataChangesGui = diffSnapshots(dataSnapshotBefore, snapshotDataRoot(ROOT))
+    check('真实数据根快照前后一致（零残留）', dataChangesGui.length === 0, JSON.stringify(dataChangesGui.slice(0, 5)))
     const shot = await send('Page.captureScreenshot', { format: 'png' })
     writeFileSync(SHOT, Buffer.from(shot.data, 'base64'))
     console.log(`  · 截图：${SHOT}`)

@@ -8,6 +8,8 @@
  * 安全：对真实数据根运行。测试条目带唯一标记并在末尾/异常与中断时统一清理；
  * 设置与备份在启动时快照、清理时原样恢复（先 reset 再写回原 overlay，删除本次新增
  * 备份文件）；备份前临时抬高保留份数，保证轮转不会删除用户历史备份。
+ * 运行前后用 scripts/data-snapshot.mjs 做数据根快照 diff 自检（应为零差异）。
+ * 可用 `--fail-at=<检查名子串>` 注入失败，验证异常路径同样零残留。
  * 仅打回环地址 127.0.0.1（与任务目标一致，不使用任何代理）。
  */
 import { createHash } from 'node:crypto'
@@ -16,10 +18,12 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { withLock } from '../lib/lock.js'
 import { atomicWrite } from '../lib/store.js'
+import { snapshotDataRoot, diffSnapshots } from './data-snapshot.mjs'
 
 const argv = process.argv.slice(2)
 const portArg = argv.find((a) => a.startsWith('--port='))?.split('=')[1] ?? argv.find((a) => /^\d+$/.test(a))
 const PORT = Number(portArg ?? process.env.DSH_MEMORY_PORT ?? 51953)
+const FAIL_AT = argv.find((a) => a.startsWith('--fail-at='))?.split('=').slice(1).join('=') || ''
 const BASE = `http://127.0.0.1:${PORT}`
 const API = `${BASE}/plugins/dsh-memory`
 const RUN = `__livecheck_${Date.now().toString(36)}__`
@@ -30,6 +34,7 @@ const EXPECTED_VERSION = String(PKG.version)
 
 let pass = 0
 let fail = 0
+let emergencyCleanup = null
 const failures = []
 function ok(name, cond, detail = '') {
   if (cond) { pass += 1; console.log(`  ✔ ${name}`) }
@@ -37,6 +42,8 @@ function ok(name, cond, detail = '') {
 }
 async function check(name, fn) {
   try { await fn() } catch (err) { ok(name, false, err?.message ?? String(err)) }
+  // 失败注入：在指定检查完成后抛错，用于验证「异常中断也不会污染真实数据」。
+  if (FAIL_AT && name.includes(FAIL_AT)) throw new Error(`fail-at 注入：${name}`)
 }
 
 async function req(method, path, { body, token, base = API } = {}) {
@@ -146,6 +153,8 @@ async function main() {
     if (err !== undefined) console.error('live-check 中断：', err)
     cleanupAll().catch(() => {}).then(() => finish(code))
   }
+  emergencyCleanup = cleanupAll
+  const dataSnapshotBefore = snapshotDataRoot(statusRoot)
   process.once('SIGINT', () => { abortAndExit(130) })
   process.once('SIGTERM', () => { abortAndExit(143) })
   process.once('uncaughtException', (err) => { abortAndExit(1, err) })
@@ -661,6 +670,8 @@ async function main() {
     const restoredOverlay = (await req('GET', '/settings')).json?.overlay ?? {}
     ok('设置 overlay 已恢复原值', JSON.stringify(restoredOverlay) === JSON.stringify(settingsSnapshot), JSON.stringify({ restoredOverlay, settingsSnapshot }))
     ok('backups 无本次新增残留', listBackups().every((n) => backupsSnapshot.includes(n)), JSON.stringify({ before: backupsSnapshot, after: listBackups() }))
+    const dataChanges = diffSnapshots(dataSnapshotBefore, snapshotDataRoot(statusRoot))
+    ok('真实数据根快照前后一致（零残留）', dataChanges.length === 0, JSON.stringify(dataChanges.slice(0, 5)))
   })
 
   finish()
@@ -672,4 +683,8 @@ function finish(exitCode) {
   process.exit(typeof exitCode === 'number' ? exitCode : (fail > 0 ? 1 : 0))
 }
 
-main().catch((err) => { console.error('live-check 异常：', err); process.exit(1) })
+main().catch(async (err) => {
+  console.error('live-check 异常：', err)
+  try { if (emergencyCleanup) await emergencyCleanup() } catch { /* ignore */ }
+  process.exit(1)
+})

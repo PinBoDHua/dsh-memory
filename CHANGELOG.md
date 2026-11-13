@@ -3,6 +3,18 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.24.22] - 2026-11-13
+
+### 新增 Added / 测试基础设施
+- **数据根快照自检**：新增可单测的 `scripts/data-snapshot.mjs`（条目内容 sha256、`backups/` 文件名集合、`settings.json`/`meta.json`；刻意排除 access.json/index.json 等允许变化的派生数据）。live-check 与 gui-check 运行前后各拍快照并断言 **diff=0**，任何临时条目/设置/备份残留都会让脚本失败。
+- **live-check 失败注入**：新增 `--fail-at=<检查名子串>`，在指定检查后抛错，验证「异常中断也会走同一幂等清理」；`main().catch` 现在会先执行应急清理再退出。
+- 新增 `tests/data-snapshot.test.mjs`（4 条）：快照内容、access.json 变化被忽略、条目/设置/备份增删改全部可检出、空快照降级。
+
+### 验证证据
+- 单元 **274/274**（含新增快照测试）
+- live **164/164**（新增「真实数据根快照前后一致」；`--fail-at=命中簿记` 实测 exit 1 但数据根零残留：backups=1、settings 不存在、1+5 条目、账本 6 条、无锁文件/测试标记）
+- 真实 GUI **67/67**（新增「真实数据根快照前后一致」）
+
 ## [0.24.21] - 2026-11-13
 
 ### 修复 Fixed（第三轮审计剩余边角）

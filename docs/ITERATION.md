@@ -22,8 +22,9 @@ This file is the self-iteration ledger for dsh-memory: per-round increments, ver
 | 脚本 | 覆盖 | 说明 |
 |---|---|---|
 | `tests/*.test.mjs` | 纯逻辑/服务/路由/存储/锁/设置/守卫/客户端纯函数 | `node --test tests/*.test.mjs` |
-| `scripts/live-check.mjs` | 运行中宿主回环 API 全链路＋客户端 bundle rev | `--port=` 或 `DSH_MEMORY_PORT`；测试条目自动清理、设置 toggle 后还原 |
-| `scripts/gui-check.mjs` | 真实浏览器面板：过滤请求参数、下拉键盘、弹窗 Esc 草稿 | `--url=`；Edge headless + CDP；cookie 由 `<DSH_HOME>/.credentials.yaml` 自签；临时记忆清理，设置/备份用例前后快照恢复（0.24.15 起） |
+| `scripts/live-check.mjs` | 运行中宿主回环 API 全链路＋客户端 bundle rev | `--port=` 或 `DSH_MEMORY_PORT`；测试条目/设置/备份自动恢复，`--fail-at=<子串>` 失败注入验证异常清理，运行前后数据根快照 diff=0 自检 |
+| `scripts/gui-check.mjs` | 真实浏览器面板：过滤请求参数、下拉键盘、弹窗 Esc 草稿 | `--url=`；Edge headless + CDP；cookie 由 `<DSH_HOME>/.credentials.yaml` 自签；临时记忆清理，设置/备份用例前后快照恢复，运行前后数据根快照 diff=0 自检（0.24.22） |
+| `scripts/data-snapshot.mjs` | live/gui 共用的数据根快照/差异纯函数 | 条目内容 sha256、backups 文件名、settings/meta；刻意排除 access.json/index.json；`tests/data-snapshot.test.mjs` 覆盖 |
 
 环境注意：GUI 端口每次启动不同，以运行时上下文为准；PowerShell 5.1 输出中文需 `[Console]::OutputEncoding=[Text.Encoding]::UTF8`；`git push` 的 stderr 进度可能被 PS 报 NonZeroExit，需看内容判断。
 
@@ -100,7 +101,7 @@ This file is the self-iteration ledger for dsh-memory: per-round increments, ver
 0.24.15 已清「脚本零污染 + 备份可恢复」：gui-check 设置/备份用例前后快照恢复真实 overlay 与 backups、live-check 幂等清理＋SIGINT/异常恢复＋账本锁内清理＋版本读 package.json；写路由 body 上限 1MB→32MB、导入落盘响应不再回传全量 entries、客户端导入预检 32MB + 超时 180s；修复「恢复默认」被防抖保存在慢网络下回滚、defaultView 使用权威 /cwd 后再 ready。其余按优先级：
 
 **P1**
-- [ ] 脚本彻底隔离：默认只读/临时 `DSH_HOME` 跑破坏性用例，`--fail-at=` 失败注入，前后数据根快照 diff=0 自检。
+- [x] 脚本彻底隔离：`--fail-at=` 失败注入 + 运行前后真实数据根快照 diff=0 自检（0.24.22，`scripts/data-snapshot.mjs` 可单测）；不启动临时宿主，但所有破坏性用例结束后恢复并自证零残留。
 - [x] import 落盘非原子：中途 IO 失败＝半套恢复 + 500 原样泄漏路径（0.24.16：暂存→统一提交→失败回滚；`code=io` 脱敏、`code=busy` 503 可重试）。
 - [x] 大库读路径：`searchDetailed`/`stats` 各两遍全量扫描（0.24.17：单遍 `collectEntries`；5000 条暖缓存一次刷新约 960ms→500ms）。
 - [x] 相似查重 O(N²)（0.24.17：特征倒排候选，1500 条比较阶段 <1.5s 断言，与暴力实现结果一致）。
