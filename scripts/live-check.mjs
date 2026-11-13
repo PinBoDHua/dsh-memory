@@ -253,6 +253,27 @@ async function main() {
     const pairs = sim.json?.pairs ?? []
     ok('similar 返回 pairs 数组', Array.isArray(pairs))
     ok('similar 含甲↔甲乙对', pairs.some((p) => (p.older.id === idA && p.newer.id === idN) || (p.older.id === idN && p.newer.id === idA)))
+    // 0.24.37：limit 夹取（≤200），防止大群近似对打满响应/序列化。
+    const simOne = await req('GET', '/similar?scope=global&limit=1')
+    ok('similar limit=1 只返回 ≤1 对', (simOne.json?.pairs ?? []).length <= 1, String((simOne.json?.pairs ?? []).length))
+    const simHuge = await req('GET', '/similar?scope=global&limit=1000000')
+    ok('similar 超大 limit 夹取 ≤200', (simHuge.json?.pairs ?? []).length <= 200, String((simHuge.json?.pairs ?? []).length))
+  })
+
+  await check('取代关系可撤销（0.24.37）', async () => {
+    const older = await req('POST', '/save', { token, body: { content: `${RUN} 可撤销取代旧条目`, scope: 'global', origin: 'auto' } })
+    const olderId = older.json?.result?.entry?.id
+    const newer = await req('POST', '/save', { token, body: { content: `${RUN} 可撤销取代新条目`, scope: 'global', origin: 'auto', supersedes: olderId } })
+    const newerId = newer.json?.result?.entry?.id
+    ok('建立取代链', Boolean(olderId && newerId), JSON.stringify({ olderId, newerId }))
+    const hiddenList = await req('GET', `/entries?query=${encodeURIComponent(`${RUN} 可撤销取代`)}&scope=global&include_superseded=true`)
+    ok('旧条目被隐藏', (hiddenList.json?.entries ?? []).some((e) => e.id === olderId && e.superseded_by === newerId))
+    const cleared = await req('POST', '/update', { token, body: { id: newerId, supersedes: '' } })
+    ok('supersedes:"" 更新成功', cleared.status === 200, `got ${cleared.status}`)
+    const visible = await req('GET', `/entries?query=${encodeURIComponent(`${RUN} 可撤销取代`)}&scope=global`)
+    ok('旧条目恢复可见', (visible.json?.entries ?? []).some((e) => e.id === olderId), JSON.stringify((visible.json?.entries ?? []).map((e) => e.id)))
+    if (olderId) created.push(olderId)
+    if (newerId) created.push(newerId)
   })
 
   await check('POST /import 合并模式 dry-run（0.20.0）', async () => {

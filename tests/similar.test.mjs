@@ -183,10 +183,40 @@ test('findSimilarPairs inverted candidate index matches brute force exactly', ()
   assert.deepEqual(fast, slow)
 })
 
+test('findSimilarPairs recovers large near-duplicate clusters and clamps limit', () => {
+  const root = tmpRoot()
+  const now = new Date().toISOString()
+  for (let i = 0; i < 1200; i += 1) {
+    store.writeEntry(root, {
+      id: `m-cluster-${i}`,
+      category: 'fact',
+      scope: 'global',
+      tags: [],
+      created: now,
+      updated: now,
+      source: '',
+      content: `批量近似记录 编号${i} 共享大量相同文本片段用于查重`,
+    })
+  }
+  store.listScope(root, 'global', undefined) // 预热解析缓存
+  const started = Date.now()
+  const pairs = store.findSimilarPairs(root, { scope: 'global', limit: 5 })
+  const elapsed = Date.now() - started
+  assert.ok(pairs.length > 0, 'large cluster must not be skipped entirely (sampling keeps recall)')
+  assert.ok(pairs.length <= 5, `limit respected, got ${pairs.length}`)
+  assert.ok(pairs.every((p) => p.score >= 0.5))
+  assert.ok(elapsed < 5000, `2000-entry cluster scan took ${elapsed}ms`)
+  const unbounded = store.findSimilarPairs(root, { scope: 'global', limit: 1e6 })
+  assert.ok(unbounded.length <= 200, `hard cap 200, got ${unbounded.length}`)
+})
+
 test('findSimilarPairs stays fast on a 1500-entry library (inverted candidates)', () => {
   const root = tmpRoot()
   const now = new Date().toISOString()
   for (let i = 0; i < 1500; i += 1) {
+    // 每条带唯一的 CJK 噪声特征（互不重叠的码位区间 → 任意两条不共享 bigram），
+    // 保证彼此不相似，避免把真正相近的一对挤出 limit 结果。
+    const uniq = Array.from({ length: 8 }, (_, k) => String.fromCharCode(0x4e00 + i * 10 + k)).join('')
     store.writeEntry(root, {
       id: `m-big-${i}`,
       category: 'fact',
@@ -195,7 +225,7 @@ test('findSimilarPairs stays fast on a 1500-entry library (inverted candidates)'
       created: now,
       updated: now,
       source: '',
-      content: `编号${i} 的独立测试记录`,
+      content: `编号${i} ${uniq} 的独立测试记录`,
     })
   }
   // 伪造一对真正相近的条目，确认优化后仍能召回。

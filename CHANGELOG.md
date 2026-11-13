@@ -3,6 +3,19 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.24.37] - 2026-11-14
+
+### 修复 Fixed（第六轮审计：取代/去重/查重语义收口）
+- **取代关系可撤销**：`memory_update` 传 `supersedes:''` 清除本条取代指针并全作用域解除旧目标的反向隐藏（旧条目恢复可见）；`superseded_by:''` 清除本条自己的悬垂误隐藏标记。工具 schema/描述同步。
+- **save 去重不再静默丢显式字段**：同内容去重命中时，按调用方真正提供的字段应用 `supersedes`（落链并隐藏旧目标）、`pinned`、`expires`、`category`、`tags`；revive 也应用这些字段；返回 `applied:true` 并渲染「已应用显式字段更新（不重复写入）」；非法 supersedes 直接 400，不再「报成功但没取代」。
+- **`/similar` 大簇防护与召回**：limit 夹取 ≤200；每条目候选采样 128、稀有特征候选优先保留、超高频特征按步长抽样（不再整段跳过导致大簇返回 0 对）；特征集完全相同的模板大簇只取代表并输出一条 100% 对，避免数千条近似重复产生 N² 对冻结宿主/OOM。
+
+### 新增测试
+- 取代撤销/悬垂标记清除、save 去重应用显式字段与 revive 字段、非法 supersedes 400；1500 条独立库仍召回近重复对、1200 条同模板簇有结果且 limit 夹取 ≤200、耗时受控。
+
+### 验证证据
+- 单元 **350/350**；live **198/198**；真实 GUI **91/91**；数据根快照一致、零残留。
+
 ## [0.24.36] - 2026-11-14
 
 ### 性能 Performance（30k 库冷启动：19–23s → 1.76s）

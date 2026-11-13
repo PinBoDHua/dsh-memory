@@ -212,9 +212,9 @@ dreaming/后台 LLM 提取、向量/图检索、完整 bi-temporal 四时间戳�
 - [x] **forget 文件占用仍报 deleted:true**（0.24.36：只计真正 unlink 成功的 id；单条 code=busy 503、批量返回 failed；测试用 EBUSY patch 覆盖）。
 
 #### P2
-- [ ] **/similar 候选对无上限且超高频特征整段跳过**：8000 条 8 簇实测同步 3.76s、RSS +954MB；5000 条近似重复返回 0 对。方案：路由 limit 透传+夹取、top-K 最小堆、每条目候选上限、超高频特征按步长抽样。
-- [ ] **取代关系不可撤销**：`supersedes:''` 被静默忽略、`superseded_by` 无清除入口；误取代/导入物化后无法修复。方案：`supersedes:''` 清除本条目并全作用域清目标反向指针；`superseded_by:''` 作为悬垂修复后门。
-- [ ] **save 去重命中时静默丢弃显式 supersedes；revive 忽略 pinned/expires/category/tags**。方案：应用到既有条目或 400 提示改用 update；revive 应用显式字段。
+- [x] **/similar 候选对无上限且超高频特征整段跳过**（0.24.37：limit 夹取 ≤200、每条目候选采样 128、稀有特征候选优先保留、超高频特征按步长抽样、特征集相同的模板大簇只取代表并输出一条 100% 对——大簇不再冻结宿主或返回 0 对）。
+- [x] **取代关系不可撤销**（0.24.37：`memory_update` 传 `supersedes:''` 清除本条取代并全作用域解除旧目标反向隐藏；`superseded_by:''` 修复悬垂误隐藏；工具 schema/描述同步）。
+- [x] **save 去重命中时静默丢弃显式 supersedes；revive 忽略 pinned/expires/category/tags**（0.24.37：去重命中按调用方真正提供的字段应用 supersedes/pinned/expires/category/tags，返回 `applied` 并渲染「已应用显式字段更新」；revive 同样应用；非法 supersedes 直接 400）。
 - [ ] **importId 回执仅进程内存**：宿主重启/插件重载后同 importId merge 重放会回滚失败窗口内用户编辑（跨实例 PoC 复现）。方案：回执持久化到 .cache/import-receipts.json（含每片内容哈希）或 merge 时 updated 晚于回执则跳过；至少文档限定「同一宿主进程内」并补跨实例测试。
 - [ ] **verify-lock 陈旧锁 check-then-rm + watchdog 无条件删锁**：放大调度窗口后 2/3 轮双持有；watchdog 会删 owner 仍存活的 .lock-verify。方案：verify-lock 复用 lib/lock.js 的 rename 认领+owner nonce；watchdog 删锁前校验 owner PID 存活。
 - [ ] **索引写入放大**：单条写入 5s 后 14MB 全量同步重写（stringify 79ms+写 33ms）；forget 路径内同步重写。方案：按目录分片只重写 dirty 目录，或降低重写频率/在空闲期分批。

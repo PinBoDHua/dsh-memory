@@ -332,6 +332,62 @@ test('move: superseded duplicate in target scope does not block the move', () =>
   assert.throws(() => store.moveEntry(root, activeDup.id, 'workspace', CWD_A), (err) => err.code === 'duplicate')
 })
 
+test('supersede chain is reversible via update supersedes:"" and dangling flags can be cleared', () => {
+  const root = tmpRoot()
+  const service = createMemoryService({ root })
+  const older = service.save({ content: '旧结论', scope: 'global' })
+  const newer = service.save({ content: '新结论', scope: 'global', supersedes: older.entry.id })
+  assert.equal(store.findEntry(root, older.entry.id, CWD_A).superseded_by, newer.entry.id)
+  assert.ok(!service.search({ scope: 'global' }).some((e) => e.id === older.entry.id))
+  // 撤销取代：旧条目重新可见、本条指针清除。
+  service.update({ id: newer.entry.id, supersedes: '' })
+  assert.equal(store.findEntry(root, newer.entry.id, CWD_A).supersedes, undefined)
+  assert.equal(store.findEntry(root, older.entry.id, CWD_A).superseded_by, undefined)
+  assert.ok(service.search({ scope: 'global' }).some((e) => e.id === older.entry.id))
+  // 悬垂标记修复入口：手工制造误隐藏后可通过 superseded_by:'' 清除。
+  const target = store.findEntry(root, older.entry.id, CWD_A)
+  target.superseded_by = 'm-dangling-x'
+  fs.writeFileSync(path.join(root, 'global', `${older.entry.id}.md`), store.serializeEntry(target), 'utf8')
+  assert.ok(!service.search({ scope: 'global' }).some((e) => e.id === older.entry.id))
+  service.update({ id: older.entry.id, superseded_by: '' })
+  assert.equal(store.findEntry(root, older.entry.id, CWD_A).superseded_by, undefined)
+  assert.ok(service.search({ scope: 'global' }).some((e) => e.id === older.entry.id))
+})
+
+test('save dedupe applies explicit supersedes/pinned instead of silently dropping them', () => {
+  const root = tmpRoot()
+  const service = createMemoryService({ root })
+  const x = service.save({ content: '内容 X', scope: 'global' })
+  const y = service.save({ content: '内容 Y', scope: 'global' })
+  const dup = service.save({ content: '内容 X', scope: 'global', supersedes: y.entry.id })
+  assert.equal(dup.deduplicated, true)
+  assert.equal(dup.entry.supersedes, y.entry.id, 'explicit supersede must land on the existing entry')
+  assert.equal(store.findEntry(root, y.entry.id, CWD_A).superseded_by, x.entry.id)
+  assert.ok(!service.search({ scope: 'global' }).some((e) => e.id === y.entry.id))
+  const pinnedDup = service.save({ content: '内容 X', scope: 'global', pinned: true })
+  assert.equal(pinnedDup.deduplicated, true)
+  assert.equal(store.findEntry(root, x.entry.id, CWD_A).pinned, true)
+})
+
+test('save revive applies explicit pinned/expires/category/tags; invalid explicit supersede throws', () => {
+  const root = tmpRoot()
+  const service = createMemoryService({ root })
+  const saved = service.save({ content: '复活测试内容', scope: 'global' })
+  service.update({ id: saved.entry.id, archived: true })
+  const revived = service.save({ content: '复活测试内容', scope: 'global', pinned: true, expires: '2030-01-01', category: 'preference', tags: ['t1'] })
+  assert.equal(revived.revived, true)
+  const entry = store.findEntry(root, saved.entry.id, CWD_A)
+  assert.equal(entry.archived, undefined)
+  assert.equal(entry.pinned, true)
+  assert.equal(entry.expires, '2030-01-01')
+  assert.equal(entry.category, 'preference')
+  assert.deepEqual(entry.tags, ['t1'])
+  assert.throws(
+    () => service.save({ content: '复活测试内容', scope: 'global', supersedes: 'm-missing-target' }),
+    (err) => err.code === 'invalid',
+  )
+})
+
 test('forget: locked file must not be reported as deleted', () => {
   const root = tmpRoot()
   const { entry } = store.saveEntry(root, { content: '被占用的待删条目', scope: 'global' })

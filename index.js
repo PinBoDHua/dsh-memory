@@ -72,9 +72,10 @@ export function searchResultEntry(e) {
 /** memory_save 工具返回值（纯函数）：旧 v1/手写条目可能没有 origin，统一兜底
  * manual——否则 undefined 会成为自有属性，宿主 lossless JSON 校验会拒绝整个
  * 工具输出（写盘已生效却报失败）。 */
-export function saveResultValue(entry, deduplicated, similar, revived) {
+export function saveResultValue(entry, deduplicated, similar, revived, applied) {
   const value = { id: entry.id, scope: entry.scope, category: entry.category, origin: entry.origin ?? 'manual', deduplicated: Boolean(deduplicated), similar: similar ?? [] }
   if (revived) value.revived = true
+  if (applied) value.applied = true
   return value
 }
 
@@ -87,6 +88,7 @@ export function updateResultValue(entry) {
 export function renderSaveResult(value) {
   let base
   if (value.revived) base = `已有相同记忆，已从归档/过期状态恢复为活跃：${value.id} (duplicate; revived to active)`
+  else if (value.deduplicated && value.applied) base = `已有相同记忆，已应用显式字段更新（不重复写入）：${value.id} (duplicate; explicit fields applied)`
   else if (value.deduplicated) base = `已有相同记忆，未重复写入：${value.id} (duplicate; existing memory kept)`
   else base = `已记录记忆 ${value.id} [${value.category}/${value.scope}/${value.origin}] (memory saved)`
   const similar = value.similar ?? []
@@ -202,6 +204,7 @@ export function apply(ctx, rawConfig) {
           origin: { type: 'string' },
           deduplicated: { type: 'boolean' },
           revived: { type: 'boolean' },
+          applied: { type: 'boolean' },
           similar: {
             type: 'array',
             items: {
@@ -218,7 +221,7 @@ export function apply(ctx, rawConfig) {
     isConcurrencySafe: () => false,
     execute(args, exec) {
       const session = sessionOf(exec)
-      const { entry, deduplicated, similar, revived } = service.save({
+      const { entry, deduplicated, similar, revived, applied } = service.save({
         content: args.content,
         category: args.category ?? 'fact',
         scope: args.scope ?? 'workspace',
@@ -227,11 +230,12 @@ export function apply(ctx, rawConfig) {
         supersedes: args.supersedes,
         expires: args.expires,
         pinned: args.pinned,
+        explicitFields: Object.keys(args),
         workspace: cwdOf(session),
         source: session?.id,
       })
       if (!deduplicated || revived) noteWrite(session)
-      return saveResultValue(entry, deduplicated, similar, revived)
+      return saveResultValue(entry, deduplicated, similar, revived, applied)
     },
   }
 
@@ -328,7 +332,8 @@ export function apply(ctx, rawConfig) {
         category: { type: 'string', enum: ['preference', 'fact', 'decision'], description: '新分类（可选）New category' },
         tags: { type: 'array', items: { type: 'string' }, description: '新标签列表，整体替换（可选）Replacement tags' },
         scope: { type: 'string', enum: ['global', 'workspace'], description: '可选：移动到新作用域（workspace 以当前会话工作目录为目标）；目标已有相同内容会被拒绝 Optional: move to a new scope' },
-        supersedes: { type: 'string', description: '可选：本条取代的另一条记忆 id Optional id this entry supersedes' },
+        supersedes: { type: 'string', description: '可选：本条取代的另一条记忆 id；传空串撤销取代（恢复旧条目的可见性）Optional id this entry supersedes; empty string clears the chain' },
+        superseded_by: { type: 'string', description: '可选：仅传空串清除本条自己的悬垂取代标记（修复误隐藏）Optional: empty string clears this entry dangling superseded_by flag' },
         expires: { type: 'string', description: '可选过期日 YYYY-MM-DD；空串清除 Optional expiry; empty string clears' },
         pinned: { type: 'boolean', description: '可选：钉选/取消钉选 Optional pin/unpin' },
         archived: { type: 'boolean', description: '可选：true 归档（默认隐藏）/false 恢复 Optional archive/restore' },
@@ -355,6 +360,7 @@ export function apply(ctx, rawConfig) {
         tags: args.tags,
         scope: args.scope,
         supersedes: args.supersedes,
+        superseded_by: args.superseded_by,
         expires: args.expires,
         pinned: args.pinned,
         archived: args.archived,
