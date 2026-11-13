@@ -11,7 +11,7 @@
  * 仅打回环地址 127.0.0.1（与任务目标一致，不使用任何代理）。
  */
 import { createHash } from 'node:crypto'
-import { existsSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { withLock } from '../lib/lock.js'
@@ -503,6 +503,27 @@ async function main() {
     ok('workspaces 数组', Array.isArray(ws.json?.workspaces))
   })
 
+  await check('导入落盘失败零变更（结构化 io 错误，0.24.16）', async () => {
+    const key = 'f'.repeat(16)
+    const blocker = path.join(statusRoot, 'workspaces', key)
+    try {
+      mkdirSync(path.join(statusRoot, 'workspaces'), { recursive: true })
+      ok('阻塞路径可用', !existsSync(blocker))
+      writeFileSync(blocker, 'blocker', 'utf8')
+      const r = await req('POST', '/import', { token, body: { entries: [
+        { content: `${RUN} 原子全局`, scope: 'global' },
+        { content: `${RUN} 原子工作区`, scope: 'workspace', workspaceKey: key },
+      ] } })
+      ok('失败导入 HTTP 500', r.status === 500, `got ${r.status}`)
+      ok('失败导入 code=io', r.json?.code === 'io', JSON.stringify(r.json))
+      ok('失败导入文案不含绝对路径', !String(r.json?.error ?? '').includes(statusRoot), String(r.json?.error))
+      const left = await req('GET', `/entries?query=${encodeURIComponent(`${RUN} 原子`)}&scope=all&include_superseded=true&include_expired=true&include_archived=true`)
+      ok('失败导入未留下部分写入', (left.json?.entries ?? []).length === 0, JSON.stringify((left.json?.entries ?? []).map((e) => e.id)))
+    } finally {
+      try { rmSync(blocker, { force: true }) } catch { /* ignore */ }
+    }
+  })
+
   await check('>1MB 导入备份可恢复（0.24.15）', async () => {
     const bigContent = `${RUN} 大备份 ` + 'x'.repeat(1_200_000)
     const dry = await req('POST', '/import', { token, body: { dryRun: true, entries: [{ content: bigContent, scope: 'global' }] } })
@@ -556,6 +577,7 @@ async function main() {
     ok('bundle 含 0.24.5 设置解包与标签收敛', code.includes('unwrapResult') && code.includes('parseTags'))
     ok('bundle 含 0.24.5 ARIA Tabs', code.includes('dm-panel-settings') && code.includes('onTabKey'))
     // 0.24.10：设置写入状态机（失败重试、重置互斥）。
+    ok('bundle 含 0.24.16 原子导入错误文案', code.includes('errIo') && code.includes('errBusy'))
     ok('bundle 含 0.24.15 大备份导入', code.includes('IMPORT_MAX_BYTES') && code.includes('IMPORT_TIMEOUT_MS'))
     ok('bundle 含 0.24.14 刷新解耦', code.includes('defaultViewSelection') && code.includes('refreshRecall'))
     ok('bundle 含 0.24.12 可访问性与导入', code.includes('parseImportText') && code.includes('closeToast') && code.includes('onCategoryKey'))

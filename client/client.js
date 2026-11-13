@@ -166,6 +166,8 @@
     if (code === 'invalid') return 'errInvalid'
     if (code === 'no-workspace') return 'errNoWorkspace'
     if (code === 'duplicate') return 'errDuplicate'
+    if (code === 'io') return 'errIo'
+    if (code === 'busy') return 'errBusy'
     if (code === 'timeout') return 'errTimeout'
     if (code === 'network') return 'errNetwork'
     if (code === 'bad-response') return 'errBadResponse'
@@ -523,6 +525,8 @@ var IMPORT_TIMEOUT_MS = 180000
     errImportDoc: '不是有效的 dsh-memory 导出文件（format/version/entries 不符）',
     errImportJson: '导入文件不是有效的 JSON',
     errReadFile: '读取导入文件失败',
+    errIo: '写入失败，未做任何变更，请检查磁盘空间或权限后重试',
+    errBusy: '另一个进程正在写入，请稍后重试',
     tabMemories: '记忆',
     tabSettings: '设置',
     settingsSubtitle: '注入 · 隐私 · 存储 · 面板',
@@ -739,6 +743,8 @@ var IMPORT_TIMEOUT_MS = 180000
     errImportDoc: 'Not a valid dsh-memory export file (format/version/entries mismatch)',
     errImportJson: 'Import file is not valid JSON',
     errReadFile: 'Failed to read the import file',
+    errIo: 'Write failed; no changes were made. Check disk space or permissions and retry',
+    errBusy: 'Another process is writing; please retry shortly',
     tabMemories: 'Memories',
     tabSettings: 'Settings',
     settingsSubtitle: 'Injection · Privacy · Storage · Panel',

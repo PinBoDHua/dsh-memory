@@ -1,0 +1,104 @@
+/**
+ * dsh-memory 0.24.16：导入落盘原子性（全成或零变更）。
+ * - 中途 IO 失败（目标目录被同名文件占用）→ 不留下部分写入、已覆盖内容可回滚；
+ * - 错误结构化（code=io，文案不含本机绝对路径），锁被释放；
+ * - 修复阻塞后可正常重新导入。
+ * 运行 Run: node --test tests/import-atomic.test.mjs
+ */
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { createMemoryService } from '../lib/service.js'
+import * as store from '../lib/store.js'
+
+const WS = 'D:\\proj\\import-atomic'
+
+function tmpService() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-memory-atomic-'))
+  return { root, service: createMemoryService({ root }) }
+}
+
+/** 放一个「同名文件」阻塞 workspaces/<key> 目录创建，制造落盘阶段 IO 失败。 */
+function blockWorkspaceDir(root, key) {
+  const base = path.join(root, 'workspaces')
+  fs.mkdirSync(base, { recursive: true })
+  const blocker = path.join(base, key)
+  assert.equal(fs.existsSync(blocker), false, 'blocker path must be free')
+  fs.writeFileSync(blocker, 'blocker', 'utf8')
+  return blocker
+}
+
+function findFiles(dir, out = []) {
+  let entries = []
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }) } catch { return out }
+  for (const ent of entries) {
+    const full = path.join(dir, ent.name)
+    if (ent.isDirectory()) findFiles(full, out)
+    else out.push(full)
+  }
+  return out
+}
+
+test('failed import is all-or-nothing: no partial writes, structured io error, lock released', () => {
+  const { root, service } = tmpService()
+  const key = store.workspaceKey(WS)
+  const blocker = blockWorkspaceDir(root, key)
+  let err = null
+  try {
+    service.import({
+      entries: [
+        { content: '原子导入全局', scope: 'global' },
+        { content: '原子导入工作区', scope: 'workspace', workspaceKey: key },
+      ],
+    })
+  } catch (e) {
+    err = e
+  }
+  assert.ok(err, 'import must fail')
+  assert.equal(err.code, 'io')
+  assert.ok(!String(err.message).includes(root), 'error message must not leak absolute path')
+  // 零变更：全局条目一个都没落盘（旧实现会留下第一条）。
+  const globals = fs.existsSync(path.join(root, 'global')) ? fs.readdirSync(path.join(root, 'global')).filter((n) => n.endsWith('.md')) : []
+  assert.deepEqual(globals, [])
+  // 无临时文件残留。
+  const leftovers = findFiles(root).filter((f) => f.includes('.tmp-imp-'))
+  assert.deepEqual(leftovers, [])
+  // 修复阻塞后可正常导入（说明导入锁已释放）。
+  fs.rmSync(blocker, { force: true })
+  const res = service.import({ entries: [{ content: '重试导入', scope: 'global' }] })
+  assert.equal(res.imported, 1)
+  assert.equal(service.list({ scope: 'global' }).length, 1)
+})
+
+test('failed import leaves merge-update target content unchanged', () => {
+  const { root, service } = tmpService()
+  const { entry } = service.save({ content: '原始内容', scope: 'global' })
+  const key = store.workspaceKey(WS)
+  blockWorkspaceDir(root, key)
+  assert.throws(() => service.import({
+    mode: 'merge',
+    entries: [
+      { id: entry.id, content: '合并改写', scope: 'global' },
+      { content: '工作区失败条目', scope: 'workspace', workspaceKey: key },
+    ],
+  }), (e) => e.code === 'io')
+  const after = service.list({ scope: 'global' })
+  assert.equal(after.length, 1)
+  assert.equal(after[0].content, '原始内容', 'merge target must not be overwritten by a failed batch')
+})
+
+test('successful batch import writes all entries and refreshes workspace index', () => {
+  const { root, service } = tmpService()
+  const res = service.import({
+    entries: [
+      { content: '批量甲', scope: 'global' },
+      { content: '批量乙', scope: 'workspace', workspace: WS },
+    ],
+  })
+  assert.equal(res.imported, 2)
+  assert.equal(service.list({ scope: 'global' }).length, 1)
+  assert.equal(store.listScope(root, 'workspace', WS).length, 1)
+  assert.ok(fs.existsSync(path.join(root, 'workspaces', 'index.json')))
+})

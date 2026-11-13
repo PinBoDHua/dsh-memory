@@ -101,7 +101,7 @@ This file is the self-iteration ledger for dsh-memory: per-round increments, ver
 
 **P1**
 - [ ] 脚本彻底隔离：默认只读/临时 `DSH_HOME` 跑破坏性用例，`--fail-at=` 失败注入，前后数据根快照 diff=0 自检。
-- [ ] import 落盘非原子：中途 IO 失败＝半套恢复 + 500 原样泄漏路径；需预检/回滚或结构化 `failed` 列表（code=io，消息脱敏）。
+- [x] import 落盘非原子：中途 IO 失败＝半套恢复 + 500 原样泄漏路径（0.24.16：暂存→统一提交→失败回滚；`code=io` 脱敏、`code=busy` 503 可重试）。
 - [ ] 大库读路径：`searchDetailed`/`stats` 各两遍全量扫描（5000 条约 1s 冻结宿主）→ 单遍 `collectEntries` 同时产出 visible/hidden/byStatus。
 
 **P2**

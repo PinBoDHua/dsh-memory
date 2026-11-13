@@ -17,7 +17,7 @@ function setup() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-memory-http-'))
   const service = createMemoryService({ root })
   const handlers = createHandlers({ service, token: TOKEN, version: '0.2.0-test' })
-  return { service, handlers }
+  return { service, handlers, root }
 }
 
 function fakeReq({ method = 'GET', url = '/plugins/dsh-memory/status', headers = {}, remoteAddress = '127.0.0.1', body } = {}) {
@@ -301,6 +301,25 @@ test('import bodies larger than the old 1MB cap are accepted (backup restore pat
   await handlers.import(fakeReq({ method: 'POST', url: '/plugins/dsh-memory/import', headers: auth, body: { dryRun: true, entries: [{ content: '预览条目', scope: 'global' }] } }), dry)
   assert.equal(dry.statusCode, 200)
   assert.equal(dry.json().result.entries.length, 1)
+})
+
+test('import io failure maps to 500 code=io with sanitized message (no partial writes)', async () => {
+  const { handlers, root } = setup()
+  const auth = { 'x-rpc-key': TOKEN }
+  const key = 'f'.repeat(16)
+  fs.mkdirSync(path.join(root, 'workspaces'), { recursive: true })
+  fs.writeFileSync(path.join(root, 'workspaces', key), 'blocker', 'utf8')
+  const res = fakeRes()
+  await handlers.import(fakeReq({ method: 'POST', url: '/plugins/dsh-memory/import', headers: auth, body: { entries: [
+    { content: '路由原子全局', scope: 'global' },
+    { content: '路由原子工作区', scope: 'workspace', workspaceKey: key },
+  ] } }), res)
+  assert.equal(res.statusCode, 500)
+  const doc = res.json()
+  assert.equal(doc.code, 'io')
+  assert.ok(!String(doc.error).includes(root), 'error must not leak absolute path')
+  const globals = fs.existsSync(path.join(root, 'global')) ? fs.readdirSync(path.join(root, 'global')).filter((n) => n.endsWith('.md')) : []
+  assert.deepEqual(globals, [])
 })
 
 test('non-object JSON bodies map to 400 invalid-json (not 500)', async () => {

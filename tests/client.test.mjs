@@ -279,6 +279,9 @@ test('errorKeyFor maps service and route errors to locale keys', () => {
   assert.equal(errorKeyFor({ code: 'invalid', message: '记忆内容不能为空…' }), 'errInvalid')
   assert.equal(errorKeyFor({ code: 'no-workspace', message: '…' }), 'errNoWorkspace')
   assert.equal(errorKeyFor({ code: 'duplicate', message: '…' }), 'errDuplicate')
+  // 0.24.16：导入落盘 IO 失败（已回滚）与锁忙（可重试）有专属本地化文案。
+  assert.equal(errorKeyFor({ code: 'io', message: '导入写入失败，未做任何变更' }), 'errIo')
+  assert.equal(errorKeyFor({ code: 'busy', message: '另一个进程正在写入记忆' }), 'errBusy')
   // 0.24.4：超时/网络/坏响应（fetch 无响应时不再永久转圈）。
   assert.equal(errorKeyFor({ code: 'timeout', message: 'timeout' }), 'errTimeout')
   assert.equal(errorKeyFor({ code: 'network', message: 'network' }), 'errNetwork')

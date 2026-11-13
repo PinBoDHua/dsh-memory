@@ -3,6 +3,17 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.24.16] - 2026-11-13
+
+### 修复 Fixed（第三轮审计 P1：导入落盘原子性）
+- **导入全成或零变更**：`store.writeEntryBatch` 先把所有条目暂存为临时文件（目录创建/磁盘 IO 错误在提交前暴露），再统一 rename 提交；任一步失败逆序回滚——新文件删除、被覆盖文件恢复原内容、临时文件清理。此前中途 IO 失败会留下半套恢复数据，且 merge 目标可能已被改写。
+- **结构化错误**：落盘失败返回 `code=io`（HTTP 500，文案不含本机绝对路径，客户端提示「写入失败，未做任何变更」）；另一进程长期持锁返回 `code=busy`（503，可重试）而不是让宿主同步等待 30s。
+- **写放大收口**：批量导入只 `ensureMeta` 一次、索引按 cwd 去重后统一刷新（此前每条都读 meta + 加锁读改写 index.json）。
+- 客户端 `errorKeyFor` 增加 `io`/`busy` 本地化映射（中英）。
+
+### 新增 Added
+- `tests/import-atomic.test.mjs`（3 条）：失败零变更 + 无临时文件残留 + 锁释放后可重试、merge 目标内容不被失败批次改写、成功批次写入并刷新索引；routes 测试新增 io 失败 → 500 `code=io` 且文案脱敏；live-check 增加「导入落盘失败零变更」真机检查（临时阻塞 workspaces/<key> 目录，finally 清理）。
+
 ## [0.24.15] - 2026-11-13
 
 ### 修复 Fixed（第三轮审计：脚本零污染 + 备份可恢复）
