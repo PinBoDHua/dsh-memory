@@ -108,6 +108,28 @@ test('save deduplicates identical content within the same scope', () => {
   assert.equal(service.list({ scope: 'global' }).length, 1)
 })
 
+test('save revives an archived/expired identical entry instead of leaving it hidden', () => {
+  const { service } = tmpService()
+  const first = service.save({ content: '部署走内网镜像', scope: 'global', origin: 'auto' })
+  service.update({ id: first.entry.id, archived: true })
+  assert.equal(service.search({ query: '内网镜像', scope: 'global' }).length, 0)
+  const revived = service.save({ content: '部署走内网镜像', scope: 'global', origin: 'manual' })
+  assert.equal(revived.deduplicated, true)
+  assert.equal(revived.revived, true)
+  assert.equal(revived.entry.id, first.entry.id)
+  assert.equal(revived.entry.archived, undefined)
+  assert.equal(revived.entry.origin, 'manual')
+  // 复活后重新可见、可检索。
+  assert.equal(service.search({ query: '内网镜像', scope: 'global' }).length, 1)
+
+  // 过期条目同样复活（清 expires），过期日之外的隐藏态不受影响。
+  const exp = service.save({ content: '临时口令轮换周期', scope: 'global', expires: '2020-01-01' })
+  const again = service.save({ content: '临时口令轮换周期', scope: 'global' })
+  assert.equal(again.revived, true)
+  assert.equal(again.entry.id, exp.entry.id)
+  assert.equal(again.entry.expires, undefined)
+})
+
 test('save validates input with coded errors', () => {
   const { service } = tmpService()
   assert.throws(() => service.save({ content: '   ', scope: 'global' }), (err) => err.code === 'invalid')

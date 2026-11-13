@@ -1,7 +1,7 @@
 # dsh-memory
 
-DSH 跨会话长期记忆插件。详见 [docs/DETAIL.md](docs/DETAIL.md)，版本历史见 [CHANGELOG.md](CHANGELOG.md)。
-Cross-session long-term memory plugin for DeepSeek Harness. See [docs/DETAIL.md](docs/DETAIL.md); version history in [CHANGELOG.md](CHANGELOG.md).
+DSH 跨会话长期记忆插件。详见 [docs/DETAIL.md](docs/DETAIL.md)，版本历史见 [CHANGELOG.md](CHANGELOG.md)，迭代协议与待办见 [docs/ITERATION.md](docs/ITERATION.md)。
+Cross-session long-term memory plugin for DeepSeek Harness. See [docs/DETAIL.md](docs/DETAIL.md); version history in [CHANGELOG.md](CHANGELOG.md); iteration protocol and backlog in [docs/ITERATION.md](docs/ITERATION.md).
 
 ## 安装 Install
 

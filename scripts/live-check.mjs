@@ -60,11 +60,11 @@ async function main() {
 
   // 1. status：版本与 schema
   let token = ''
-  await check('status 报告 version=0.24.0 / schemaVersion=2 并下发 token', async () => {
+  await check('status 报告 version=0.24.1 / schemaVersion=2 并下发 token', async () => {
     const { status, json } = await req('GET', '/status')
     ok('status HTTP 200', status === 200, `got ${status}`)
     ok('status.ok', json?.ok === true)
-    ok('version === 0.24.0', json?.version === '0.24.0', `got ${json?.version}`)
+    ok('version === 0.24.1', json?.version === '0.24.1', `got ${json?.version}`)
     ok('schemaVersion === 2', json?.schemaVersion === 2, `got ${json?.schemaVersion}`)
     ok('token 非空', typeof json?.key === 'string' && json.key.length > 0)
     token = json?.key ?? ''
@@ -110,6 +110,23 @@ async function main() {
   await check('POST /import 合并模式 dry-run（0.20.0）', async () => {
     const mg = await req('POST', '/import', { token, body: { mode: 'merge', dryRun: true, entries: [{ id: idA, content: `${RUN} 甲事实合并改`, scope: 'global' }] } })
     ok('merge dry-run updated=1/imported=0', mg.json?.result?.updated === 1 && mg.json?.result?.imported === 0, JSON.stringify(mg.json))
+  })
+
+  await check('同内容复活归档条目（0.24.1）', async () => {
+    const sv = await req('POST', '/save', { token, body: { content: `${RUN} 可复活事实`, scope: 'global', origin: 'auto' } })
+    const idR = sv.json?.result?.entry?.id ?? ''
+    if (idR) created.push(idR)
+    const ar = await req('POST', '/update', { token, body: { id: idR, archived: true } })
+    ok('归档 HTTP 200', ar.status === 200, `got ${ar.status}`)
+    const hidden = await req('GET', `/entries?query=${encodeURIComponent(RUN)}`)
+    ok('归档后默认不可见', !(hidden.json?.entries ?? []).some((e) => e.id === idR))
+    const again = await req('POST', '/save', { token, body: { content: `${RUN} 可复活事实`, scope: 'global', origin: 'manual' } })
+    ok('再次保存 deduplicated=true', again.json?.result?.deduplicated === true, JSON.stringify(again.json))
+    ok('再次保存 revived=true', again.json?.result?.revived === true, JSON.stringify(again.json))
+    ok('复活后 id 不变', again.json?.result?.entry?.id === idR)
+    ok('复活后 origin 更新为 manual', again.json?.result?.entry?.origin === 'manual')
+    const visible = await req('GET', `/entries?query=${encodeURIComponent(RUN)}`)
+    ok('复活后重新可见', (visible.json?.entries ?? []).some((e) => e.id === idR))
   })
 
   await check('update origin 修正往返（0.10.0）', async () => {
@@ -222,6 +239,12 @@ async function main() {
     ok('workspaces 数组', Array.isArray(ws.json?.workspaces))
   })
 
+  await check('POST /import 拒绝非法 expires（0.24.1）', async () => {
+    const im = await req('POST', '/import', { token, body: { dryRun: true, entries: [{ content: `${RUN} 坏日期`, scope: 'global', expires: '2026-99-99' }] } })
+    ok('import 坏日期 rejected=1', im.json?.result?.rejected?.length === 1, JSON.stringify(im.json))
+    ok('import 坏日期 code=invalid', im.json?.result?.rejected?.[0]?.code === 'invalid')
+  })
+
   await check('GET /export 作用域过滤（0.17.0）', async () => {
     const g = await req('GET', '/export?scope=global')
     ok('export global format', g.json?.format === 'dsh-memory-export')
@@ -246,6 +269,9 @@ async function main() {
     ok('bundle 含 0.19.0 新文案 injectedLabel', code.includes('injectedLabel'))
     ok('bundle 含 0.20.0 新文案 importMergeLabel', code.includes('importMergeLabel'))
     ok('bundle 含 0.22.0 新文案 tagFilterPlaceholder', code.includes('tagFilterPlaceholder'))
+    // 0.24.1：面板列表请求构造器必须序列化 origin/tag/status，否则过滤不生效。
+    ok('bundle 含 0.24.1 修复 entriesParams', code.includes('entriesParams'))
+    ok('bundle 序列化 origin/tag/status', code.includes('p.origin') && code.includes('p.tag') && code.includes('p.status'))
   })
 
   // 7. 清理测试条目

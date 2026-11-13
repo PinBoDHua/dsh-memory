@@ -3,6 +3,22 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.24.1] - 2026-11-13
+
+### 修复 Fixed
+- **面板来源/标签/状态过滤未生效**：0.22/0.24 将三类过滤移到服务端并移除客户端过滤，但列表请求构造器 `buildEntriesQuery` 从未序列化 `origin`/`tag`/`status`——面板筛选时请求实际没带条件（列表、分页口径与隐藏态提示随之失真）。抽出可测纯函数 `entriesParams`（作用域＋过滤条件＋隐藏态放宽＋分页），补全序列化并接入列表刷新；客户端回归测试覆盖全部字段与空值省略。
+- **状态视图漏组合隐藏态**：服务端先过隐藏门再做 `status` 后置过滤，查看「被取代/已过期/已归档」时只放宽对应 `include_*`，导致「被取代＋归档」这类组合态条目在对应状态视图里仍被别的隐藏门挡掉。现在查看任一隐藏态均放宽全部 `include_*`。
+- **取代链跳转被标签过滤挡住**：`jumpToEntry` 重置状态/来源/分类过滤时漏清标签过滤，已补上（与「清除全部过滤」同口径）。
+- **同内容去重命中归档/过期条目后仍隐藏**：再次保存与已归档/已过期条目完全相同的内容时，此前只提示「已有相同记忆」却不恢复可见性（注入与默认检索都看不到）。现在会复活既有条目（清 `archived`/`expires`、刷新 `updated`，按本次保存更新 `origin`），`memory_save` 输出新增可选 `revived: true`，渲染为「已从归档/过期状态恢复为活跃」。被取代条目仍不参与去重，保留「save 新＋supersedes 旧」修正流。
+- **工具输出 lossless 契约**：旧 v1 文件/手工编辑/旧导出导入的条目可能没有 `origin`，`memory_save` 去重路径与 `memory_update` 直接返回 `origin: undefined`，宿主 lossless JSON 校验会拒绝整个工具输出（写盘已生效却报工具失败）。新增 `saveResultValue`/`updateResultValue` 纯函数，`origin` 缺省兜底 `manual`，返回对象无 undefined 自有属性。
+- **全新数据根首次导入失败**：数据目录尚不存在时 `withLock` 以 `mkdir(recursive:false)` 建锁抛 ENOENT，首次「导入恢复」直接 500。`withLock` 现先递归创建锁的父目录。
+- **导入绕过过期日校验**：导入不再直接落盘 `expires` 原值，改用与 save/update 相同的 `normalizeExpires` 校验；非法日期整条计入 `rejected`，避免坏日期（如 `2026-99-99`）被字符串比较永久隐藏。
+- **自定义下拉键盘不可用＋Esc 连弹窗一起关**：浮层首帧定位前是 `visibility:hidden`，隐藏元素无法聚焦，打开下拉后焦点仍留在触发器，方向键/Enter/Esc 都不会进入浮层（键盘导航实际失效）；定位完成后补一次延迟聚焦恢复完整键盘导航。Esc 现在只关下拉并阻止冒泡（Modal 的 Esc 处理器识别 `defaultPrevented` 与浮层内事件后不再关弹窗，草稿不再丢失）；Tab 关闭下拉并把焦点归还触发器；`/` 快捷搜索不再从打开的下拉浮层抢焦点。
+
+### 新增 Added
+- 客户端纯函数 `entriesParams`（`tests/client.test.mjs` 覆盖过滤/隐藏态放宽/分页）；存档复活回归测试（`tests/service.test.mjs`、`tests/tool-render.test.mjs`）；工具输出 lossless 契约测试（`tests/tool-output.test.mjs`）；锁目录缺失（`tests/lock.test.mjs`）与导入校验/全新根（`tests/import-mode.test.mjs`）；live-check 增加复活往返、导入拒绝坏日期与分发 bundle 新代码断言。
+- `scripts/gui-check.mjs`：Edge headless＋CDP 的真实面板端到端验证（登录 cookie 自签、过滤请求参数、下拉键盘导航、弹窗 Esc 草稿保持、截图），本轮 17 项全通过；`docs/ITERATION.md` 记录迭代协议与待办 backlog。
+
 ## [0.24.0] - 2026-11-13
 
 ### 变更 Changed

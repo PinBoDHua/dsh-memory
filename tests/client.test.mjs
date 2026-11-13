@@ -7,7 +7,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import helpers from '../client/client.js'
 
-const { validateDraft, groupEntries, nextToken, buildEntriesQuery, workspaceOptions, errorKeyFor, validateImportDoc, importSummary, pageSlice, entryDetailRows, relativeTime, formatBytes, isExpired, statusOf, originOf, statusQueryFlags } = helpers
+const { validateDraft, groupEntries, nextToken, entriesParams, buildEntriesQuery, workspaceOptions, errorKeyFor, validateImportDoc, importSummary, pageSlice, entryDetailRows, relativeTime, formatBytes, isExpired, statusOf, originOf, statusQueryFlags } = helpers
 
 test('validateDraft accepts a complete draft and rejects bad ones', () => {
   assert.deepEqual(validateDraft({ content: '一条事实', category: 'fact' }), { ok: true })
@@ -50,6 +50,34 @@ test('buildEntriesQuery encodes values and omits empty params', () => {
   assert.equal(buildEntriesQuery({ include_expired: true, include_archived: true }), '?scope=all&include_expired=true&include_archived=true')
   assert.equal(buildEntriesQuery({ category: 'fact', include_superseded: true, limit: 5 }), '?scope=all&category=fact&include_superseded=true&limit=5')
   assert.equal(buildEntriesQuery({ include_superseded: false }), '?scope=all')
+})
+
+// 0.24.1 回归：面板来源/标签/状态过滤必须随请求上行，否则服务端过滤不生效。
+test('buildEntriesQuery serializes origin/tag/status filters', () => {
+  assert.equal(buildEntriesQuery({ origin: 'auto' }), '?scope=all&origin=auto')
+  assert.equal(buildEntriesQuery({ tag: '构建 工具' }), '?scope=all&tag=%E6%9E%84%E5%BB%BA%20%E5%B7%A5%E5%85%B7')
+  assert.equal(buildEntriesQuery({ status: 'archived' }), '?scope=all&status=archived')
+  assert.equal(
+    buildEntriesQuery({ scope: 'workspace', workspace: 'D:\\proj', origin: 'manual', tag: 'x', status: 'all', include_superseded: true, include_expired: true, include_archived: true, limit: 51 }),
+    '?scope=workspace&workspace=D%3A%5Cproj&origin=manual&tag=x&status=all&include_superseded=true&include_expired=true&include_archived=true&limit=51',
+  )
+  // 空过滤值不产生空参数（否则服务端会把空串当成过滤条件）。
+  assert.equal(buildEntriesQuery({ origin: '', tag: '', status: '' }), '?scope=all')
+})
+
+test('entriesParams assembles panel list params with filters and status flags', () => {
+  assert.deepEqual(entriesParams({}), { scope: 'all' })
+  assert.deepEqual(entriesParams({ scope: 'workspace', workspace: 'D:\\proj', query: 'pnpm', category: 'fact', origin: 'auto', tag: 'npm', status: 'active', limit: 51, offset: 0 }), {
+    scope: 'workspace', workspace: 'D:\\proj', query: 'pnpm', category: 'fact', origin: 'auto', tag: 'npm', status: 'active', limit: 51,
+  })
+  // status=all 放宽全部隐藏态；查看任一隐藏态都放宽全部（服务端隐藏门先于 status）；
+  // active 不需要放宽。
+  assert.deepEqual(entriesParams({ status: 'all' }), { scope: 'all', status: 'all', include_superseded: true, include_expired: true, include_archived: true })
+  assert.deepEqual(entriesParams({ status: 'expired' }), { scope: 'all', status: 'expired', include_superseded: true, include_expired: true, include_archived: true })
+  assert.deepEqual(entriesParams({ status: 'archived' }), { scope: 'all', status: 'archived', include_superseded: true, include_expired: true, include_archived: true })
+  assert.deepEqual(entriesParams({ status: 'active' }), { scope: 'all', status: 'active' })
+  // 分页 0 省略，非 0 保留。
+  assert.deepEqual(entriesParams({ offset: 50, limit: 51 }), { scope: 'all', limit: 51, offset: 50 })
 })
 
 test('pageSlice splits items and detects a next page', () => {
@@ -207,11 +235,14 @@ test('originOf defaults missing origin to manual', () => {
 })
 
 test('statusQueryFlags maps hidden statuses to include_* params', () => {
-  assert.deepEqual(statusQueryFlags('superseded'), { include_superseded: true })
-  assert.deepEqual(statusQueryFlags('expired'), { include_expired: true })
-  assert.deepEqual(statusQueryFlags('archived'), { include_archived: true })
+  // 任一隐藏态视图都放宽全部隐藏门：服务端先过隐藏门再按状态后置过滤，
+  // 只放宽自身会漏掉「被取代＋归档」这类组合态条目。
+  const ALL = { include_superseded: true, include_expired: true, include_archived: true }
+  assert.deepEqual(statusQueryFlags('superseded'), ALL)
+  assert.deepEqual(statusQueryFlags('expired'), ALL)
+  assert.deepEqual(statusQueryFlags('archived'), ALL)
   assert.deepEqual(statusQueryFlags('active'), {})
-  assert.deepEqual(statusQueryFlags('pinned'), { include_superseded: true, include_expired: true, include_archived: true })
+  assert.deepEqual(statusQueryFlags('pinned'), ALL)
   assert.deepEqual(statusQueryFlags(''), {})
   assert.deepEqual(statusQueryFlags(undefined), {})
 })

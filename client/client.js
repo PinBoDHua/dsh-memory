@@ -58,13 +58,12 @@
     return entry && entry.origin === 'auto' ? 'auto' : 'manual'
   }
 
-  // 选中隐藏态筛选时放宽对应 include_*；pinned 与状态正交，需放宽全部隐藏态；active 不需要服务端参数。
+  // 查看任一隐藏态（被取代/已过期/已归档/已钉选/全部）时放宽全部 include_*：
+  // 服务端先过隐藏门再做 status 后置过滤，只放宽自身会让「同时被取代＋归档」
+  // 等组合态条目被别的隐藏门挡掉；active 不需要任何放宽参数。
   function statusQueryFlags(status) {
-    if (status === 'all' || status === 'pinned') return { include_superseded: true, include_expired: true, include_archived: true }
-    if (status === 'superseded') return { include_superseded: true }
-    if (status === 'expired') return { include_expired: true }
-    if (status === 'archived') return { include_archived: true }
-    return {}
+    if (!status || status === 'active') return {}
+    return { include_superseded: true, include_expired: true, include_archived: true }
   }
 
   function groupEntries(entries) {
@@ -85,12 +84,33 @@
     return current || ''
   }
 
+  // 面板列表请求参数（纯函数）：作用域＋过滤条件＋隐藏态放宽标志＋分页。
+  // origin/tag/status 必须随请求上行，否则服务端过滤不会生效（见 0.24.1 修复）。
+  function entriesParams(filters) {
+    var f = filters || {}
+    var params = { scope: f.scope || 'all' }
+    if (f.workspace) params.workspace = f.workspace
+    if (f.query) params.query = f.query
+    if (f.category) params.category = f.category
+    if (f.origin) params.origin = f.origin
+    if (f.tag) params.tag = f.tag
+    if (f.status) params.status = f.status
+    var flags = statusQueryFlags(f.status)
+    for (var key in flags) if (Object.prototype.hasOwnProperty.call(flags, key)) params[key] = flags[key]
+    if (f.limit) params.limit = f.limit
+    if (f.offset) params.offset = f.offset
+    return params
+  }
+
   function buildEntriesQuery(params) {
     var p = params || {}
     var parts = ['scope=' + encodeURIComponent(p.scope || 'all')]
     if (p.workspace) parts.push('workspace=' + encodeURIComponent(p.workspace))
     if (p.query) parts.push('query=' + encodeURIComponent(p.query))
     if (p.category) parts.push('category=' + encodeURIComponent(p.category))
+    if (p.origin) parts.push('origin=' + encodeURIComponent(p.origin))
+    if (p.tag) parts.push('tag=' + encodeURIComponent(p.tag))
+    if (p.status) parts.push('status=' + encodeURIComponent(p.status))
     if (p.include_superseded) parts.push('include_superseded=true')
     if (p.include_expired) parts.push('include_expired=true')
     if (p.include_archived) parts.push('include_archived=true')
@@ -200,7 +220,7 @@
     return (mb < 10 ? mb.toFixed(1) : Math.round(mb)) + ' MB'
   }
 
-  var helpers = { validateDraft: validateDraft, groupEntries: groupEntries, nextToken: nextToken, buildEntriesQuery: buildEntriesQuery, workspaceOptions: workspaceOptions, errorKeyFor: errorKeyFor, validateImportDoc: validateImportDoc, importSummary: importSummary, pageSlice: pageSlice, entryDetailRows: entryDetailRows, relativeTime: relativeTime, formatBytes: formatBytes, isExpired: isExpired, statusOf: statusOf, originOf: originOf, statusQueryFlags: statusQueryFlags }
+  var helpers = { validateDraft: validateDraft, groupEntries: groupEntries, nextToken: nextToken, entriesParams: entriesParams, buildEntriesQuery: buildEntriesQuery, workspaceOptions: workspaceOptions, errorKeyFor: errorKeyFor, validateImportDoc: validateImportDoc, importSummary: importSummary, pageSlice: pageSlice, entryDetailRows: entryDetailRows, relativeTime: relativeTime, formatBytes: formatBytes, isExpired: isExpired, statusOf: statusOf, originOf: originOf, statusQueryFlags: statusQueryFlags }
 
   // ===== node 测试导出（CJS） =====
   if (typeof module !== 'undefined' && module.exports) {
@@ -1240,6 +1260,11 @@
           else if (dialog) dialog.focus()
           function onKey(e) {
             if (e.key === 'Escape') {
+              // 下拉浮层自己消费 Esc（关下拉、保留弹窗草稿）：浮层 portal 在 body，
+              // 冒泡到这里的原生事件可能已 defaultPrevented，或 target 落在浮层内。
+              if (e.defaultPrevented) return
+              var t = e.target
+              if (t && t.closest && t.closest('.dm_select_pop')) return
               if (!busyRef.current) onCloseRef.current()
               return
             }
@@ -1618,6 +1643,7 @@
         var triggerRef = useRef(null)
         var listRef = useRef(null)
         var typeRef = useRef({ buf: '', t: 0 })
+        var focusPendingRef = useRef(false)
         var idRef = useRef(null)
         if (idRef.current === null) { selectSeq += 1; idRef.current = 'dm-sel-' + selectSeq }
         var activeRef = useRef(active); activeRef.current = active
@@ -1652,6 +1678,7 @@
           if (disabled) return
           var en = enabledIndexes()
           setActive(selectedIndex >= 0 ? selectedIndex : (en.length ? en[0] : -1))
+          focusPendingRef.current = true
           setOpen(true)
         }
         function closeList(refocus) {
@@ -1692,7 +1719,6 @@
         useLayoutEffect(function () {
           if (!open) return undefined
           place()
-          if (listRef.current) listRef.current.focus()
           function onDoc(e) {
             var inTrigger = triggerRef.current && triggerRef.current.contains(e.target)
             var inList = listRef.current && listRef.current.contains(e.target)
@@ -1710,6 +1736,15 @@
           }
         }, [open])
 
+        // 浮层首帧 pos 为空、样式为 visibility:hidden（隐藏元素无法获得焦点），
+        // 必须在 place() 定位完成后的下一次布局提交里再聚焦，否则键盘导航无入口。
+        useLayoutEffect(function () {
+          if (!open || pos === null || !focusPendingRef.current) return
+          focusPendingRef.current = false
+          var list = listRef.current
+          if (list) list.focus()
+        }, [open, pos])
+
         useLayoutEffect(function () {
           if (!open || !listRef.current) return
           var el = listRef.current.querySelector('[data-index="' + active + '"]')
@@ -1718,7 +1753,10 @@
 
         function onTriggerKey(e) {
           if (disabled) return
-          if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Enter' || e.key === ' ') {
+          // 正常情况下打开后焦点会移入浮层；若聚焦仍停在触发器（例如浮层刚被重排），
+          // Esc 也要能收起浮层而不是关掉外层弹窗。
+          if (open && e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeList(true); return }
+          if (!open && (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Enter' || e.key === ' ')) {
             e.preventDefault()
             openList()
           }
@@ -1730,8 +1768,8 @@
             case 'Home': e.preventDefault(); edge('first'); break
             case 'End': e.preventDefault(); edge('last'); break
             case 'Enter': case ' ': e.preventDefault(); choose(activeRef.current); break
-            case 'Escape': e.preventDefault(); closeList(true); break
-            case 'Tab': closeList(false); break
+            case 'Escape': e.preventDefault(); e.stopPropagation(); closeList(true); break
+            case 'Tab': e.preventDefault(); closeList(true); break
             default:
               if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); typeAhead(e.key) }
           }
@@ -1888,7 +1926,7 @@
           if (selection === 'global') scopeParams.scope = 'global'
           else if (selection === 'all') { scopeParams.scope = 'all'; scopeParams.workspace = currentCwd }
           else { scopeParams.scope = 'workspace'; scopeParams.workspace = selection }
-          var params = Object.assign({}, scopeParams, { query: query, category: categoryFilter, origin: originFilter, tag: tagFilter, status: statusFilter, limit: pageSize + 1, offset: page * pageSize }, statusQueryFlags(statusFilter))
+          var params = entriesParams(Object.assign({}, scopeParams, { query: query, category: categoryFilter, origin: originFilter, tag: tagFilter, status: statusFilter, limit: pageSize + 1, offset: page * pageSize }))
           var statsParams = Object.assign({}, scopeParams, { query: query })
           return Promise.all([api.entries(params), api.stats(statsParams), api.recallPreview(currentCwd).catch(function () { return null })]).then(function (results) {
             if (seq !== seqRef.current) return
@@ -2038,7 +2076,7 @@
           function onKey(e) {
             if (modalOpenRef.current) return
             var el = document.activeElement
-            var typing = el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)
+            var typing = el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable || (el.closest && el.closest('.dm_select_pop') !== null))
             if (e.key === '/' && !typing) {
               e.preventDefault()
               if (searchRef.current) searchRef.current.focus()
@@ -2062,7 +2100,7 @@
         function changeStatus(value) { setStatusFilter(value); setPage(0); setSelected([]) }
         function clearAllFilters() { setQuery(''); setCategoryFilter(''); setOriginFilter(''); setTagFilter(''); setStatusFilter('active'); setPage(0); setSelected([]) }
         // 被取代条目的「查看后继」：按 id 搜索（host query 匹配 id），回到活跃视图。
-        function jumpToEntry(id) { setStatusFilter('all'); setOriginFilter(''); setCategoryFilter(''); setPage(0); setSelected([]); setQuery(String(id || '')) }
+        function jumpToEntry(id) { setStatusFilter('all'); setOriginFilter(''); setCategoryFilter(''); setTagFilter(''); setPage(0); setSelected([]); setQuery(String(id || '')) }
         function changePage(value) { setPage(value); setSelected([]) }
         function toggleSelect(id) {
           setSelected(function (prev) { return prev.indexOf(id) === -1 ? prev.concat([id]) : prev.filter(function (x) { return x !== id }) })

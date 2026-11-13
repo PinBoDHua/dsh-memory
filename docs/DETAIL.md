@@ -18,7 +18,7 @@ Cross-session long-term memory for DeepSeek Harness: durable user preferences, p
 - **跨作用域移动**：`memory_update` 带 `scope` 或面板编辑弹窗切换作用域，即可在 global ↔ 当前工作区之间移动条目；目标已有相同内容时拒绝（409/duplicate），不产生重复。
 - **导出/导入**：面板一键导出记忆为带版本的 JSON（`dsh-memory-export` v1，作用域感知：全部/仅全局/指定工作区，默认全量；含作用域与工作区路径与 v2 可选字段）；导入先 dry-run 预览（新增/更新/重复跳过/拒绝计数），确认后落盘；可选「按 id 合并」模式原地更新已存在条目（保留 created）。逐条校验、机密硬拒、同内容去重（含批内）、保留原 id 与时间戳（skip 模式 id 被占用时自动新分配）。
 - **一事一条目**：每条记忆一个 Markdown 文件（frontmatter 存元数据），人类可读、可手工编辑，改动立即生效。
-- **新覆旧**：信息变化时原地更新，或走取代链；仅手动遗忘，不自动删除。
+- **新覆旧**：信息变化时原地更新，或走取代链；仅手动遗忘，不自动删除。同内容重复保存命中归档/过期条目时会将其复活为活跃（`memory_save` 输出 `revived: true`）。
 - **隐私护栏**：密码/密钥/token（含 Bearer 令牌、带口令连接串，以及 GitLab/npm/Stripe/SendGrid/PyPI/GitHub 等独立令牌格式）在服务层被规则检测硬拒绝；其他敏感个人信息由指引要求先征得用户同意，敏感话题默认不存。
 
 ## Web 管理面板 Panel
@@ -35,7 +35,7 @@ Cross-session long-term memory for DeepSeek Harness: durable user preferences, p
 
 | 工具 | 作用 |
 |---|---|
-| `memory_save` | 写入一条记忆（content 必填；category=preference/fact/decision；scope=global/workspace，默认 workspace；tags 可选；origin 必填 manual/auto；supersedes=旧id 取代；expires=YYYY-MM-DD；pinned）。同作用域完全相同的内容自动去重（仅针对未取代条目）。写入后返回相似记忆提示 `similar`（Jaccard≥0.5、最多 3 条、advisory 不阻断），便于取代/更新旧条目、避免并存矛盾。 |
+| `memory_save` | 写入一条记忆（content 必填；category=preference/fact/decision；scope=global/workspace，默认 workspace；tags 可选；origin 必填 manual/auto；supersedes=旧id 取代；expires=YYYY-MM-DD；pinned）。同作用域完全相同的内容自动去重（仅针对未取代条目；若命中的是归档/过期条目则复活为活跃并返回 `revived: true`）。写入后返回相似记忆提示 `similar`（Jaccard≥0.5、最多 3 条、advisory 不阻断），便于取代/更新旧条目、避免并存矛盾。 |
 | `memory_search` | 关键词检索（大小写不敏感、多词 AND、CJK bigram 模糊），非空查询按相关度×衰减排序；空查询＝按更新时间列出；可按 scope/category/origin/tag 过滤，limit 默认 20、offset 分页；include_superseded/include_expired/include_archived 找回隐藏态（默认 false）。返回 `{entries, hidden}`：hidden 统计被隐藏的匹配数（被取代/过期/归档，按首个排除原因归类），渲染附「可用 include_* 找回」提示。 |
 | `memory_update` | 按 id 新覆旧（content/category/tags 可选更新）；可选 `scope` 在 global ↔ 当前工作区之间移动；supersedes 取代另一条、expires 设过期日（空串清除）、pinned 钉选、archived 归档/恢复、origin 修正来源标记。 |
 | `memory_forget` | 按 id 永久删除。 |

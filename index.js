@@ -69,11 +69,26 @@ export function searchResultEntry(e) {
   return item
 }
 
+/** memory_save 工具返回值（纯函数）：旧 v1/手写条目可能没有 origin，统一兜底
+ * manual——否则 undefined 会成为自有属性，宿主 lossless JSON 校验会拒绝整个
+ * 工具输出（写盘已生效却报失败）。 */
+export function saveResultValue(entry, deduplicated, similar, revived) {
+  const value = { id: entry.id, scope: entry.scope, category: entry.category, origin: entry.origin ?? 'manual', deduplicated: Boolean(deduplicated), similar: similar ?? [] }
+  if (revived) value.revived = true
+  return value
+}
+
+/** memory_update 工具返回值（纯函数）：origin 兜底同 save（lossless JSON）。 */
+export function updateResultValue(entry) {
+  return { id: entry.id, updated: entry.updated ?? '', scope: entry.scope, origin: entry.origin ?? 'manual' }
+}
+
 /** memory_save 输出渲染（纯函数，可单测）。 */
 export function renderSaveResult(value) {
-  const base = value.deduplicated
-    ? `已有相同记忆，未重复写入：${value.id} (duplicate; existing memory kept)`
-    : `已记录记忆 ${value.id} [${value.category}/${value.scope}/${value.origin}] (memory saved)`
+  let base
+  if (value.revived) base = `已有相同记忆，已从归档/过期状态恢复为活跃：${value.id} (duplicate; revived to active)`
+  else if (value.deduplicated) base = `已有相同记忆，未重复写入：${value.id} (duplicate; existing memory kept)`
+  else base = `已记录记忆 ${value.id} [${value.category}/${value.scope}/${value.origin}] (memory saved)`
   const similar = value.similar ?? []
   if (similar.length === 0) return [{ type: 'text', text: base }]
   const list = similar.map((s) => `${s.id}「${s.content.length > 40 ? `${s.content.slice(0, 40)}…` : s.content}」(${s.score})`).join('；')
@@ -177,6 +192,7 @@ export function apply(ctx, rawConfig) {
           category: { type: 'string' },
           origin: { type: 'string' },
           deduplicated: { type: 'boolean' },
+          revived: { type: 'boolean' },
           similar: {
             type: 'array',
             items: {
@@ -193,7 +209,7 @@ export function apply(ctx, rawConfig) {
     isConcurrencySafe: () => false,
     execute(args, exec) {
       const session = sessionOf(exec)
-      const { entry, deduplicated, similar } = service.save({
+      const { entry, deduplicated, similar, revived } = service.save({
         content: args.content,
         category: args.category ?? 'fact',
         scope: args.scope ?? 'workspace',
@@ -205,8 +221,8 @@ export function apply(ctx, rawConfig) {
         workspace: cwdOf(session),
         source: session?.id,
       })
-      if (!deduplicated) noteWrite(session)
-      return { id: entry.id, scope: entry.scope, category: entry.category, origin: entry.origin, deduplicated, similar: similar ?? [] }
+      if (!deduplicated || revived) noteWrite(session)
+      return saveResultValue(entry, deduplicated, similar, revived)
     },
   }
 
@@ -335,7 +351,7 @@ export function apply(ctx, rawConfig) {
         workspace: cwdOf(session),
       })
       noteWrite(session)
-      return { id: entry.id, updated: entry.updated, scope: entry.scope, origin: entry.origin }
+      return updateResultValue(entry)
     },
   }
 

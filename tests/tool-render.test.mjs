@@ -15,6 +15,10 @@ test('renderSaveResult: saved / deduplicated / similar hint', () => {
   assert.ok(saved[0].text.includes('fact/global/auto'))
   const dup = renderSaveResult({ id: 'm-1', deduplicated: true })
   assert.ok(dup[0].text.includes('已有相同记忆'))
+  // 0.24.1：命中归档/过期同内容时复活，渲染明确告知已恢复为活跃。
+  const revived = renderSaveResult({ id: 'm-1', deduplicated: true, revived: true })
+  assert.ok(revived[0].text.includes('已从归档/过期状态恢复为活跃'))
+  assert.ok(!revived[0].text.includes('未重复写入'))
   const sim = renderSaveResult({ id: 'm-2', category: 'fact', scope: 'global', origin: 'manual', deduplicated: false, similar: [{ id: 'm-old', content: '相似内容', score: 0.8 }] })
   assert.ok(sim[0].text.includes('检测到 1 条相似记忆'))
   assert.ok(sim[0].text.includes('m-old'))

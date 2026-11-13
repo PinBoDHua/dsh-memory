@@ -34,6 +34,16 @@ test('withLock releases the lock when the body throws', () => {
   assert.ok(!fs.existsSync(lockPath))
 })
 
+test('withLock creates a missing parent directory (fresh data root)', () => {
+  const root = tmpRoot()
+  const lockPath = path.join(root, 'workspaces', '.lock')
+  assert.ok(!fs.existsSync(path.dirname(lockPath)))
+  const result = withLock(lockPath, () => 'ok')
+  assert.equal(result, 'ok')
+  assert.ok(fs.existsSync(path.dirname(lockPath)), 'parent directory created')
+  assert.ok(!fs.existsSync(lockPath), 'lock released')
+})
+
 test('withLock breaks a stale lock', () => {
   const root = tmpRoot()
   const lockPath = path.join(root, '.lock')

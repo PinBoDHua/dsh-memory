@@ -80,6 +80,36 @@ test('import invalid mode throws invalid', () => {
   assert.throws(() => service.import({ mode: 'bogus', entries: [] }), (e) => e.code === 'invalid')
 })
 
+test('import rejects invalid expires instead of writing a hidden-forever entry', () => {
+  const { service } = tmpService()
+  const res = service.import({
+    entries: [
+      { content: '坏日历日期', scope: 'global', expires: '2026-99-99' },
+      { content: '垃圾日期', scope: 'global', expires: 'not-a-date' },
+      { content: '合法日期', scope: 'global', expires: '2026-12-31' },
+    ],
+  })
+  assert.equal(res.imported, 1)
+  assert.equal(res.rejected.length, 2)
+  assert.deepEqual(res.rejected.map((r) => r.code), ['invalid', 'invalid'])
+  const list = service.list({ scope: 'global' })
+  assert.equal(list.length, 1)
+  assert.equal(list[0].expires, '2026-12-31')
+  // 坏日期条目没有落盘（不会被字符串比较永久隐藏）。
+  assert.equal(service.search({ query: '坏日历日期', scope: 'global' }).length, 0)
+})
+
+test('import works on a fresh, not-yet-created data root (migration path)', () => {
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-memory-import-fresh-'))
+  const root = path.join(parent, 'not-yet')
+  assert.ok(!fs.existsSync(root))
+  const service = createMemoryService({ root })
+  const res = service.import({ entries: [{ content: '全新安装导入', scope: 'global', origin: 'manual' }] })
+  assert.equal(res.imported, 1)
+  assert.equal(service.list({ scope: 'global' }).length, 1)
+  assert.ok(fs.existsSync(path.join(root, 'global')))
+})
+
 test('POST /import mode=merge updates through the route', async () => {
   const { service } = tmpService()
   const { entry } = service.save({ content: '路由原', scope: 'global', origin: 'manual' })
