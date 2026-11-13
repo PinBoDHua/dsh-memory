@@ -228,9 +228,13 @@ async function main() {
         memTabIndex: mem && mem.getAttribute('tabindex'),
         setTabIndex: set && set.getAttribute('tabindex'),
         listRole: (document.querySelector('.dm_tabs') || {}).getAttribute ? document.querySelector('.dm_tabs').getAttribute('role') : null,
+        // 非激活 tab 的 aria-controls 目标也必须存在（0.24.12：两个 tabpanel 常驻 + hidden）。
+        settingsPanelExists: document.querySelector('#dm-panel-settings') !== null,
+        memoriesPanelHidden: (document.querySelector('#dm-panel-memories') || {}).hasAttribute ? document.querySelector('#dm-panel-memories').hasAttribute('hidden') : null,
       }
     })()`)
     check('Tabs 具备 ARIA tablist/tab/tabpanel 关联', tabsAria.listRole === 'tablist' && tabsAria.memRole === 'tab' && tabsAria.memControls === 'dm-panel-memories' && tabsAria.setControls === 'dm-panel-settings' && tabsAria.panelRole === 'tabpanel' && tabsAria.panelLabelled === 'dm-tab-memories', JSON.stringify(tabsAria))
+    check('非激活 tabpanel 常驻且 aria-controls 目标存在', tabsAria.settingsPanelExists === true, JSON.stringify(tabsAria))
     check('Tabs roving tabIndex', tabsAria.memTabIndex === '0' && tabsAria.setTabIndex === '-1', JSON.stringify(tabsAria))
     await evaluate(`(() => { const t = document.querySelector('#dm-tab-memories'); if (t) t.focus(); return Boolean(t) })()`)
     await key('ArrowRight', 'ArrowRight', 39)
@@ -335,7 +339,28 @@ async function main() {
         ta.dispatchEvent(new Event('input', { bubbles: true }))
         return true
       })()`)
-      // 1c) 标签：去重 + 12 个上限计数/提示（客户端与服务端同口径）
+      // 1c) 分类 radiogroup：←/→ 循环切换且焦点跟随（WAI-ARIA radiogroup 模式）
+      const catBefore = await evaluate(`(() => {
+        const grid = document.querySelector('.dm_catgrid')
+        if (!grid) return null
+        const radios = [...grid.querySelectorAll('[role="radio"]')]
+        const current = radios.findIndex(r => r.getAttribute('aria-checked') === 'true')
+        if (current === -1) return null
+        radios[current].focus()
+        return { current, focused: radios.indexOf(document.activeElement) }
+      })()`)
+      await key('ArrowRight', 'ArrowRight', 39)
+      const catAfter = await evaluate(`(() => {
+        const radios = [...document.querySelectorAll('.dm_catgrid [role="radio"]')]
+        return {
+          checked: radios.findIndex(r => r.getAttribute('aria-checked') === 'true'),
+          focused: radios.indexOf(document.activeElement),
+          tabIndexes: radios.map(r => r.getAttribute('tabindex')),
+        }
+      })()`)
+      check('分类 radiogroup 方向键切换且焦点跟随', catBefore !== null && catAfter.checked === (catBefore.current + 1) % 3 && catAfter.focused === catAfter.checked, JSON.stringify({ catBefore, catAfter }))
+      check('分类 radiogroup roving tabIndex', catAfter.tabIndexes.filter((v) => v === '0').length === 1, JSON.stringify(catAfter.tabIndexes))
+      // 1d) 标签：去重 + 12 个上限计数/提示（客户端与服务端同口径）
       await evaluate(`(() => {
         const input = document.querySelector('#dm-tags')
         if (!input) return false
@@ -393,6 +418,40 @@ async function main() {
       await sleep(400)
     }
 
+    // 1e) 导入：带 UTF-8 BOM 的导出文件也能进入预览（0.24.12）；导入窗口的后处理不卡 busy
+    {
+      const dir = path.join(os.tmpdir(), `dsh-memory-gui-import-${process.pid}`)
+      mkdirSync(dir, { recursive: true })
+      const file = path.join(dir, 'bom-export.json')
+      writeFileSync(file, '\uFEFF' + JSON.stringify({
+        format: 'dsh-memory-export',
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        entries: [{ id: 'm-gui-bom-1', content: 'GUI 导入 BOM 预览条目', scope: 'global', category: 'fact' }],
+      }), 'utf8')
+      try {
+        await send('DOM.enable')
+        const { root } = await send('DOM.getDocument', { depth: -1 })
+        const { nodeId } = await send('DOM.querySelector', { nodeId: root.nodeId, selector: 'input[type=file]' })
+        await send('DOM.setFileInputFiles', { files: [file], nodeId })
+        await sleep(2200)
+        const planState = await evaluate(`(() => {
+          const dialog = document.querySelector('.dm_dialog')
+          return {
+            open: dialog !== null,
+            text: dialog ? (dialog.innerText || '').replace(/\\s+/g, ' ').slice(0, 120) : '',
+            busyButtons: document.querySelectorAll('.dm_toolbtn[disabled]').length,
+          }
+        })()`)
+        check('BOM 导出文件可进入导入预览', planState.open && /导入|Import|预览|Preview/.test(planState.text), JSON.stringify(planState))
+        check('导入预览后 busy 已复位', planState.busyButtons === 0, JSON.stringify(planState))
+        await key('Escape', 'Escape', 27)
+        await sleep(400)
+      } finally {
+        rmSync(dir, { recursive: true, force: true })
+      }
+    }
+
     // 6) 删除撤销吐司优先级 + 撤销恢复（0.24.4）：删除后的撤销不能被后续提示挤掉。
     const marker = `__gui_undo_${Date.now().toString(36)}__`
     let createdIds = []
@@ -433,6 +492,10 @@ async function main() {
       await sleep(1000)
       const afterDelete = await evaluate(`(() => ({ text: (document.querySelector('.dm_toast_text') || {}).textContent || '', hasAction: document.querySelector('.dm_toast_action') !== null }))()`)
       check('删除后出现带撤销的吐司', afterDelete.hasAction && /删除|Delete/.test(afterDelete.text), JSON.stringify(afterDelete))
+      const undoFocus = await evaluate(`document.activeElement ? (document.activeElement.className || '') : ''`)
+      check('删除后焦点移到撤销按钮（键盘可达）', typeof undoFocus === 'string' && undoFocus.includes('dm_toast_action'), undoFocus)
+      const toastCloseLabel = await evaluate(`(() => { const el = document.querySelector('.dm_toast_close'); return el ? el.getAttribute('aria-label') : null })()`)
+      check('吐司关闭按钮 aria-label 为「关闭提示」', /关闭|Dismiss/.test(String(toastCloseLabel || '')), String(toastCloseLabel))
 
       // 立即触发另一条普通提示（对 B 钉选）：撤销吐司不应被覆盖，普通提示排队。
       await evaluate(`(() => {

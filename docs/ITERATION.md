@@ -80,10 +80,10 @@ This file is the self-iteration ledger for dsh-memory: per-round increments, ver
 - [x] 空工作区空态误报「记忆库还是空的」（0.24.11：区分筛选无结果 / 工作区为空 / 整库为空）。
 - [x] 卡片操作按钮 busy 期间禁用 + 列表 aria-busy（0.24.11）。
 - [x] 卡片标签点击改为精确 `tag=` 过滤（0.24.11）。
-- [ ] 删除/批量删除后焦点丢失、撤销吐司对键盘用户不可达（可聚焦到 `.dm_toast_action`）。
-- [ ] 导入：BOM JSON 解析失败；读文件失败/解析失败/格式错误归因混同；读文件窗口未置 busy。
+- [x] 删除/批量删除后焦点丢失、撤销吐司对键盘用户不可达（0.24.12：撤销吐司出现即聚焦动作按钮）。
+- [x] 导入：BOM JSON 解析失败；读文件失败/解析失败/格式错误归因混同；读文件窗口未置 busy（0.24.12：`parseImportText` + 读窗口 busy + 三种错误分开）。
 - [ ] 每次列表刷新都重取 recall-preview（注入徽章失败即清空），可拆分刷新时机并保留旧值。
-- [ ] ARIA 细节：类别 radiogroup 无方向键；非激活 tab 的 `aria-controls` 指向已卸载面板；吐司关闭按钮读作「取消」。
+- [x] ARIA 细节：类别 radiogroup 无方向键；非激活 tab 的 `aria-controls` 指向已卸载面板；吐司关闭按钮读作「取消」（0.24.12）。
 - [ ] 路由收到非对象 JSON（`null`/数组/标量）→ 500 internal，应回 400。
 - [ ] move 去重把「已被取代」条目算冲突（与 save 语义不一致）。
 - [ ] `withLock` 大导入临界区可超 `staleMs=10s`；且不支持 async 回调（Promise 会提前释锁），可显式传更长 staleMs/超时或检测 thenable。

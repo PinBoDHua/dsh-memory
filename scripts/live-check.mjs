@@ -62,11 +62,11 @@ async function main() {
 
   // 1. status：版本与 schema
   let token = ''
-  await check('status 报告 version=0.24.11 / schemaVersion=2 并下发 token', async () => {
+  await check('status 报告 version=0.24.12 / schemaVersion=2 并下发 token', async () => {
     const { status, json } = await req('GET', '/status')
     ok('status HTTP 200', status === 200, `got ${status}`)
     ok('status.ok', json?.ok === true)
-    ok('version === 0.24.11', json?.version === '0.24.11', `got ${json?.version}`)
+    ok('version === 0.24.12', json?.version === '0.24.12', `got ${json?.version}`)
     ok('schemaVersion === 2', json?.schemaVersion === 2, `got ${json?.schemaVersion}`)
     ok('token 非空', typeof json?.key === 'string' && json.key.length > 0)
     token = json?.key ?? ''
@@ -451,6 +451,7 @@ async function main() {
     ok('bundle 含 0.24.5 设置解包与标签收敛', code.includes('unwrapResult') && code.includes('parseTags'))
     ok('bundle 含 0.24.5 ARIA Tabs', code.includes('dm-panel-settings') && code.includes('onTabKey'))
     // 0.24.10：设置写入状态机（失败重试、重置互斥）。
+    ok('bundle 含 0.24.12 可访问性与导入', code.includes('parseImportText') && code.includes('closeToast') && code.includes('onCategoryKey'))
     ok('bundle 含 0.24.11 面板正确性', code.includes('savedToastKey') && code.includes('exportParams') && code.includes('filterByTag') && code.includes('emptyScopeTitle'))
     ok('bundle 含 0.24.10 设置状态机', code.includes('settingsStatusNext') && code.includes('dm_linkbtn'))
   })

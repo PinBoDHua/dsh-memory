@@ -239,6 +239,16 @@ function settingsStatusNext(status, event) {
     return 'saved'
   }
 
+  // 导入文件文本解析（纯函数）：容忍 UTF-8 BOM（记事本/部分编辑器保存会带），
+// 并把「JSON 语法错误」与「不是导出文件」归因分开，便于用户纠正。
+  function parseImportText(text) {
+    var raw = String(text == null ? '' : text).replace(/^\uFEFF/, '')
+    var doc
+    try { doc = JSON.parse(raw) } catch { return { ok: false, errorKey: 'errImportJson' } }
+    if (!validateImportDoc(doc).ok) return { ok: false, errorKey: 'errImportDoc' }
+    return { ok: true, doc: doc }
+  }
+
   // 导出参数（纯函数）：按当前视图导出——「全局＋当前工作区」不再静默导出全部工作区；
   // 当前工作目录未知时回退仅全局（与列表实际可见范围一致）。
   function exportParams(selection, currentCwd) {
@@ -314,7 +324,7 @@ function settingsStatusNext(status, event) {
     return (mb < 10 ? mb.toFixed(1) : Math.round(mb)) + ' MB'
   }
 
-  var helpers = { validateDraft: validateDraft, groupEntries: groupEntries, nextToken: nextToken, entriesParams: entriesParams, buildEntriesQuery: buildEntriesQuery, workspaceOptions: workspaceOptions, errorKeyFor: errorKeyFor, shouldQueueToast: shouldQueueToast, partitionSettled: partitionSettled, parseTags: parseTags, unwrapResult: unwrapResult, settingsStatusNext: settingsStatusNext, savedToastKey: savedToastKey, exportParams: exportParams, validateImportDoc: validateImportDoc, importSummary: importSummary, pageSlice: pageSlice, entryDetailRows: entryDetailRows, relativeTime: relativeTime, formatBytes: formatBytes, isExpired: isExpired, statusOf: statusOf, originOf: originOf, statusQueryFlags: statusQueryFlags }
+  var helpers = { validateDraft: validateDraft, groupEntries: groupEntries, nextToken: nextToken, entriesParams: entriesParams, buildEntriesQuery: buildEntriesQuery, workspaceOptions: workspaceOptions, errorKeyFor: errorKeyFor, shouldQueueToast: shouldQueueToast, partitionSettled: partitionSettled, parseTags: parseTags, unwrapResult: unwrapResult, settingsStatusNext: settingsStatusNext, savedToastKey: savedToastKey, exportParams: exportParams, parseImportText: parseImportText, validateImportDoc: validateImportDoc, importSummary: importSummary, pageSlice: pageSlice, entryDetailRows: entryDetailRows, relativeTime: relativeTime, formatBytes: formatBytes, isExpired: isExpired, statusOf: statusOf, originOf: originOf, statusQueryFlags: statusQueryFlags }
 
   // ===== node 测试导出（CJS） =====
   if (typeof module !== 'undefined' && module.exports) {
@@ -379,6 +389,7 @@ function settingsStatusNext(status, event) {
     saved: '已保存',
     saved: '已保存',
     revivedSaved: '已恢复为活跃（原为归档/过期）',
+    closeToast: '关闭提示',
     deduplicated: '已有相同记忆，未重复写入',
     similarSaved: '已保存；检测到 {n} 条相似记忆（{id}），建议核对是否重复',
     deleted: '已删除',
@@ -494,6 +505,8 @@ function settingsStatusNext(status, event) {
     auditCount: '共 {n} 对相似记忆',
     errDuplicate: '目标作用域已有相同内容的记忆',
     errImportDoc: '不是有效的 dsh-memory 导出文件（format/version/entries 不符）',
+    errImportJson: '导入文件不是有效的 JSON',
+    errReadFile: '读取导入文件失败',
     tabMemories: '记忆',
     tabSettings: '设置',
     settingsSubtitle: '注入 · 隐私 · 存储 · 面板',
@@ -592,6 +605,7 @@ function settingsStatusNext(status, event) {
     saved: 'Saved',
     saved: 'Saved',
     revivedSaved: 'Restored to active (was archived/expired)',
+    closeToast: 'Dismiss notification',
     deduplicated: 'Identical memory exists; nothing added',
     similarSaved: 'Saved; {n} similar memory found ({id}) — review for duplicates',
     deleted: 'Deleted',
@@ -707,6 +721,8 @@ function settingsStatusNext(status, event) {
     auditCount: '{n} similar pairs',
     errDuplicate: 'Identical memory already exists in the target scope',
     errImportDoc: 'Not a valid dsh-memory export file (format/version/entries mismatch)',
+    errImportJson: 'Import file is not valid JSON',
+    errReadFile: 'Failed to read the import file',
     tabMemories: 'Memories',
     tabSettings: 'Settings',
     settingsSubtitle: 'Injection · Privacy · Storage · Panel',
@@ -1454,6 +1470,23 @@ function settingsStatusNext(status, event) {
         function onKeySave(e) {
           if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); props.onSave() }
         }
+        // 分类 radiogroup：←/→/↑/↓ 循环切换、Home/End 跳转（WAI-ARIA radiogroup 模式）。
+        function onCategoryKey(e) {
+          var order = ['preference', 'fact', 'decision']
+          var idx = order.indexOf(draft.category)
+          if (idx === -1) idx = 0
+          var next = null
+          if (e.key === 'ArrowRight' || e.key === 'ArrowDown') next = order[(idx + 1) % order.length]
+          else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') next = order[(idx + order.length - 1) % order.length]
+          else if (e.key === 'Home') next = order[0]
+          else if (e.key === 'End') next = order[order.length - 1]
+          if (next === null) return
+          e.preventDefault()
+          field('category', next)
+          var buttons = e.currentTarget.querySelectorAll('[role="radio"]')
+          var target = buttons[order.indexOf(next)]
+          if (target) target.focus()
+        }
         return h(Modal, { title: isCreate ? t('editorCreate') : t('editorEdit'), onClose: props.onClose, busy: props.busy },
           h('div', { className: 'dm_dialog_head' },
             h('div', { className: 'dm_dialog_medal dm_dialog_medal_primary' }, h(Icon, { name: isCreate ? 'plus' : 'edit', size: 17, strokeWidth: 2 })),
@@ -1464,11 +1497,12 @@ function settingsStatusNext(status, event) {
             h('div', { className: 'dm_charcount' }, t('contentCount').replace('{n}', String(draft.content.length)))),
           h('div', { className: 'dm_field' },
             h('span', { className: 'dm_label' }, h(Icon, { name: 'tag', size: 13 }), t('categoryLabel')),
-            h('div', { className: 'dm_catgrid', role: 'radiogroup', 'aria-label': t('categoryLabel') },
+            h('div', { className: 'dm_catgrid', role: 'radiogroup', 'aria-label': t('categoryLabel'), onKeyDown: onCategoryKey },
               ['preference', 'fact', 'decision'].map(function (cat) {
                 var meta = CATEGORY_META[cat]
                 return h('button', {
                   key: cat, type: 'button', role: 'radio', 'aria-checked': draft.category === cat,
+                  tabIndex: draft.category === cat ? 0 : -1,
                   className: 'dm_catopt', style: catVars(cat), disabled: props.busy,
                   onClick: function () { field('category', cat) },
                 }, h(Icon, { name: meta.icon, size: 15, strokeWidth: 2 }), t(meta.label))
@@ -1625,8 +1659,8 @@ function settingsStatusNext(status, event) {
         },
           h('span', { className: 'dm_toast_icon' }, h(Icon, { name: toast.kind === 'error' ? 'alert' : 'check', size: 14, strokeWidth: 2.2 })),
           h('span', { className: 'dm_toast_text' }, toast.text),
-          toast.action ? h('button', { className: 'dm_toast_action', onClick: function () { toast.action.run() } }, h(Icon, { name: 'undo', size: 13, strokeWidth: 2.2, style: { verticalAlign: '-2px', marginRight: 4 } }), toast.action.label) : null,
-          h('button', { className: 'dm_toast_close', 'aria-label': t('cancel'), onClick: props.onClose }, h(Icon, { name: 'x', size: 12, strokeWidth: 2.2 })),
+          toast.action ? h('button', { ref: props.actionRef, className: 'dm_toast_action', onClick: function () { toast.action.run() } }, h(Icon, { name: 'undo', size: 13, strokeWidth: 2.2, style: { verticalAlign: '-2px', marginRight: 4 } }), toast.action.label) : null,
+          h('button', { className: 'dm_toast_close', 'aria-label': t('closeToast'), onClick: props.onClose }, h(Icon, { name: 'x', size: 12, strokeWidth: 2.2 })),
           h('span', { className: 'dm_toast_bar', style: { animationDuration: (toast.duration || 2600) + 'ms' } }))
       }
 
@@ -2070,6 +2104,7 @@ function settingsStatusNext(status, event) {
         var toast = toastState[0]; var setToast = toastState[1]
         var toastRef = useRef(null)
         var toastQueueRef = useRef([])
+        var toastActionRef = useRef(null)
         var busyState = useState(false)
         var busy = busyState[0]; var setBusy = busyState[1]
         var errorState = useState('')
@@ -2123,6 +2158,14 @@ function settingsStatusNext(status, event) {
         var viewInitialized = useRef(false)
         var settingsSeq = useRef(0)
         var pageSize = (settings && settings.effective && settings.effective.pageSize) || PAGE_SIZE
+
+        // 带操作按钮的吐司（删除撤销）出现时把焦点移到动作按钮：确认删除后原触发按钮
+// 已随卡片卸载，不主动接管焦点的话键盘用户既丢失上下文、也无法到达撤销。
+        useEffect(function () {
+          if (toast && toast.action && toastActionRef.current) {
+            try { toastActionRef.current.focus() } catch { /* 焦点接管失败不影响功能 */ }
+          }
+        }, [toast])
 
         function dismissToast() {
           var queued = toastQueueRef.current.shift()
@@ -2570,20 +2613,22 @@ function settingsStatusNext(status, event) {
             showToast('error', t('errBodyTooLarge'))
             return
           }
+          // 读文件/解析窗口也置 busy：大文件读取期间不允许再次触发导入；
+          // 读失败、JSON 语法错误、格式不符分别归因，不再一律提示「请求数据无效」。
+          setBusy(true)
           file.text().then(function (text) {
-            var doc
-            try { doc = JSON.parse(text) } catch { showToast('error', t('errInvalidJson')); return undefined }
-            if (!validateImportDoc(doc).ok) {
-              showToast('error', t('errImportDoc'))
+            var parsed = parseImportText(text)
+            if (!parsed.ok) {
+              showToast('error', t(parsed.errorKey))
               return undefined
             }
-            setBusy(true)
-            return api.import({ entries: doc.entries, dryRun: true }).then(function (payload) {
-              setImportPlan({ entries: doc.entries, plan: payload.result, mode: 'skip' })
-            }).catch(writeFailure).then(function () { setBusy(false) })
-          }).catch(function () {
-            showToast('error', t('errInvalidJson'))
-          })
+            return api.import({ entries: parsed.doc.entries, dryRun: true }).then(function (payload) {
+              setImportPlan({ entries: parsed.doc.entries, plan: payload.result, mode: 'skip' })
+            })
+          }).catch(function (err) {
+            if (err && err.code) writeFailure(err)
+            else showToast('error', t('errReadFile') + ': ' + errorText(err, t))
+          }).then(function () { setBusy(false) })
         }
 
         function changeImportMode(mode) {
@@ -2774,8 +2819,9 @@ function settingsStatusNext(status, event) {
               className: 'dm_tab' + (tab === 'settings' ? ' dm_tab_active' : ''),
               onClick: function () { setTab('settings') }, onKeyDown: onTabKey,
             }, h(Icon, { name: 'sliders', size: 15 }), t('tabSettings'))),
-          tab === 'memories'
-            ? h('div', { id: 'dm-panel-memories', role: 'tabpanel', 'aria-labelledby': 'dm-tab-memories' },
+          // 两个 tabpanel 常驻 DOM（非激活用 hidden）：aria-controls 始终指向存在的面板，
+// 同时保留列表/设置的滚动与焦点上下文；hidden 使非激活面板不可聚焦。
+          h('div', { id: 'dm-panel-memories', role: 'tabpanel', 'aria-labelledby': 'dm-tab-memories', hidden: tab !== 'memories' },
               renderStats(),
               h('div', { className: 'dm_toolbar_wrap' },
                 h('div', { className: 'dm_toolbar' },
@@ -2825,8 +2871,8 @@ function settingsStatusNext(status, event) {
                   h('span', { className: 'dm_selbar_n' }, t('bulkSelected').replace('{n}', String(selected.length))),
                   h('button', { className: 'dm_btn dm_btn_danger_solid', onClick: openBulkDelete, disabled: busy }, h(Icon, { name: 'trash', size: 14 }), t('bulkDelete')),
                   h('button', { className: 'dm_btn', onClick: function () { setSelected([]) }, disabled: busy }, t('clearSelection')))
-                : null)
-            : h('div', { id: 'dm-panel-settings', role: 'tabpanel', 'aria-labelledby': 'dm-tab-settings' },
+                : null),
+          h('div', { id: 'dm-panel-settings', role: 'tabpanel', 'aria-labelledby': 'dm-tab-settings', hidden: tab !== 'settings' },
             h(SettingsPage, {
               view: settings, draft: draft, busy: busy, status: settingsStatus, t: t, api: api, workspace: currentCwd,
               error: settingsError, onRetry: loadSettings, onRetrySave: retrySaveSettings,
@@ -2837,7 +2883,7 @@ function settingsStatusNext(status, event) {
           confirm ? h(ConfirmModal, { entries: confirm.entries, t: t, busy: busy, onConfirm: handleDelete, onClose: function () { if (!busy) setConfirm(null) } }) : null,
           importPlan ? h(ImportModal, { plan: importPlan.plan, mode: importPlan.mode, t: t, busy: busy, onConfirm: confirmImport, onModeChange: changeImportMode, onClose: function () { if (!busy) setImportPlan(null) } }) : null,
           audit ? h(AuditModal, { pairs: audit.pairs, t: t, busy: busy, onSupersede: handleSupersedePair, onDismiss: dismissPair, onClose: function () { if (!busy) setAudit(null) } }) : null,
-          toast ? h(Toast, { toast: toast, t: t, raised: selected.length > 0, onClose: dismissToast }) : null)
+          toast ? h(Toast, { toast: toast, t: t, raised: selected.length > 0, onClose: dismissToast, actionRef: toastActionRef }) : null)
       }
 
       return {

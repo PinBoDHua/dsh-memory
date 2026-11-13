@@ -7,7 +7,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import helpers from '../client/client.js'
 
-const { validateDraft, groupEntries, nextToken, entriesParams, buildEntriesQuery, workspaceOptions, errorKeyFor, shouldQueueToast, partitionSettled, parseTags, unwrapResult, settingsStatusNext, savedToastKey, exportParams, validateImportDoc, importSummary, pageSlice, entryDetailRows, relativeTime, formatBytes, isExpired, statusOf, originOf, statusQueryFlags } = helpers
+const { validateDraft, groupEntries, nextToken, entriesParams, buildEntriesQuery, workspaceOptions, errorKeyFor, shouldQueueToast, partitionSettled, parseTags, unwrapResult, settingsStatusNext, savedToastKey, exportParams, parseImportText, validateImportDoc, importSummary, pageSlice, entryDetailRows, relativeTime, formatBytes, isExpired, statusOf, originOf, statusQueryFlags } = helpers
 
 test('validateDraft accepts a complete draft and rejects bad ones', () => {
   assert.deepEqual(validateDraft({ content: '一条事实', category: 'fact' }), { ok: true })
@@ -202,6 +202,22 @@ test('savedToastKey prioritizes revived over dedup and similar', () => {
   assert.equal(savedToastKey({ revived: true, deduplicated: true }), 'revivedSaved')
   assert.equal(savedToastKey({ similar: [{ id: 'm-1' }, { id: 'm-2' }] }), 'similarSaved')
   assert.equal(savedToastKey({ deduplicated: false, similar: [] }), 'saved')
+})
+
+test('parseImportText tolerates BOM and separates parse vs format errors', () => {
+  const doc = '{"format":"dsh-memory-export","version":1,"entries":[{"content":"导入条目","scope":"global"}]}'
+  const plain = parseImportText(doc)
+  assert.equal(plain.ok, true)
+  assert.equal(plain.doc.entries.length, 1)
+  // Windows 记事本/部分编辑器保存会带 UTF-8 BOM：此前 JSON.parse 直接失败。
+  const bom = parseImportText('\uFEFF' + doc)
+  assert.equal(bom.ok, true)
+  assert.equal(bom.doc.format, 'dsh-memory-export')
+  // JSON 语法错误 vs 不是导出文件，归因分开。
+  assert.deepEqual(parseImportText('{broken'), { ok: false, errorKey: 'errImportJson' })
+  assert.deepEqual(parseImportText('{"foo":1}'), { ok: false, errorKey: 'errImportDoc' })
+  assert.equal(parseImportText(null).ok, false)
+  assert.equal(parseImportText('').ok, false)
 })
 
 test('exportParams keeps export scope equal to the visible view', () => {

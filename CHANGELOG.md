@@ -3,6 +3,16 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.24.12] - 2026-11-13
+
+### 修复 Fixed（第二轮审计 P2：可访问性与导入健壮性）
+- **删除后焦点可达撤销**：确认删除后原触发按钮随卡片卸载，键盘焦点会掉到页面容器；现在带操作的撤销吐司出现时自动聚焦「撤销」按钮，键盘用户可直接撤销，不丢失上下文。
+- **导入健壮性**：`parseImportText` 先 strip UTF-8 BOM 再解析（Windows 工具保存的导出文件不再被误报无效）；「读文件失败 / JSON 语法错误 / 不是导出文件」三类错误分开提示；读文件与解析窗口也置 busy，避免期间重复触发导入。
+- **ARIA 细节**：分类 radiogroup 支持 ←/→/↑/↓/Home/End 循环切换并采用 roving tabIndex；两个 tabpanel 常驻 DOM（非激活 `hidden`），`aria-controls` 始终指向存在的面板并保留列表上下文；吐司关闭按钮 aria-label 从「取消」改为「关闭提示」。
+
+### 新增 Added
+- 客户端纯函数 `parseImportText` 单测（BOM、语法错误、格式错误、空输入）；GUI 验收新增 7 项（非激活 tabpanel 存在、分类 radiogroup 方向键与 roving tabIndex、BOM 导入预览、导入后 busy 复位、删除后焦点到撤销按钮、吐司关闭按钮文案），GUI 44→51 项。
+
 ## [0.24.11] - 2026-11-13
 
 ### 修复 Fixed（第二轮审计 P2：面板正确性批次）
