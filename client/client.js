@@ -394,14 +394,65 @@ function settingsStatusNext(status, event) {
   }
 
   /**
+   * 超过服务端单请求上限（hardMax）的连通分量按拓扑分层拆分：只放置「supersedes
+   * 目标已全部落盘」的条目（Kahn），保证任何跨片指针都指向同片或更早的片——服务端
+   * 对磁盘上的取代目标会物化反向指针（superseded_by），链语义跨片重建、不静默丢链。
+   * 取代环无法分层时按原顺序倾倒（服务端本来就会修复并丢弃环指针）。
+   */
+  function splitLinkedComponentTopologically(items, cap) {
+    var indexById = new Map()
+    for (var i = 0; i < items.length; i++) indexById.set(String(items[i].id), i)
+    var dep = []
+    for (var j = 0; j < items.length; j++) {
+      var target = items[j] && items[j].supersedes
+      var idx = target === null || target === undefined ? undefined : indexById.get(String(target))
+      dep.push(idx === undefined ? -1 : idx)
+    }
+    var placed = []
+    var remaining = items.length
+    var chunks = []
+    var current = []
+    function place(item) {
+      current.push(item)
+      if (current.length >= cap) { chunks.push(current); current = [] }
+    }
+    while (remaining > 0) {
+      var progressed = false
+      for (var k = 0; k < items.length; k++) {
+        if (placed[k]) continue
+        if (dep[k] !== -1 && !placed[dep[k]]) continue
+        placed[k] = true
+        remaining -= 1
+        progressed = true
+        place(items[k])
+      }
+      if (!progressed) {
+        // 取代环：剩余条目按原顺序倾倒，绝不死循环。
+        for (var m = 0; m < items.length; m++) {
+          if (placed[m]) continue
+          placed[m] = true
+          remaining -= 1
+          place(items[m])
+        }
+      }
+    }
+    if (current.length > 0) chunks.push(current)
+    return chunks
+  }
+
+  /**
    * 分片导入分包（保留取代链）：把 id ↔ supersedes ↔ superseded_by 用并查集合并成
    * 连通分量，同一分量必须落在同一批——否则跨片的取代指针会被服务端按「不可达」
    * 修复丢弃，导致已取代的旧记忆重新变为活跃（静默数据损坏）。
-   * 分量超过 size 时单独成批（内容完整优先于批大小）。
+   * 分量超过 size 时单独成批（内容完整优先于批大小）；但服务端单请求有硬上限
+   * （lib/service.js MAX_IMPORT_ENTRIES=1000），超过 hardMax 的分量整批提交会被
+   * 400 invalid 拒绝——大备份从此完全无法导入。因此分量 > hardMax 时改按拓扑
+   * 分层拆分（supersedes 目标先落盘），跨片指针由服务端按磁盘状态重新物化。
    */
-  function chunkEntriesPreservingLinks(entries, size) {
+  function chunkEntriesPreservingLinks(entries, size, hardMax) {
     var list = Array.isArray(entries) ? entries : []
     var n = Math.max(1, Math.floor(Number(size) || 1))
+    var cap = Math.max(n, Math.floor(Number(hardMax) || 1000))
     if (list.length === 0) return []
     if (list.length <= n) return [list]
     var parent = Object.create(null)
@@ -447,6 +498,13 @@ function settingsStatusNext(status, event) {
     var current = []
     for (var g = 0; g < order.length; g++) {
       var items = order[g].items
+      if (items.length > cap) {
+        // 超过服务端单请求硬上限：整批提交会被 400 拒绝，改按拓扑分层拆分
+        // （目标在前、指针在后，跨片链由服务端按磁盘状态物化重建）。
+        if (current.length > 0) { chunks.push(current); current = [] }
+        chunks = chunks.concat(splitLinkedComponentTopologically(items, cap))
+        continue
+      }
       if (items.length > n) {
         if (current.length > 0) { chunks.push(current); current = [] }
         chunks.push(items)

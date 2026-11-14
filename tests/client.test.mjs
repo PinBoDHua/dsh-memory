@@ -339,6 +339,48 @@ test('chunkEntriesPreservingLinks isolates oversized components instead of split
   assert.equal(chunks.flat().length, 10)
 })
 
+test('chunkEntriesPreservingLinks splits components beyond the server per-request cap topologically', () => {
+  // 第八轮审计：分量超过服务端 MAX_IMPORT_ENTRIES（1000）时整批提交会被 400 invalid
+  // 拒绝，大备份无法导入。现按拓扑分层拆分：supersedes 目标（旧条目）先落盘，
+  // 跨片指针由服务端按磁盘状态物化反向指针，链语义不丢。
+  const chain = Array.from({ length: 12 }, (_, i) => ({ id: `m-chain-${i}`, content: `链 ${i}` }))
+  for (let i = 1; i < chain.length; i += 1) chain[i].supersedes = chain[i - 1].id
+  const chunks = chunkEntriesPreservingLinks(chain, 5, 7)
+  assert.ok(chunks.every((chunk) => chunk.length <= 7), 'no chunk exceeds the server cap')
+  assert.equal(chunks.flat().length, 12, 'no entry lost or duplicated')
+  const chunkOf = new Map()
+  chunks.forEach((chunk, ci) => { for (const e of chunk) chunkOf.set(e.id, ci) })
+  for (const e of chain) {
+    if (!e.supersedes) continue
+    assert.ok(chunkOf.get(e.supersedes) <= chunkOf.get(e.id), `supersede target of ${e.id} must be in the same or an earlier chunk`)
+  }
+})
+
+test('chunkEntriesPreservingLinks defaults to the 1000-entry server cap', () => {
+  const chain = Array.from({ length: 1001 }, (_, i) => ({ id: `m-huge-${i}`, content: `x${i}` }))
+  for (let i = 1; i < chain.length; i += 1) chain[i].supersedes = chain[i - 1].id
+  const chunks = chunkEntriesPreservingLinks(chain, 300)
+  assert.ok(chunks.length > 1, 'oversized component is split')
+  assert.ok(chunks.every((chunk) => chunk.length <= 1000), 'default hardMax keeps chunks within the server cap')
+  assert.equal(chunks.flat().length, 1001)
+  const chunkOf = new Map()
+  chunks.forEach((chunk, ci) => { for (const e of chunk) chunkOf.set(e.id, ci) })
+  for (const e of chain) {
+    if (!e.supersedes) continue
+    assert.ok(chunkOf.get(e.supersedes) <= chunkOf.get(e.id), 'topological order preserved by default')
+  }
+})
+
+test('chunkEntriesPreservingLinks terminates on supersede cycles beyond the cap', () => {
+  const entries = Array.from({ length: 8 }, (_, i) => ({ id: `m-cyc-${i}`, content: `c${i}` }))
+  // 1→0→…→5→…成环（0 取代 5，5 取代 4 … 1 取代 0），6/7 为独立条目。
+  for (let i = 1; i < 6; i += 1) entries[i].supersedes = entries[i - 1].id
+  entries[0].supersedes = entries[5].id
+  const chunks = chunkEntriesPreservingLinks(entries, 2, 4)
+  assert.equal(chunks.flat().length, 8, 'all entries placed despite the cycle')
+  assert.ok(chunks.every((chunk) => chunk.length <= 4), 'cap respected')
+})
+
 test('importSummary exposes repaired pointer count', () => {
   const summary = importSummary({ imported: 2, updated: 1, deduplicated: 3, repaired: 4, rejected: [{ index: 0 }] })
   assert.equal(summary.repaired, 4)

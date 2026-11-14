@@ -161,3 +161,36 @@ test('POST /import mode=merge updates through the route', async () => {
   assert.equal(res.json().result.updated, 1)
   assert.equal(service.list({ scope: 'global' }).find((e) => e.id === entry.id).content, '路由改')
 })
+
+test('sequential chunks rebuild cross-chunk supersede chains from disk state', () => {
+  // 第八轮审计契约：超过单请求上限的取代链分量按「目标在前、指针在后」拆片时，
+  // 后片对磁盘上的取代目标必须物化反向指针（superseded_by），链语义跨片重建。
+  const { service } = tmpService()
+  const older = { id: 'm-xold-1', content: '旧条目', scope: 'global' }
+  const newer = { id: 'm-xnew-1', content: '新条目', scope: 'global', supersedes: 'm-xold-1' }
+  // 片 1：目标（旧条目）先落盘（其反向指针不可达，被修复丢弃，计入 repaired）。
+  service.import({ entries: [{ ...older, superseded_by: 'm-xnew-1' }] })
+  // 片 2：指针（新条目）到达，supersedes 指向片 1 已落盘的磁盘条目。
+  const res = service.import({ entries: [newer] })
+  assert.equal(res.imported, 1)
+  assert.equal(res.repaired, 0, 'pointer to a disk target needs no repair')
+  const all = service.list({ scope: 'global', includeSuperseded: true })
+  const oldEntry = all.find((e) => e.id === 'm-xold-1')
+  const newEntry = all.find((e) => e.id === 'm-xnew-1')
+  assert.equal(oldEntry.superseded_by, 'm-xnew-1', 'disk target materialized by the later chunk')
+  assert.equal(newEntry.supersedes, 'm-xold-1', 'pointer preserved')
+  // 默认检索视图隐藏被取代的旧条目：链语义完整生效。
+  assert.equal(service.searchDetailed({ scope: 'global' }).entries.find((e) => e.id === 'm-xold-1'), undefined)
+})
+
+test('reverse order (pointer before target) documents why topological splitting is required', () => {
+  const { service } = tmpService()
+  // 指针先到：supersedes 目标不可达（不在本片也不在磁盘）→ 按悬垂修复丢弃。
+  const newer = { id: 'm-rnew-1', content: '反向新', scope: 'global', supersedes: 'm-rold-1' }
+  const res = service.import({ entries: [newer] })
+  assert.equal(res.repaired, 1, 'dangling pointer dropped')
+  service.import({ entries: [{ id: 'm-rold-1', content: '反向旧', scope: 'global' }] })
+  const all = service.list({ scope: 'global', includeSuperseded: true })
+  assert.equal(all.find((e) => e.id === 'm-rnew-1').supersedes, undefined, 'link lost when target arrives later')
+  assert.equal(all.find((e) => e.id === 'm-rold-1').superseded_by, undefined)
+})

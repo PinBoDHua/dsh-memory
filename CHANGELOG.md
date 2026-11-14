@@ -3,6 +3,17 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.25.1] - 2026-11-14
+
+第八轮双端审计（后端 lib/＋入口＋前端 client.js 全量只读审计）。本轮共 2 项 P1/P2 修复，均附回归测试。
+
+### 修复 Fixed
+- **命中账本被 `__proto__` 类 id 打穿（P1 数据丢失＋影子覆盖）**：`access.json` 账本此前用普通对象按条目 id 建键，而 `ID_PATTERN` 允许 `__proto__`（导入可保留任意合法形状 id）。后果有二：① `map['__proto__'] = {at, count}` 触发原型 setter，记账记录被静默吞掉、永不落盘（计数/衰减失真）；② `applyAccess` 里 `ledger['__proto__']` 影子读到 `Object.prototype`（真值），把条目文件内的 `last_access`/`hit_count` 覆盖成 `undefined`。客户端 0.24.39 已为同类问题改用 `Object.create(null)`（选择同步），服务端账本漏掉了同一防御。现 `sanitizeAccessMap`/`readAccessLedger`/`touchAccess`/`removeAccessRecords`/`pruneAccessLedger` 的账本对象一律无原型化（`tests/access-ledger.test.mjs` 回归：文件内字段不被覆盖、记录成为账本自有键且计数从文件值续接）。
+- **超长取代链备份无法导入（P2 前后端契约冲突）**：`chunkEntriesPreservingLinks` 把超过分片大小的取代链连通分量整批提交（内容完整优先于批大小），但服务端单请求硬上限 `MAX_IMPORT_ENTRIES=1000` 会直接 400 `invalid`——含 >1000 条连通取代链的大备份从此**完全无法导入**（用户也无法手工分片，导出是单文件）。现分量超过 `hardMax`（默认 1000，与服务端同口径）时改按拓扑分层拆分：`supersedes` 目标（旧条目）先落盘、指针（新条目）在后，跨片指针由服务端按磁盘状态物化反向指针（`markDiskUpdate` 补 `superseded_by`），取代语义跨片重建、不静默丢链；取代环无法分层时按原顺序倾倒（服务端本就修复并丢弃环指针）。`size < 分量 ≤ hardMax` 的既有「单独成批」行为不变（既有测试保持通过）。新增 `tests/import-mode.test.mjs` 契约测试固化「目标在前可重建、指针在前会丢链」的服务端语义，`tests/client.test.mjs` 覆盖拆分上限/拓扑序/环终止/默认上限。
+
+### 验证证据
+- 单元 **385/385**（新增 6：账本原型键回归 1、分片拓扑拆分 3、跨片取代链契约 2）；`node --check` 全部运行时 JS 通过（9 文件）。
+
 ## [0.25.0] - 2026-11-14
 
 ### 变更 Changed（UI/UX 去 AI 化 ＋ 版本号可见）

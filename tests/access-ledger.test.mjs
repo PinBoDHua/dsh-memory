@@ -154,6 +154,31 @@ test('touchAccess never blocks search when the ledger lock is held (short timeou
   fs.rmSync(path.join(root, '.lock-access'), { recursive: true, force: true })
 })
 
+test('ledger survives prototype-key ids (__proto__ entries)', () => {
+  // 第八轮审计：账本此前用普通对象按条目 id 建键——ID_PATTERN 允许 __proto__，
+  // 赋值触发原型 setter 导致记录静默丢失；applyAccess 的 Object.prototype 影子读
+  // 还会把条目文件内的 last_access/hit_count 覆盖成 undefined。
+  const { root, service } = tmpService()
+  service.import({
+    entries: [
+      { id: '__proto__', content: '原型键条目', scope: 'global', last_access: '2026-01-01T00:00:00.000Z', hit_count: 5 },
+      { id: 'm-normal-1', content: '普通条目', scope: 'global' },
+    ],
+  })
+  // 账本非空（普通条目先记账）时，__proto__ 条目的文件内命中字段不得被影子读覆盖。
+  service.search({ query: '普通条目', scope: 'global' })
+  const shadowed = service.list({ scope: 'global' }).find((e) => e.id === '__proto__')
+  assert.equal(shadowed.last_access, '2026-01-01T00:00:00.000Z', 'file-based last_access preserved')
+  assert.equal(shadowed.hit_count, 5, 'file-based hit_count preserved')
+  // 对 __proto__ 条目记账：记录必须成为账本自有键并落盘（此前被原型 setter 吞掉）。
+  service.search({ query: '原型键', scope: 'global' })
+  const ledger = readLedger(root)
+  assert.ok(Object.prototype.hasOwnProperty.call(ledger, '__proto__'), 'own record persisted')
+  assert.equal(ledger['__proto__'].count, 6, 'count continues from the file-based value')
+  const merged = service.list({ scope: 'global' }).find((e) => e.id === '__proto__')
+  assert.equal(merged.hit_count, 6, 'ledger value wins once recorded')
+})
+
 test('system prompt injection records hits (throttled) through the ledger', () => {
   const prevHome = process.env.DSH_HOME
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-memory-inject-home-'))
