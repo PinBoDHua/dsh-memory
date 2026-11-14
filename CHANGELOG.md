@@ -3,6 +3,25 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.25.0] - 2026-11-14
+
+### 变更 Changed（UI/UX 去 AI 化 ＋ 版本号可见）
+- **视觉全面扁平化、跟随宿主主题**：去掉靛紫渐变主色（`--dm-primary2` 统一回落为主题色）、径向氛围光背景、品牌勋章渐变＋呼吸光环动画、渐变主按钮/分布条/tab 下划线/开关/吐司条/分类色轨（全部改纯色或软底）、卡片投影与悬停浮起、卡片入场级联动画、玻璃拟态吸顶工具栏（改实色）、弹窗遮罩模糊与过冲回弹（改 120ms 淡入）、勋章式图标底座的渐变。
+- **保留功能性设计**：分类三色仍是功能识别色（琥珀/湛蓝/翡翠）；骨架屏 shimmer（加载指示）、吐司倒计时条与滑入（可撤销窗口反馈）、焦点环、reduced-motion 与「动效」开关机制全部保留；无投影卡片改 hairline 边框，浮层（弹窗/吐司/下拉/批量浮栏）保留单层柔和投影维持层级。
+- **命名与文案**：面板标题「记忆管理 / Memory manager」→「记忆 / Memory」，去掉装饰眉题「LONG-TERM MEMORY」；`package.json`、`locale/zh.json`、`locale/en.json`、`docs/DETAIL.md` 的「记忆星丛 Memory Atlas」及相关视觉描述同步改为平实描述（CHANGELOG 与 research 历史记录不动）。
+- **插件图标**：渐变描边芯片＋中心渐变火花 → 扁平单色芯片（保留芯片轮廓与引脚，去渐变与装饰）。
+- **空态插画**：星座装饰 + 三组漂浮圆点动画 → 简洁线性文档图标。
+- 字号与圆角收敛：标题 26→20px、统计数字 32→24px 且去掉衬线字体、圆角 16/14/12→10/8、chip/tag/badge 从胶囊改小圆角，信息密度更接近宿主原生工具面板。
+
+### 新增 Added
+- **面板标题旁显示当前插件版本**：`/status.version`（读自 `package.json`）以 `v0.25.0` 小字常驻显示在标题右侧，悬停显示「插件版本 」提示；加载失败或缺失时不渲染（不显示假版本号）。`data-testid="dm-version"` 供 GUI 断言。
+
+### 新增测试
+- GUI 新增断言：标题旁版本号与 `package.json` 版本一致（`scripts/gui-check.mjs`）。
+
+### 验证证据
+- 单元 **381/381**；live **198/198**；真实 GUI **92/92**；吸顶回归 **2/2**；数据根快照一致、零残留；改造前后四张截图（记忆/设置 × 明/暗）对比。
+
 ## [0.24.39] - 2026-11-14
 
 第七轮双端审计（宿主 / 面板 / 运维脚本三路只读审计，共 45 项发现）：P1 3 项、P2 19 项、P3 23 项。本轮修复 P1 全部 + P2 全部 + 23 项 P3 中 18 项，其余按约定记入 backlog。

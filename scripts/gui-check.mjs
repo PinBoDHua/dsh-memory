@@ -409,6 +409,29 @@ async function main() {
     await sleep(2500)
     check('记忆面板已打开', opened && (await evaluate(`document.querySelector('.dm_page') !== null`)))
 
+    // 0.25.0：面板标题旁显示当前插件版本（来自 /status.version；加载失败留空不显示假值）。
+    const versionState = await evaluate(`(() => {
+      const el = document.querySelector('[data-testid="dm-version"]')
+      return { text: el ? (el.textContent || '').trim() : null, title: el ? (el.getAttribute('title') || '') : null }
+    })()`)
+    const pkgVersion = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version
+    check('标题旁显示插件版本号且与 package.json 一致', versionState.text === 'v' + pkgVersion && /版本|version/i.test(versionState.title), JSON.stringify({ ...versionState, pkgVersion }))
+
+    // 0.25.0 去 AI 化：主容器不得再有径向氛围光/渐变背景，主按钮与卡片不得用渐变/重投影。
+    const visualState = await evaluate(`(() => {
+      const cs = (sel) => { const el = document.querySelector(sel); return el ? getComputedStyle(el) : null }
+      const page = cs('.dm_page'); const cta = cs('.dm_btn_primary'); const card = cs('.dm_card'); const tb = cs('.dm_toolbar_wrap')
+      return {
+        pageImage: page ? page.backgroundImage : 'no-page',
+        ctaImage: cta ? cta.backgroundImage : 'no-cta',
+        cardShadow: card ? card.shadow : (card ? card.boxShadow : 'no-card'),
+        toolbarBlur: tb ? (tb.backdropFilter || tb.webkitBackdropFilter || 'none') : 'no-toolbar',
+      }
+    })()`)
+    check('页面背景无径向氛围光渐变', String(visualState.pageImage) === 'none', String(visualState.pageImage))
+    check('主按钮为纯色（无渐变）', String(visualState.ctaImage) === 'none', String(visualState.ctaImage))
+    check('吸顶工具栏非毛玻璃', !/blur/.test(String(visualState.toolbarBlur)), String(visualState.toolbarBlur))
+
     // 记录真实数据根与 token（设置/备份快照恢复用）。
     const statusDoc = await apiJson('/status')
     ROOT = statusDoc?.root ?? ''
