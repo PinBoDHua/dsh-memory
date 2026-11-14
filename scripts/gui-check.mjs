@@ -20,7 +20,7 @@ import { createHash, createHmac } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { snapshotDataRoot, diffSnapshots } from './data-snapshot.mjs'
+import { snapshotDataRoot, diffSnapshots, evacuateOldestBackup, restoreEvacuatedBackups } from './data-snapshot.mjs'
 import { acquireVerifyLock } from './verify-lock.mjs'
 import { startCleanupWatchdog } from './watchdog.mjs'
 
@@ -45,6 +45,25 @@ let dataSnapshotBefore = null
 let overlayBaseline = {}
 let backupsBaseline = []
 let watchdog = null
+// O3/O10：疏散备份与非标记工件登记，正常清理与看门狗中断路径都据此恢复。
+let evacuatedBackupsGui = []
+const guiManifestPath = path.join(os.tmpdir(), `dsh-memory-gui-watchdog-${process.pid}.json`)
+function updateGuiManifest(patch) {
+  try {
+    const m = JSON.parse(readFileSync(guiManifestPath, 'utf8'))
+    Object.assign(m, patch)
+    writeFileSync(guiManifestPath, JSON.stringify(m, null, 2), 'utf8')
+  } catch { /* 看门狗未启动时忽略 */ }
+}
+function registerGuiArtifact(p) {
+  try {
+    const m = JSON.parse(readFileSync(guiManifestPath, 'utf8'))
+    const list = Array.isArray(m.artifacts) ? m.artifacts : []
+    if (!list.includes(p)) list.push(p)
+    m.artifacts = list
+    writeFileSync(guiManifestPath, JSON.stringify(m, null, 2), 'utf8')
+  } catch { /* ignore */ }
+}
 
 /** 看门狗恢复 settings 用的原始基线（不存在则删除）。 */
 function readSettingsRaw(root) {
@@ -80,18 +99,23 @@ async function forgetIds(ids) {
   await apiJson('/forget', { method: 'POST', token: TOKEN, body: { ids: list } }).catch(() => {})
 }
 
-/** 启动时清理上次中断留下的测试条目（只认 __gui_/__livecheck_ 内容标记，不碰真实记忆）。 */
+/** 启动时清理上次中断留下的测试条目（只认 __gui_/__livecheck_ 内容标记，不碰真实记忆）。
+ *  O7：分页清完，避免大量残留被基线吸收后零残留自检假绿。 */
 async function cleanupResidueMarkers() {
   if (!TOKEN) return
-  const ids = []
   for (const marker of ['__gui_', '__livecheck_']) {
-    const doc = await apiJson(`/entries?query=${encodeURIComponent(marker)}&scope=all&limit=200&include_superseded=true&include_expired=true&include_archived=true`).catch(() => null)
-    for (const entry of doc?.entries || []) {
-      const content = String(entry.content || '')
-      if (content.startsWith(marker) || content.includes(marker)) ids.push(entry.id)
+    for (;;) {
+      const doc = await apiJson(`/entries?query=${encodeURIComponent(marker)}&scope=all&limit=200&include_superseded=true&include_expired=true&include_archived=true`).catch(() => null)
+      const ids = []
+      for (const entry of doc?.entries || []) {
+        const content = String(entry.content || '')
+        if (content.startsWith(marker) || content.includes(marker)) ids.push(entry.id)
+      }
+      if (ids.length === 0) break
+      await forgetIds(ids)
+      if ((doc?.entries || []).length < 200) break
     }
   }
-  await forgetIds(ids)
 }
 
 async function abortAndExit(code, err) {
@@ -138,13 +162,15 @@ async function restoreSettingsOverlay(overlay) {
 }
 
 // 浏览器之外的直连 API（仅本机回环）：用于创建/清理验收临时记忆、核对撤销结果。
-async function apiJson(pathname, { method = 'GET', body, token } = {}) {
+async function apiJson(pathname, { method = 'GET', body, token, timeoutMs = 30000 } = {}) {
   const headers = { 'Content-Type': 'application/json' }
   if (token) headers['X-RPC-Key'] = token
+  // O8：宿主冻结时不得永久挂起；导入类长操作单独放宽。
   const res = await fetch(new URL(`/plugins/dsh-memory${pathname}`, BASE), {
     method,
     headers,
     body: body === undefined ? undefined : JSON.stringify(body),
+    signal: AbortSignal.timeout(timeoutMs),
   })
   return res.json().catch(() => null)
 }
@@ -228,7 +254,14 @@ async function connect() {
 
 const send = (method, params = {}) => new Promise((resolve, reject) => {
   const id = ++nextId
-  pending.set(id, { resolve, reject })
+  // O8：CDP 命令超时（Edge 崩溃时不得永久挂起）。
+  const timer = setTimeout(() => {
+    if (pending.has(id)) { pending.delete(id); reject(new Error(`CDP ${method} 超时 / timed out`)) }
+  }, 30000)
+  pending.set(id, {
+    resolve: (v) => { clearTimeout(timer); resolve(v) },
+    reject: (e) => { clearTimeout(timer); reject(e) },
+  })
   ws.send(JSON.stringify({ id, method, params }))
 })
 
@@ -296,7 +329,7 @@ function sweepStaleProfiles() {
   try { names = readdirSync(base) } catch { return }
   const now = Date.now()
   for (const name of names) {
-    if (!name.startsWith('dsh-memory-gui-profile-')) continue
+    if (!name.startsWith('dsh-memory-gui-profile-') && !name.startsWith('dsh-memory-sticky-profile-')) continue
     const full = path.join(base, name)
     let stat
     try { stat = statSync(full) } catch { continue }
@@ -401,7 +434,7 @@ async function main() {
         markers: ['__gui_', '__livecheck_'],
         settingsBefore: readSettingsRaw(ROOT),
         backupsBefore: backupsBaseline,
-      }, { manifestPath: path.join(os.tmpdir(), `dsh-memory-gui-watchdog-${process.pid}.json`), logPath: path.join(os.tmpdir(), `dsh-memory-gui-watchdog-${process.pid}.log`) })
+      }, { manifestPath: guiManifestPath, logPath: path.join(os.tmpdir(), `dsh-memory-gui-watchdog-${process.pid}.log`) })
       registerCleanup(async () => { try { watchdog.stop() } catch { /* ignore */ } })
     } catch { /* 看门狗启动失败不阻断验证 */ }
     if (ABORT_AFTER > 0) setTimeout(() => { void abortAndExit(130, new Error(`abort-after=${ABORT_AFTER}ms 注入`)) }, ABORT_AFTER)
@@ -542,6 +575,7 @@ async function main() {
       const brokenExportPath = path.join(ROOT, 'global', 'm-gui-broken-export.md')
       registerCleanup(async () => { try { rmSync(brokenExportPath, { force: true }) } catch { /* ignore */ } })
       writeFileSync(brokenExportPath, 'not frontmatter', 'utf8')
+      registerGuiArtifact(brokenExportPath) // O10：强杀时看门狗据此清理非标记工件
       try {
         await evaluate(`(() => { const btn = [...document.querySelectorAll('.dm_toolbtn')].find((b) => /导出|Export/.test((b.textContent || '').trim())); if (btn) btn.click(); return Boolean(btn) })()`)
         await sleep(1200)
@@ -729,7 +763,7 @@ async function main() {
         // 0.24.25：大文件导入分片（320 条 → 2 次 /import）、显示进度、全部落盘；批量接口清理。
         const bigEntries = Array.from({ length: 320 }, (_, i) => ({
           id: `m-gui-shard-${String(i).padStart(4, '0')}`,
-          content: `GUI 分片导入 ${i}`,
+          content: `__gui_shard_${i}`,
           scope: 'global',
           category: 'fact',
         }))
@@ -765,23 +799,23 @@ async function main() {
           await sleep(1200)
           await send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 })
           const importAfter = requests.filter((u) => u.includes('/import')).length
-          const listed = await apiJson(`/entries?query=${encodeURIComponent('GUI 分片导入')}&scope=global&limit=1000`)
+          const listed = await apiJson(`/entries?query=${encodeURIComponent('__gui_shard_')}&scope=global&limit=1000`)
           check('大导入按分片多次提交（≥2 次 /import）', importAfter - importBefore >= 2, `${importBefore} -> ${importAfter}`)
           check('大导入显示分片进度', sawProgress, 'progress text not observed')
           check('大导入全部落盘（319 可见 + 1 被取代）', (listed?.entries || []).length === 319, String((listed?.entries || []).length))
-          const pairDoc = await apiJson(`/entries?query=${encodeURIComponent('GUI 分片导入 299')}&scope=global&limit=50&include_superseded=true`)
+          const pairDoc = await apiJson(`/entries?query=${encodeURIComponent('__gui_shard_299')}&scope=global&limit=50&include_superseded=true`)
           const older = (pairDoc?.entries || []).find((e) => e.id === bigIds[299])
           check('分片导入保留跨片取代链（旧条目仍隐藏）', Boolean(older) && older.superseded_by === bigIds[300], JSON.stringify(older && { id: older.id, superseded_by: older.superseded_by }))
         } finally {
           await send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 })
           await forgetIds(bigEntries.map((e) => e.id))
           bigIds.length = 0
-          const left = await apiJson(`/entries?query=${encodeURIComponent('GUI 分片导入')}&scope=global&limit=10`)
+          const left = await apiJson(`/entries?query=${encodeURIComponent('__gui_shard_')}&scope=global&limit=10`)
           check('分片导入测试条目已批量清理', (left?.entries || []).length === 0, String((left?.entries || []).length))
         }
 
         // 0.24.34：导入过程可停止——busy 时取消/Esc 被禁，弹窗提供唯一可点的「停止」入口。
-        const stopEntries = Array.from({ length: 620 }, (_, i) => ({ id: `m-gui-stop-${String(i).padStart(4, '0')}`, content: `GUI 停止导入 ${i}`, scope: 'global', category: 'fact' }))
+        const stopEntries = Array.from({ length: 620 }, (_, i) => ({ id: `m-gui-stop-${String(i).padStart(4, '0')}`, content: `__gui_stop_${i}`, scope: 'global', category: 'fact' }))
         const stopIds = stopEntries.map((e) => e.id)
         registerCleanup(async () => { await forgetIds(stopIds); stopIds.length = 0 })
         const stopFile = path.join(dir, 'stop-export.json')
@@ -818,7 +852,7 @@ async function main() {
           const stopMatch = /(\d+)\s*\/\s*(\d+)/.exec(stopToast)
           const writtenCount = stopMatch ? Number(stopMatch[1]) : -1
           check('导入中提供停止入口且可停止', stopConfirmClicked && stopButtonShown && stopClicked && stopDialogClosed && /停止|Stopped/.test(stopToast) && writtenCount > 0 && writtenCount < stopEntries.length, JSON.stringify({ stopConfirmClicked, stopButtonShown, stopClicked, stopDialogClosed, stopToast }))
-          const stopList = await apiJson(`/entries?query=${encodeURIComponent('GUI 停止导入')}&scope=global&limit=1000`)
+          const stopList = await apiJson(`/entries?query=${encodeURIComponent('__gui_stop_')}&scope=global&limit=1000`)
           check('停止后已落盘片完整保留、后续片未提交', (stopList?.entries || []).length === writtenCount, `${(stopList?.entries || []).length} vs written ${writtenCount}`)
         } finally {
           await send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 })
@@ -1306,9 +1340,14 @@ async function main() {
     check('网络失败显示可重试错误（不卡死）', /网络异常|Network error|失败|Failed/.test(offlineError), offlineError)
     await send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 })
     await sleep(600)
+    // O9：原断言 .dm_card.length >= 0 恒真无判别力；改断言恢复在线后发出新的 /entries
+    // 请求且网络错误态消失（不依赖库非空）。
+    const entriesBeforeOnline = requests.filter((u) => u.includes('/entries')).length
     await evaluate(`(() => { const chips = [...document.querySelectorAll('.dm_chips .dm_chip')]; if (chips[0]) chips[0].click(); return Boolean(chips[0]) })()`)
     await sleep(1200)
-    check('恢复在线后列表重新加载', (await evaluate(`document.querySelectorAll('.dm_card').length`)) >= 0)
+    const entriesAfterOnline = requests.filter((u) => u.includes('/entries')).length
+    const onlineError = await evaluate(`(() => { const el = document.querySelector('.dm_empty'); return el ? (el.innerText || '') : '' })()`)
+    check('恢复在线后列表重新加载', entriesAfterOnline > entriesBeforeOnline && !/网络异常|Network error/.test(onlineError), `${entriesBeforeOnline} -> ${entriesAfterOnline}`)
 
     // 8) 设置页：保留份数夹取 + 备份触发重载不覆盖防抖中的草稿（0.24.5）
     // 破坏性用例保护：快照真实 settings overlay 与 backups 文件集，结束原样恢复并删除本次
@@ -1317,6 +1356,7 @@ async function main() {
     const overlayBefore = overlayBaseline
     const originalRetention = Number(settingsBefore?.effective?.backupRetention)
     const backupsBefore = backupsBaseline
+    let settingsLockCreated = false
     try {
       check('读取原始备份保留份数', Number.isInteger(originalRetention), String(originalRetention))
       await evaluate(`(() => { const tab = document.querySelector('#dm-tab-settings'); if (tab) tab.click(); return Boolean(tab) })()`)
@@ -1379,9 +1419,20 @@ async function main() {
       await sleep(1900)
       await setRetention(Math.min(30, safeRetention + 1))
       await sleep(150)
+      // O3：保留份数被夹取到 30——已有 ≥30 份插件备份时触发备份会轮转删用户最旧一份。
+      // 先疏散最旧备份，正常/中断路径都恢复。
+      evacuatedBackupsGui = evacuateOldestBackup(ROOT, path.join(os.tmpdir(), `dsh-memory-gui-evac-${process.pid}`))
+      if (evacuatedBackupsGui.length > 0) updateGuiManifest({ evacuatedBackups: evacuatedBackupsGui })
       const backupCountBeforeTrigger = listBackups().length
+      const backupSentBefore = requests.filter((u) => u.includes('/backup')).length
       await clickButton(/立即备份|Back up now/)
-      await sleep(280) // 备份+重载已返回，但 600ms 防抖保存尚未落地
+      // O13②：轮询「备份请求已发出」而非固定 280ms（大库冷导出可达秒级，固定 sleep 会假失败）；
+      // 再留短窗口让重载返回，仍早于 600ms 防抖保存。
+      for (let i = 0; i < 60; i += 1) {
+        await sleep(50)
+        if (requests.filter((u) => u.includes('/backup')).length > backupSentBefore) break
+      }
+      await sleep(200)
       const draftAtReload = await readRetentionInput()
       const docAtReload = await apiJson('/settings')
       check('备份触发的设置重载不覆盖未保存草稿', String(draftAtReload) === String(Math.min(30, safeRetention + 1)) && Number(docAtReload?.effective?.backupRetention) === safeRetention, `${draftAtReload} / ${docAtReload?.effective?.backupRetention}`)
@@ -1399,7 +1450,9 @@ async function main() {
       // 挂到 15s 请求超时，固定轮询窗口会偶发假失败。
       const failTarget = Math.min(30, originalRetention + 1)
       const settingsLock = path.join(ROOT, '.lock-settings')
-      mkdirSync(settingsLock, { recursive: true })
+      // O5：只删自己创建的锁——宿主若正持锁（EEXIST）不得误删。
+      settingsLockCreated = false
+      try { mkdirSync(settingsLock); settingsLockCreated = true } catch (e) { if (e?.code !== 'EEXIST') throw e }
       await setRetention(failTarget)
       let failState = null
       for (let i = 0; i < 16; i += 1) {
@@ -1412,7 +1465,7 @@ async function main() {
         if (failState.retry) break
       }
       check('保存失败显示重试而非谎报已保存', failState.retry && /重试|Retry/.test(failState.footer) && String(failState.value) === String(failTarget), JSON.stringify({ ...failState, recentSettings: requests.filter((u) => u.includes('/settings')).slice(-4) }))
-      rmSync(settingsLock, { recursive: true, force: true })
+      if (settingsLockCreated) rmSync(settingsLock, { recursive: true, force: true })
       await sleep(400)
       await evaluate(`(() => { const b = document.querySelector('.dm_linkbtn'); if (b) b.click(); return Boolean(b) })()`)
       let retryState = { footer: '', value: null }
@@ -1469,7 +1522,9 @@ async function main() {
         console.error('恢复设置 overlay 失败：', err)
       }
       removeNewBackups(backupsBefore)
-      try { rmSync(path.join(ROOT, '.lock-settings'), { recursive: true, force: true }) } catch { /* ignore */ }
+      // O3：恢复被轮转删除的疏散备份。
+      try { restoreEvacuatedBackups(ROOT, evacuatedBackupsGui) } catch { /* ignore */ }
+      if (settingsLockCreated) try { rmSync(path.join(ROOT, '.lock-settings'), { recursive: true, force: true }) } catch { /* ignore */ }
       const restoredOverlay = (await apiJson('/settings'))?.overlay ?? {}
       check('真实设置 overlay 已恢复原值', JSON.stringify(restoredOverlay) === JSON.stringify(overlayBefore), JSON.stringify({ restoredOverlay, overlayBefore }))
       check('真实 backups 文件集已恢复（无新增残留）', JSON.stringify(listBackups()) === JSON.stringify(backupsBefore), JSON.stringify({ before: backupsBefore, after: listBackups() }))

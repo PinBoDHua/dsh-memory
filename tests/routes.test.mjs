@@ -416,6 +416,29 @@ test('update with invalid category maps to 400 invalid (not 500)', async () => {
   assert.equal(res.json().code, 'invalid')
 })
 
+test('update move io failure returns sanitized error (no data-root path leak)', async () => {
+  const { service, handlers, root } = setup()
+  const auth = { 'x-rpc-key': TOKEN }
+  const { entry } = service.save({ content: '移动脱敏测试', scope: 'global' })
+  const oldFile = path.join(root, 'global', `${entry.id}.md`)
+  const realRm = fs.rmSync
+  fs.rmSync = function (target, opts) {
+    if (String(target) === oldFile) throw Object.assign(new Error(`EBUSY: resource busy or locked, unlink '${oldFile}'`), { code: 'EBUSY' })
+    return realRm.call(fs, target, opts)
+  }
+  const res = fakeRes()
+  try {
+    await handlers.update(fakeReq({ method: 'POST', url: '/plugins/dsh-memory/update', headers: auth, body: { id: entry.id, scope: 'workspace', workspace: 'D:\\proj\\sanitized' } }), res)
+  } finally {
+    fs.rmSync = realRm
+  }
+  assert.equal(res.statusCode, 500)
+  const doc = res.json()
+  assert.equal(doc.code, 'io')
+  assert.ok(!doc.error.includes(root), 'error must not leak the data root path')
+  assert.ok(!doc.error.includes('EBUSY'), 'error must not leak raw Node error text')
+})
+
 test('service errors and bad input map to HTTP status codes', async () => {
   const { handlers } = setup()
   const auth = { 'x-rpc-key': TOKEN }

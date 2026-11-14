@@ -13,7 +13,7 @@
  */
 
 import { createHash } from 'node:crypto'
-import { readFileSync, readdirSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
 import path from 'node:path'
 
 const VERIFY_LOCK_NAME = '.lock-verify'
@@ -40,16 +40,17 @@ function collectEntries(dir, prefix, out) {
       continue
     }
     if (!ent.name.endsWith('.md')) continue
-    const hash = sha256File(full)
-    if (hash !== null) out[`${prefix}${ent.name}`] = hash
+    // 读失败记特殊标记参与 diff（O12）：前后都不可读的文件不再隐形。
+    out[`${prefix}${ent.name}`] = sha256File(full) ?? '<unreadable>'
   }
 }
 
 function collectJunk(root) {
   const junk = new Set()
   // mode 决定该目录里「合法文件」扩展名：root/workspaces/backups 允许 .json（元数据/备份），
-  // 条目目录只允许 .md；其余一律视为垃圾（临时文件、手放杂项、非预期子目录内容）。
-  const allowedExt = { root: '.json', workspaces: '.json', entries: '.md', backups: '.json' }
+  // 条目目录只允许 .md；other（根级意外子目录）什么都不允许；其余一律视为垃圾。
+  const allowedExt = { root: '.json', workspaces: '.json', entries: '.md', backups: '.json', other: null }
+  const rootJsonAllowed = new Set(['settings.json', 'meta.json', 'access.json'])
   const visit = (dir, relative, mode) => {
     let names = []
     try {
@@ -66,8 +67,9 @@ function collectJunk(root) {
         if (ent.name.startsWith('.lock')) { junk.add(rel); continue }
         const childMode = ent.name === 'workspaces' ? 'workspaces'
           : ent.name === 'backups' ? 'backups'
-            : mode === 'workspaces' ? 'entries'
-              : 'entries'
+            : ent.name === 'global' ? 'entries'
+              : mode === 'workspaces' ? 'entries'
+                : 'other'
         visit(path.join(dir, ent.name), rel, childMode)
         continue
       }
@@ -75,7 +77,13 @@ function collectJunk(root) {
         junk.add(rel)
         continue
       }
-      if (!ent.name.endsWith(allowedExt[mode])) junk.add(rel)
+      // 根级除文档化排除外的 .json 一律列 junk（O12）：脚本误写 root/foo.json 必须可见。
+      if (mode === 'root' && ent.name.endsWith('.json') && !rootJsonAllowed.has(ent.name)) {
+        junk.add(rel)
+        continue
+      }
+      const ext = allowedExt[mode]
+      if (!ext || !ent.name.endsWith(ext)) junk.add(rel)
     }
   }
   visit(root, '', 'root')
@@ -91,7 +99,7 @@ export function snapshotDataRoot(root) {
   const backups = {}
   try {
     for (const name of readdirSync(path.join(root, 'backups')).filter((n) => n.endsWith('.json'))) {
-      backups[name] = sha256File(path.join(root, 'backups', name))
+      backups[name] = sha256File(path.join(root, 'backups', name)) ?? '<unreadable>'
     }
   } catch { /* 无备份目录 */ }
   return {
@@ -134,4 +142,49 @@ export function diffSnapshots(before, after) {
   if (before.settings !== after.settings) changes.push('settings.json 变更')
   if (before.meta !== after.meta) changes.push('meta.json 变更')
   return changes
+}
+
+// ===== 备份疏散/恢复（第七轮审计 O3）=====
+// 保留份数被 RETENTION_MAX=30 夹取：用户已有 30 份插件备份时，验证脚本触发的备份
+// 会轮转删掉最旧一份，按文件名恢复无法重建。破坏性备份用例前先把最旧备份复制到
+// 临时目录，结束后（含 watchdog 中断路径）若原文件已不在则复制回。
+export const PLUGIN_BACKUP_PATTERN = /^dsh-memory-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z(?:-\d{1,3})?\.json$/
+
+/** 插件备份数 ≥ retentionMax 时疏散最旧（mtime）一份；返回 [{name, tempPath}]。 */
+export function evacuateOldestBackup(root, tmpDir, retentionMax = 30) {
+  const dir = path.join(root, 'backups')
+  let names = []
+  try { names = readdirSync(dir).filter((n) => PLUGIN_BACKUP_PATTERN.test(n)) } catch { return [] }
+  if (names.length < retentionMax) return []
+  let oldest = null
+  for (const name of names) {
+    try {
+      const m = statSync(path.join(dir, name)).mtimeMs
+      if (oldest === null || m < oldest.m) oldest = { name, m }
+    } catch { /* ignore */ }
+  }
+  if (!oldest) return []
+  mkdirSync(tmpDir, { recursive: true })
+  const tempPath = path.join(tmpDir, `evacuated-${oldest.name}`)
+  copyFileSync(path.join(dir, oldest.name), tempPath)
+  return [{ name: oldest.name, tempPath }]
+}
+
+/** 恢复被轮转删除的疏散备份（原文件仍在则只清理临时副本）。 */
+export function restoreEvacuatedBackups(root, list) {
+  if (!Array.isArray(list)) return []
+  const dir = path.join(root, 'backups')
+  const restored = []
+  for (const item of list) {
+    if (!item || !item.name || !item.tempPath) continue
+    try {
+      if (!existsSync(path.join(dir, item.name)) && existsSync(item.tempPath)) {
+        mkdirSync(dir, { recursive: true })
+        copyFileSync(item.tempPath, path.join(dir, item.name))
+        restored.push(item.name)
+      }
+      rmSync(item.tempPath, { force: true })
+    } catch { /* ignore */ }
+  }
+  return restored
 }

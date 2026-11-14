@@ -279,3 +279,53 @@ test('small libraries keep the strict stat-verified path (no caching)', (t) => {
   assert.equal(result.length, 12)
   assert.ok(calls >= 12, `small dirs must verify each file (stats=${calls})`)
 })
+
+test('H4: cache patch reads disk truth when another process renames between rename and stat', (t) => {
+  const root = tmpRoot()
+  t.after(() => { clearEntryCache(); fs.rmSync(root, { recursive: true, force: true }) })
+  seedLarge(root, 1100)
+  const service = createMemoryService({ root })
+  service.list({ scope: 'global' }) // 建立目录缓存
+  const target = path.join(root, 'global', 'm-cache-0.md')
+  const now = new Date().toISOString()
+  const otherContent = serializeEntry({ id: 'm-cache-0', category: 'fact', scope: 'global', tags: [], created: now, updated: now, source: '', content: '另一进程写入的内容' })
+  const realRename = fs.renameSync
+  // 模拟另一进程：本进程 atomicWrite 的 rename 刚完成就覆盖同 id 文件。
+  // 旧实现把「本进程内容＋覆盖后的 stat」配对入缓存 → watcher 命中投毒签名永久陈旧；
+  // 新实现 stat→read 读回磁盘，缓存即磁盘真相。
+  fs.renameSync = function (src, dst) {
+    const r = realRename.call(fs, src, dst)
+    if (String(dst) === target) fs.writeFileSync(target, otherContent, 'utf8')
+    return r
+  }
+  try {
+    service.update({ id: 'm-cache-0', content: '本进程写入的内容' })
+  } finally {
+    fs.renameSync = realRename
+  }
+  const list = service.list({ scope: 'global' })
+  const hit = list.find((e) => e.id === 'm-cache-0')
+  assert.equal(hit.content, '另一进程写入的内容', 'cache must reflect disk truth, not poisoned in-memory content')
+})
+
+test('H10: index with illegal field types falls back to markdown (no hidden-forever injection)', (t) => {
+  const root = tmpRoot()
+  t.after(() => { clearEntryCache(); fs.rmSync(root, { recursive: true, force: true }) })
+  seedLarge(root, 1100)
+  const service = createMemoryService({ root })
+  service.list({ scope: 'global' })
+  flushSnapshotIndex(root)
+  const indexFile = path.join(root, '.cache', 'entries-v1.json')
+  const doc = JSON.parse(fs.readFileSync(indexFile, 'utf8'))
+  const records = doc.dirs.global
+  const victimId = records[0].entry.id
+  records[0].entry = { ...records[0].entry, superseded_by: 123, pinned: 'false' }
+  fs.writeFileSync(indexFile, JSON.stringify(doc), 'utf8')
+  clearEntryCache()
+  const list = service.list({ scope: 'global' })
+  assert.equal(list.length, 1100, 'entry must be re-read from markdown, not hidden by injected superseded_by')
+  const hit = list.find((e) => e.id === victimId)
+  assert.ok(hit, 'victim entry must be present')
+  assert.ok(!hit.superseded_by, 'numeric superseded_by must not leak (would hide the entry forever)')
+  assert.ok(!hit.pinned, 'string pinned must not leak (truthy forever-pinned)')
+})

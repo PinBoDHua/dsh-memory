@@ -31,6 +31,14 @@ export function resolveBenchRebuild({ dir, regen = false, force = false }) {
   throw Object.assign(new Error(`目录已存在但不是基准数据根，拒绝触碰 / existing directory is not a bench data root: ${dir}`), { code: 'refuse' })
 }
 
+/** 复用模式的写决策（纯函数，第七轮审计 O2）：reuse 且无 marker/基准目录名时只读——
+ *  指向真实数据根测性能是合理用法，但不得删除真实记忆或写派生索引。 */
+export function resolveBenchWriteMode({ dir, mode }) {
+  if (mode === 'build') return 'read-write'
+  const marked = fs.existsSync(path.join(dir, BENCH_MARKER)) || /(^|[\\/])dsh-memory-bench-/.test(dir)
+  return marked ? 'read-write' : 'read-only'
+}
+
 function nowMs() { return Number(process.hrtime.bigint() / 1_000_000n) }
 
 function build(root, total, cwd) {
@@ -72,9 +80,10 @@ function run(argv) {
   const cwd = 'D:\\proj\\alpha'
   const root = argMap.get('dir') || path.join(os.tmpdir(), `dsh-memory-bench-${total}`)
   const mode = resolveBenchRebuild({ dir: root, regen: argMap.has('regen'), force: argMap.has('force') })
+  const writeMode = resolveBenchWriteMode({ dir: root, mode })
   const service = createMemoryService({ root })
   const buildInfo = mode === 'build' ? build(root, total, cwd) : { reused: true }
-  const results = { entries: total, root, build: buildInfo }
+  const results = { entries: total, root, mode: writeMode, build: buildInfo }
 
   let t = nowMs()
   const cold = listAll(root, cwd)
@@ -90,7 +99,8 @@ function run(argv) {
   }
   results.warmListMs = warm
   // 模拟宿主重启：清空进程内缓存，仅保留磁盘持久化解析索引，测冷启动。
-  const indexEntries = flushSnapshotIndex(root)
+  // 只读模式（O2）不写索引：flushSnapshotIndex 会落盘派生数据。
+  const indexEntries = writeMode === 'read-write' ? flushSnapshotIndex(root) : 0
   clearEntryCache()
   t = nowMs()
   const indexCold = listAll(root, cwd)
@@ -109,7 +119,8 @@ function run(argv) {
   t = nowMs()
   service.search({ query: '基准条目 99999', scope: 'all', workspace: cwd })
   results.searchMs = nowMs() - t
-  const target = cold.find((e) => e.scope === 'workspace')
+  // 只读模式（O2）不删条目：指向真实数据根时 forget 会永久删除一条用户记忆。
+  const target = writeMode === 'read-write' ? cold.find((e) => e.scope === 'workspace') : undefined
   if (target) {
     t = nowMs()
     service.forget({ id: target.id })

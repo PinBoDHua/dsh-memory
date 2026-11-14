@@ -130,6 +130,40 @@ test('withLock times out while a fresh lock is held', () => {
   fs.rmSync(lockPath, { recursive: true, force: true })
 })
 
+test('H9: failed put-back of a claimed fresh lock cleans the orphan .heal-* directory', () => {
+  const root = tmpRoot()
+  const lockPath = path.join(root, '.lock-test')
+  fs.mkdirSync(lockPath)
+  const past = new Date(Date.now() - 60_000)
+  fs.utimesSync(lockPath, past, past)
+  const realRename = fs.renameSync
+  let renames = 0
+  fs.renameSync = function (src, dst) {
+    renames += 1
+    if (renames === 1) {
+      // 认领成功；随后刷新 mtime，使认领到的锁看起来是新鲜锁（走放回路径）。
+      const r = realRename.call(fs, src, dst)
+      const now = new Date()
+      fs.utimesSync(dst, now, now)
+      return r
+    }
+    // 放回瞬间第三进程已抢先重建 lockPath → rename 必失败。
+    fs.mkdirSync(lockPath, { recursive: true })
+    return realRename.call(fs, src, dst)
+  }
+  try {
+    assert.throws(
+      () => withLock(lockPath, () => 'never', { timeoutMs: 200, staleMs: 10_000, retryMs: 20 }),
+      (err) => err.code === 'busy',
+    )
+  } finally {
+    fs.renameSync = realRename
+  }
+  const residue = fs.readdirSync(root).filter((n) => n.includes('.heal-'))
+  assert.deepEqual(residue, [], 'orphan claim directory must be cleaned up, not left forever')
+  fs.rmSync(root, { recursive: true, force: true })
+})
+
 function runWorker(root, cwd, count, prefix) {
   const worker = fileURLToPath(new URL('./fixtures/save-worker.mjs', import.meta.url))
   return new Promise((resolve, reject) => {

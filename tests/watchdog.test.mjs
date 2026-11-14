@@ -14,6 +14,16 @@ function tmpRoot() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-memory-watchdog-'))
 }
 
+// O13①：哨兵 pid + process.kill mock 确定性模拟「owner 已死」（跨平台可靠）。
+const DEAD_PID = 999999
+const realKill = process.kill
+process.kill = function (pid, sig) {
+  if (pid === DEAD_PID && (sig === 0 || sig === undefined)) {
+    const e = new Error('ESRCH: no such process'); e.code = 'ESRCH'; throw e
+  }
+  return realKill.call(process, pid, sig)
+}
+
 function seed(root) {
   const service = createMemoryService({ root })
   const marker = service.save({ content: '__gui_p1_残留测试', scope: 'global' })
@@ -23,9 +33,13 @@ function seed(root) {
   fs.writeFileSync(path.join(root, 'backups', 'dsh-memory-baseline.json'), '{}', 'utf8')
   fs.writeFileSync(path.join(root, 'backups', 'dsh-memory-test-new.json'), '{}', 'utf8')
   fs.writeFileSync(path.join(root, 'settings.json'), '{"autoInject":false}', 'utf8')
+  const dead = String(DEAD_PID)
+  const old = new Date(Date.now() - 60_000)
   for (const name of ['.lock-verify', '.lock-settings', '.lock-import']) {
     fs.mkdirSync(path.join(root, name))
-    fs.writeFileSync(path.join(root, name, 'owner'), '999999', 'utf8')
+    fs.writeFileSync(path.join(root, name, 'owner'), dead, 'utf8')
+    // O5：lib 锁（nonce owner）按 mtime 陈旧判据删除——陈旧锁模拟崩溃残留。
+    fs.utimesSync(path.join(root, name), old, old)
   }
   return { marker, markerLive, user }
 }
@@ -76,4 +90,33 @@ test('watchdog is idempotent and tolerates a missing root', (t) => {
   const second = runWatchdogOnce(manifest)
   assert.equal(second.entries.matched, 0)
   assert.equal(runWatchdogOnce({ root: path.join(root, 'missing-root') }).skipped, true)
+})
+
+test('O5: watchdog never deletes a live-owner verify lock or a fresh lib lock', (t) => {
+  const root = tmpRoot()
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  // 活 owner 的 .lock-verify（本进程存活）不得删。
+  const verify = path.join(root, '.lock-verify')
+  fs.mkdirSync(verify, { recursive: true })
+  fs.writeFileSync(path.join(verify, 'owner'), `${process.pid}\nnonce`, 'utf8')
+  // 新鲜的 .lock-import（宿主可能正持有）不得删。
+  const imp = path.join(root, '.lock-import')
+  fs.mkdirSync(imp, { recursive: true })
+  fs.writeFileSync(path.join(imp, 'owner'), 'host-nonce', 'utf8')
+  const result = runWatchdogOnce({ root, settingsBefore: { exists: false }, backupsBefore: [] })
+  assert.ok(fs.existsSync(verify), 'live-owner verify lock must survive')
+  assert.ok(fs.existsSync(imp), 'fresh lib lock must survive')
+  assert.ok(!result.locks.includes('.lock-verify'))
+  assert.ok(!result.locks.includes('.lock-import'))
+})
+
+test('O10: watchdog removes registered non-marker artifacts', (t) => {
+  const root = tmpRoot()
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  const artifact = path.join(root, 'global', 'm-broken-artifact.md')
+  fs.mkdirSync(path.join(root, 'global'), { recursive: true })
+  fs.writeFileSync(artifact, 'not frontmatter', 'utf8')
+  const result = runWatchdogOnce({ root, settingsBefore: { exists: false }, backupsBefore: [], artifacts: [artifact] })
+  assert.equal(fs.existsSync(artifact), false, 'registered artifact must be removed')
+  assert.deepEqual(result.artifacts, [artifact])
 })

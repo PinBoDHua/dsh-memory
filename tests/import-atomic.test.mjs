@@ -197,6 +197,76 @@ test('import enforces per-request entry cap (1000)', () => {
   assert.throws(() => service.import({ entries, dryRun: true }), (err) => err.code === 'invalid' && /1000/.test(err.message))
 })
 
+test('import with importId requires a valid integer chunkIndex (no silent receipt collision)', () => {
+  const { root, service } = tmpService()
+  const first = service.import({ entries: [{ id: 'm-chk-0', content: '片零', scope: 'global' }], importId: 'run-chk', chunkIndex: 0 })
+  assert.equal(first.imported, 1)
+  // 字符串/缺省 chunkIndex 不得被归零后撞上第 0 片回执而静默跳过写盘。
+  assert.throws(() => service.import({ entries: [{ id: 'm-chk-1', content: '片一字符串', scope: 'global' }], importId: 'run-chk', chunkIndex: '1' }), (err) => err.code === 'invalid')
+  assert.throws(() => service.import({ entries: [{ id: 'm-chk-2', content: '片二缺省', scope: 'global' }], importId: 'run-chk' }), (err) => err.code === 'invalid')
+  assert.ok(!store.findEntry(root, 'm-chk-1'), 'string chunkIndex entry must not be silently skipped')
+  assert.ok(!store.findEntry(root, 'm-chk-2'), 'missing chunkIndex entry must not be silently skipped')
+  const replay = service.import({ entries: [{ id: 'm-chk-0', content: '片零', scope: 'global' }], importId: 'run-chk', chunkIndex: 0 })
+  assert.equal(replay.cached, true)
+  // 无 importId 时 chunkIndex 缺省仍向后兼容。
+  const plain = service.import({ entries: [{ id: 'm-chk-3', content: '无回执', scope: 'global' }] })
+  assert.equal(plain.imported, 1)
+})
+
+test('import normalizes impossible created/updated timestamps instead of persisting them', () => {
+  const { root, service } = tmpService()
+  const bad = '2026-13-99T99:99:00Z'
+  const result = service.import({ entries: [{ id: 'm-baddate', content: '坏日期导入', scope: 'global', created: bad, updated: bad }] })
+  assert.equal(result.imported, 1)
+  const entry = store.findEntry(root, 'm-baddate')
+  assert.ok(entry, 'entry should be imported')
+  assert.notEqual(entry.created, bad)
+  assert.notEqual(entry.updated, bad)
+  assert.ok(Number.isFinite(Date.parse(entry.created)), 'created must be a real date')
+  assert.ok(Number.isFinite(Date.parse(entry.updated)), 'updated must be a real date')
+})
+
+test('search and entries clamp absurd limits (tool 200 / route 1000)', () => {
+  const { service } = tmpService()
+  const batch = (n, offset) => Array.from({ length: n }, (_, i) => ({ id: `m-lim-${offset + i}`, content: `限额条目 ${offset + i}`, scope: 'global' }))
+  service.import({ entries: batch(1000, 0) })
+  service.import({ entries: batch(50, 1000) })
+  const tool = service.search({ query: '', limit: 1e6 })
+  assert.equal(tool.length, 200, 'tool search must clamp to 200')
+  const route = service.searchDetailed({ query: '', limit: 1e6 })
+  assert.equal(route.entries.length, 1000, 'route entries must clamp to 1000')
+})
+
+test('H5: import receipts survive a service restart (cross-instance merge replay safety)', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-memory-receipt-'))
+  const a = createMemoryService({ root })
+  const entries = [{ id: 'm-restart-1', content: '重启回执', scope: 'global' }]
+  const first = a.import({ entries, importId: 'run-restart', chunkIndex: 0, mode: 'merge' })
+  assert.equal(first.imported, 1)
+  // 模拟宿主重启/插件重载：新 service 实例必须仍能命中回执。
+  const b = createMemoryService({ root })
+  b.update({ id: 'm-restart-1', content: '用户新编辑' })
+  const replay = b.import({ entries, importId: 'run-restart', chunkIndex: 0, mode: 'merge' })
+  assert.equal(replay.cached, true, 'replay after restart must hit the persisted receipt')
+  assert.equal(store.findEntry(root, 'm-restart-1').content, '用户新编辑', 'merge replay must not roll back user edits')
+})
+
+test('H13: import cycle repair clears both superseded_by and mutual supersedes', () => {
+  const { root, service } = tmpService()
+  const result = service.import({
+    entries: [
+      { id: 'm-cyc-a', content: '环甲', scope: 'global', supersedes: 'm-cyc-b' },
+      { id: 'm-cyc-b', content: '环乙', scope: 'global', supersedes: 'm-cyc-a' },
+    ],
+  })
+  assert.equal(result.imported, 2)
+  assert.ok(result.repaired >= 2)
+  const a = store.findEntry(root, 'm-cyc-a')
+  const b = store.findEntry(root, 'm-cyc-b')
+  assert.ok(!a.superseded_by && !a.supersedes, 'A pointers must both be cleared')
+  assert.ok(!b.superseded_by && !b.supersedes, 'B pointers must both be cleared (no mutual supersedes residue)')
+})
+
 test('importId replay returns the first receipt and never re-writes (merge retry safety)', () => {
   const { service } = tmpService()
   const entries = [{ id: 'm-idem-a', content: '幂等初始内容', scope: 'global' }]

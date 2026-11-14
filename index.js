@@ -250,7 +250,7 @@ export function apply(ctx, rawConfig) {
         category: { type: 'string', enum: ['preference', 'fact', 'decision'], description: '按分类过滤 Optional category filter' },
         origin: { type: 'string', enum: ['manual', 'auto'], description: '按来源过滤（manual=显式要求 / auto=主动沉淀）Filter by origin' },
         tag: { type: 'string', description: '按标签精确过滤（大小写不敏感）Filter by exact tag (case-insensitive)' },
-        limit: { type: 'integer', description: '最多返回条数（默认 20）Max results (default 20)' },
+        limit: { type: 'integer', maximum: 200, description: '最多返回条数（默认 20，上限 200）Max results (default 20, capped at 200)' },
         offset: { type: 'integer', description: '分页偏移，跳过前 N 条（默认 0）Pagination offset (default 0)' },
         include_superseded: { type: 'boolean', description: '包含被取代的历史条目（默认 false）Include superseded history' },
         include_expired: { type: 'boolean', description: '包含已过期条目（默认 false）Include expired' },
@@ -469,6 +469,8 @@ export function apply(ctx, rawConfig) {
       clearTimeout(startupTimer)
       clearInterval(backupTimer)
       hintState.clear()
+      // 关闭 store 的 fs.watch/索引定时器（第七轮审计 H11），重载不泄漏 watcher。
+      try { service.dispose() } catch { /* 卸载期容错 */ }
       for (const dispose of disposers.reverse()) {
         try {
           dispose()

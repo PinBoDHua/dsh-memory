@@ -454,6 +454,32 @@ test('move: failure to remove the source file rolls back the new copy (no dual-s
   assert.equal(store.listScope(root, 'workspace', CWD_A).length, 0)
 })
 
+test('H13: supersede back-reference write failure rolls back the claim (no half-materialized chain)', () => {
+  const root = tmpRoot()
+  const { entry: target } = store.saveEntry(root, { content: '目标', scope: 'global' })
+  const targetFile = path.join(root, 'global', `${target.id}.md`)
+  const realRename = fs.renameSync
+  fs.renameSync = function (src, dst) {
+    if (String(dst) === targetFile) throw Object.assign(new Error('EIO: simulated back-reference write failure'), { code: 'EIO' })
+    return realRename.call(fs, src, dst)
+  }
+  let err = null
+  try {
+    store.saveEntry(root, { content: '取代者', scope: 'global', supersedes: target.id })
+  } catch (e) {
+    err = e
+  } finally {
+    fs.renameSync = realRename
+  }
+  assert.ok(err, 'must surface the failure')
+  assert.equal(err.code, 'io')
+  const freshTarget = store.findEntry(root, target.id)
+  assert.ok(!freshTarget.superseded_by, 'target must not be hidden by a half-materialized chain')
+  const claimant = store.listScope(root, 'global').find((e) => e.content === '取代者')
+  assert.ok(claimant, 'entry itself is kept')
+  assert.ok(!claimant.supersedes, 'supersede claim must be rolled back')
+})
+
 test('writeEntryBatch reports progress ticks for large batches (lock heartbeat)', () => {
   const root = tmpRoot()
   const now = new Date().toISOString()

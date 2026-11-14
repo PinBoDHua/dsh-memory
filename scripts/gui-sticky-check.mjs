@@ -224,7 +224,10 @@ async function main() {
   } finally {
     try { edge.kill() } catch { /* ignore */ }
     await sleep(400)
-    try { rmSync(USER_DATA, { recursive: true, force: true }) } catch { /* ignore */ }
+    // O14：Edge 子进程句柄未释放会让 rm 失败而静默残留（~250MB）；重试删除。
+    for (let i = 0; i < 6; i += 1) {
+      try { rmSync(USER_DATA, { recursive: true, force: true }); break } catch { await sleep(400) }
+    }
   }
 }
 

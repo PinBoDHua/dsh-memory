@@ -3,6 +3,67 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.24.39] - 2026-11-14
+
+第七轮双端审计（宿主 / 面板 / 运维脚本三路只读审计，共 45 项发现）：P1 3 项、P2 19 项、P3 23 项。本轮修复 P1 全部 + P2 全部 + 23 项 P3 中 18 项，其余按约定记入 backlog。
+
+### 安全 Security
+- **move 失败 500 泄漏数据根绝对路径**：`moveEntry` 把 Node 原始异常文案（含 `C:\Users\<用户名>\.dsh\.dsh-memory\...`）放进 `code=io` 错误，`errorPayload` 对已知 code 直接透传。现 move 抛固定脱敏文案，routes 的 `io` 也统一兜底文案（面板按 code 本地化）。
+- **importId 幂等回执可被静默绕过**：同 importId 下字符串/缺省 `chunkIndex` 被归零后撞上第 0 片回执 → 返回 `cached:true` 但该片从未落盘（静默数据丢失）。现带 importId 时 chunkIndex 必须是 0–99999 整数，否则 400 `invalid`。
+- **验证脚本 bench 可删真实记忆**：`--dir` 指向真实数据根时 reuse 模式仍会 `forget` 第一条工作区条目并写派生索引。现 reuse 且无 `.bench-root` marker/基准目录名 → **只读模式**（跳过 forget/flush），输出 `mode:'read-only'`。
+- **测试条目强杀后永久污染真实库**：分片/停止导入用例的 320/620 条测试记忆内容不带 `__gui_` 标记，看门狗与启动清扫都认不出 → 强杀后最多 620 条永久残留。现统一加标记前缀。
+
+### 数据一致性 Data integrity
+- **条目级读-改-写无跨进程锁**：`save/update/move/forget/write*` 全部走新增的 `.lock-write` 根级写锁（锁序：导入先持 `.lock-import` 再进本锁）。修复三类跨进程损坏：双后继覆盖同一取代目标（违反「目标不得已被取代」不变量）、并发更新整文件回写丢字段、`forget` 后被陈旧读复活（隐私相关）。回归用真实双子进程并发验证。
+- **大目录缓存补丁竞态投毒**：原「rename 后现取 stat 配本次写入文本」在另一进程同时 rename 时会存入「本进程内容＋对方签名」，watcher 命中毒签名后**永久**返回陈旧内容。现补丁直接读回磁盘解析入缓存（stat→read→parse，反向交错也能自愈）。
+- **取代反向指针写失败被静默吞掉**：磁盘满/权限错误时出现「本条声称取代 T 但 T 未隐藏」的半物化链且工具无法修复。现回滚本条取代声明并抛 `io`（零变更、可重试）；导入环修复同时清除成环的 `supersedes` 反向边（此前残留 A↔B 互指）。
+- **importId 回执仅进程内存**：宿主重启/插件重载后同 importId merge 重放会回滚用户编辑。现持久化到 `.cache/import-receipts.json`（派生数据、加载失败按空处理）。
+- **持久化索引记录形状校验不足**：损坏/手改索引可注入 `superseded_by:123`（条目永久隐藏）、`pinned:"false"`（恒钉选）等非法类型。现逐字段校验，不可信记录回读 Markdown。
+- **备份文件名分配与落盘在锁外**：两进程同毫秒备份可互相覆盖。现导出＋文件名＋落盘＋轮转一并移入写锁临界区。
+- **导入非法时间戳可落盘**：`2026-13-99T99:99:00Z` 原样写入（排序/衰减失真）。现要求形状合法且 `Date.parse` 有限，否则取导入时刻。
+- **lock.js 认领放回失败遗留 `.heal-*` 孤儿目录**：现放回失败时清理（持有者只引用 lockPath，删除安全）。
+- **watchdog 无条件删锁**：父进程被强杀时可能删掉宿主正持有的 `.lock-settings`/`.lock-import`。现删前校验 owner：`.lock-verify` 按 pid 存活判断、lib 锁按 mtime 陈旧判断。
+- **验证脚本互斥锁双持有**：`verify-lock` 从「判陈旧→rmSync→重试 mkdir」改为 rename 原子认领＋owner nonce＋运行期心跳；活 owner 即使 mtime 陈旧也不抢（修掉一个死 owner＋新鲜 mtime 的活锁）。
+- **备份保留份数临界删用户最旧备份**：用户已有 30 份插件备份时，验证脚本触发的备份会轮转删掉最旧一份且按文件名恢复不回来。现备份用例前疏散最旧一份到临时目录，正常与中断路径都恢复（`evacuateOldestBackup`/`restoreEvacuatedBackups`）。
+
+### 性能 Performance
+- **search/entries limit 无上限**：`limit=1e6` 返回全库（大库 9.4MB 同步序列化＋上下文爆炸）。现工具路径夹取 ≤200（schema 加 `maximum`）、路由/面板夹取 ≤1000。
+- **settings storageUsage 全树同步 stat**：30k 库约 493ms 同步阻塞。缓存 TTL 5s→60s，DETAIL 标注统计范围。
+- **工作区索引锁 5s 同步等待**：临界区仅毫秒级，超时降到 500ms，崩溃遗留锁不再冻结 save/update 热路径 5s。
+
+### 可靠性 Reliability
+- **面板写成功后刷新失败被误报为「写失败」**：导入全量成功仅因列表请求抖动就弹「已写入 N/N 条后中断」、并二次触发召回扫描。现刷新失败单独兜底，写结果吐司不受影响。
+- **批量删除失败归因错误**：文件被占用（`failed`）与不存在（`notFound`）一律报「未找到」。现按宿主返回分别归因（busy/not-found），成功项仍进撤销集。
+- **`__proto__` 作为 id 时选择同步失效**：普通对象做 id 集合被原型 setter 吞掉 → 批量操作漏项且不可撤销。现统一 `Object.create(null)`。
+- **吐司暂停/恢复状态机无守卫**：重复暂停把 6s 撤销窗口蚕食到 300ms（键盘用户在撤销/关闭按钮间 Tab 几次就没了）、焦点仍在吐司内时 mouseleave 会恢复倒计时、两次 resume 产生孤儿定时器。现暂停幂等、焦点在吐司内不恢复、设时器前先清。
+- **面板卸载后分片导入继续写盘**：无 `AbortController`、无卸载守卫，切走面板后仍逐片 POST。现页面级取消＋卸载 abort＋停止标志。
+- **分片预演无进度/不可取消**：3 万条按 800/片需 38 次串行 dry-run，期间无弹窗进度也无法中止。现预演期显示「正在预演 d/t」且可停止（预演无写盘，安全）。
+- **导出/备份沿用 15s 超时**：大库冷导出/首次备份假报超时（而备份可能已写盘成功）。现独立 120s 并给进行中文案。
+- **列表无外部写入刷新路径**：agent 在其它会话写入后面板看不到。现窗口 focus/visibilitychange 节流刷新（≥30s）＋工具栏刷新按钮。
+- **脚本请求无超时**：宿主冻结/Edge 崩溃时验证脚本永久挂起（连 Ctrl-C 的清理路径都卡死）。现 fetch 30s（导入 180s）、CDP 命令 30s。
+- **启动残留清扫 limit=200 无分页**：大量残留被基线「吸收」后零残留自检假绿。现分页清完。
+- **验证脚本空洞断言**：「恢复在线后列表重新加载」断言 `.dm_card.length >= 0` 恒真。现断言新发 `/entries` 请求且网络错误态消失。
+- **非标记磁盘工件强杀残留**：损坏文件/阻塞文件不在看门狗清理范围。现 manifest 增 `artifacts` 清单。
+- **GUI 备份用例固定 `sleep(280)`**：大库冷导出可达秒级会假失败。现轮询「备份请求已发出」。
+- **live-check lastSeen 断言用 `>=`** 无判别力 → 改 `>`。
+
+### 无障碍 & 细节 Accessibility
+- 导入进度、保存状态加 `role="status"`；列表/设置加载失败加 `role="alert"`。
+- `origin=auto` 徽章浅色对比度 3.64:1 → `#6d28d9`（≥4.5:1），深色分支保持原值。
+- 备份成功后不再多触发一次全量召回扫描（依赖 `settings.effective` 内容签名而非对象引用）。
+- Select 触发器补 `aria-controls`；复制 id/路径后焦点归还触发元素。
+- 导入/新建后回到列表顶部（此前停留旧滚动位置，新条目不可见）。
+- 插件卸载时 `service.dispose()` 关闭 watcher 与索引去抖定时器（避免重载泄漏）。
+- **打包卫生**：`files` 的 `docs` 整目录改为 `docs/DETAIL.md`——内部台账 `ITERATION.md`（含本机路径/代理）不再随 npm 包发布；新增 locale 元数据/详情/图标形状守卫测试。
+
+### 新增测试
+- 宿主：move io 脱敏、chunkIndex 校验、limit 夹取、坏时间戳归一、跨进程并发写（取代/更新/删除/备份）、缓存读回磁盘真相、坏索引字段类型、回执跨实例重启、环修复双向清理、取代反向写回滚、heal 孤儿清理。
+- 面板：`settleBulkDelete`/`idSetOf`/`toastRemainingMs`/`shouldResumeToast`/`settingsSignature`/`shouldAutoRefresh` 纯函数。
+- 运维：bench 只读决策、备份疏散/恢复往返、验证锁活 owner 不抢/死 owner 自愈、watchdog 活锁不删/工件清理、快照盲区、包元数据守卫。
+
+### 验证证据
+- 单元 **379/379**；live **198/198**；真实 GUI **91/91**；吸顶回归 **2/2**；数据根快照一致、零残留。
+
 ## [0.24.38] - 2026-11-14
 
 ### 修复 Fixed（用户反馈：吸顶工具栏「拦腰切断」卡片）

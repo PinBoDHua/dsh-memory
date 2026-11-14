@@ -205,6 +205,23 @@
     return !isFinite(until) || now < until
   }
 
+  // 吐司倒计时剩余（纯函数）：total 为本段起始剩余预算，started 为段起点；
+  // pausedAt 非空表示已暂停，elapsed 冻结在 pausedAt（重复暂停同一 pausedAt 结果
+  // 不变，不会重复扣减）；未暂停按 now 扣减。下限 300ms，避免恢复后立即消失。
+  function toastRemainingMs(started, pausedAt, now, total) {
+    var budget = Number(total)
+    if (!isFinite(budget)) budget = 0
+    var ref = (pausedAt === null || pausedAt === undefined) ? now : pausedAt
+    var elapsed = Math.max(0, Number(ref) - Number(started))
+    return Math.max(300, budget - elapsed)
+  }
+
+  // 吐司恢复判定（纯函数）：确实处于暂停、且焦点已离开吐司才恢复倒计时——
+  // 鼠标移出但键盘焦点仍在撤销按钮上时不得恢复（否则吐司在键盘用户眼前消失）。
+  function shouldResumeToast(paused, focusInside) {
+    return !!paused && !focusInside
+  }
+
   // 批量删除结果归类（Promise.allSettled）：成功项可撤销、失败项汇报原因。
   function partitionSettled(items, settled) {
     var ok = []
@@ -215,6 +232,44 @@
       var result = results[i]
       if (result && result.status === 'fulfilled') ok.push(list[i])
       else failed.push({ entry: list[i], error: result ? result.reason : undefined })
+    }
+    return { ok: ok, failed: failed }
+  }
+
+  // id 成员集合（纯函数）：ID_PATTERN 允许 __proto__/constructor 这类键，普通对象
+  // 赋值会被原型 setter 吞掉（选择同步失效/批量删除误报/撤销集漏项），统一用无原型
+  // 对象（与 parseTags 同口径）。
+  function idSetOf(items) {
+    var set = Object.create(null)
+    var list = Array.isArray(items) ? items : []
+    for (var i = 0; i < list.length; i++) {
+      var item = list[i]
+      if (item) set[item.id] = true
+    }
+    return set
+  }
+
+  // 批量删除结算（纯函数）：宿主返回 {deleted, ids, notFound, failed}——ids=已删除
+  // （进撤销集），failed=文件被占用 unlink 失败 → busy，notFound → not-found，
+  // 未归因项兜底 not-found。此前只读 ids、其余一律误报 not-found。
+  function settleBulkDelete(targets, result) {
+    var r = result || {}
+    var deleted = Object.create(null)
+    var busyIds = Object.create(null)
+    var ids = Array.isArray(r.ids) ? r.ids : []
+    var busyList = Array.isArray(r.failed) ? r.failed : []
+    var i
+    for (i = 0; i < ids.length; i++) deleted[ids[i]] = true
+    for (i = 0; i < busyList.length; i++) busyIds[busyList[i]] = true
+    var list = Array.isArray(targets) ? targets : []
+    var ok = []
+    var failed = []
+    for (i = 0; i < list.length; i++) {
+      var e = list[i]
+      var id = e && e.id
+      if (deleted[id] === true) ok.push(e)
+      else if (busyIds[id] === true) failed.push({ item: e, error: { code: 'busy' } })
+      else failed.push({ item: e, error: { code: 'not-found' } })
     }
     return { ok: ok, failed: failed }
   }
@@ -282,6 +337,22 @@ function settingsStatusNext(status, event) {
       return currentCwd ? { selection: currentCwd, resolved: true } : { selection: null, resolved: false }
     }
     return { selection: null, resolved: true }
+  }
+
+  // 设置内容签名（纯函数）：召回刷新只依赖 effective 的内容而非对象引用——
+  // 备份/重载会生成新 settings 对象，内容未变时不应触发全量 /recall-preview 重扫。
+  function settingsSignature(settings) {
+    if (!settings || !settings.effective) return ''
+    try { return JSON.stringify(settings.effective) } catch { return '' }
+  }
+
+  // 外部写入刷新节流（纯函数）：窗口 focus/visibilitychange 距上次自动刷新
+  // 满 minGap（默认 30s）才允许再次触发，避免频繁切窗打爆列表请求。
+  function shouldAutoRefresh(lastAt, now, minGap) {
+    var gap = Number(minGap) > 0 ? Number(minGap) : 30000
+    var last = Number(lastAt)
+    if (!isFinite(last) || last <= 0) return true
+    return Number(now) - last >= gap
   }
 
   // 导入文件文本解析（纯函数）：容忍 UTF-8 BOM（记事本/部分编辑器保存会带），
@@ -508,7 +579,7 @@ function pageSlice(entries, size) {
     return (mb < 10 ? mb.toFixed(1) : Math.round(mb)) + ' MB'
   }
 
-  var helpers = { validateDraft: validateDraft, groupEntries: groupEntries, nextToken: nextToken, entriesParams: entriesParams, buildEntriesQuery: buildEntriesQuery, workspaceOptions: workspaceOptions, errorKeyFor: errorKeyFor, shouldQueueToast: shouldQueueToast, partitionSettled: partitionSettled, parseTags: parseTags, unwrapResult: unwrapResult, settingsStatusNext: settingsStatusNext, savedToastKey: savedToastKey, exportParams: exportParams, defaultViewSelection: defaultViewSelection, sectionCountsExact: sectionCountsExact, chunkEntries: chunkEntries, chunkEntriesPreservingLinks: chunkEntriesPreservingLinks, parseImportText: parseImportText, validateImportDoc: validateImportDoc, importSummary: importSummary, importWriteCount: importWriteCount, rebaseRejectedIndexes: rebaseRejectedIndexes, aggregateImportPlans: aggregateImportPlans, shouldFocusToastAction: shouldFocusToastAction, categoryChipCount: categoryChipCount, importRejectText: importRejectText, pageSlice: pageSlice, entryDetailRows: entryDetailRows, relativeTime: relativeTime, formatBytes: formatBytes, isExpired: isExpired, statusOf: statusOf, originOf: originOf, statusQueryFlags: statusQueryFlags }
+  var helpers = { validateDraft: validateDraft, groupEntries: groupEntries, nextToken: nextToken, entriesParams: entriesParams, buildEntriesQuery: buildEntriesQuery, workspaceOptions: workspaceOptions, errorKeyFor: errorKeyFor, shouldQueueToast: shouldQueueToast, toastRemainingMs: toastRemainingMs, shouldResumeToast: shouldResumeToast, settingsSignature: settingsSignature, shouldAutoRefresh: shouldAutoRefresh, partitionSettled: partitionSettled, idSetOf: idSetOf, settleBulkDelete: settleBulkDelete, parseTags: parseTags, unwrapResult: unwrapResult, settingsStatusNext: settingsStatusNext, savedToastKey: savedToastKey, exportParams: exportParams, defaultViewSelection: defaultViewSelection, sectionCountsExact: sectionCountsExact, chunkEntries: chunkEntries, chunkEntriesPreservingLinks: chunkEntriesPreservingLinks, parseImportText: parseImportText, validateImportDoc: validateImportDoc, importSummary: importSummary, importWriteCount: importWriteCount, rebaseRejectedIndexes: rebaseRejectedIndexes, aggregateImportPlans: aggregateImportPlans, shouldFocusToastAction: shouldFocusToastAction, categoryChipCount: categoryChipCount, importRejectText: importRejectText, pageSlice: pageSlice, entryDetailRows: entryDetailRows, relativeTime: relativeTime, formatBytes: formatBytes, isExpired: isExpired, statusOf: statusOf, originOf: originOf, statusQueryFlags: statusQueryFlags }
 
   // ===== node 测试导出（CJS） =====
   if (typeof module !== 'undefined' && module.exports) {
@@ -528,6 +599,8 @@ function pageSlice(entries, size) {
 // 否则用户会看到「请求数据过大」而实际备份完全可用。请求超时对导入单独放宽。
 var IMPORT_MAX_BYTES = 32 * 1024 * 1024
 var IMPORT_TIMEOUT_MS = 180000
+// 导出/备份要序列化全库（大库可达数十 MB），15s 默认超时不够；独立放宽到 120s。
+var EXPORT_TIMEOUT_MS = 120000
   var IMPORT_CHUNK_SIZE = 300
 var IMPORT_PREVIEW_CHUNK = 800
 
@@ -682,6 +755,8 @@ function newImportRunId() {
     workspaceTarget: '写入工作区',
     export: '导出',
     import: '导入',
+    refreshList: '刷新列表',
+    exporting: '正在导出…',
     exportDone: '已导出 {n} 条记忆',
     importTitle: '导入记忆',
     importNew: '新增',
@@ -695,6 +770,7 @@ function newImportRunId() {
     exportSkipped: '另有 {n} 个损坏文件未被导出',
     importAllDup: '全部条目均已存在，无需导入。',
     importingProgress: '正在导入 {d}/{t}…',
+    previewingProgress: '正在预演 {d}/{t}…',
     importPartialFail: '已写入 {d}/{t} 条后中断，可重试导入（已存在条目会去重/合并）',
     stopImport: '停止导入',
     importStopped: '已停止导入：已写入 {d}/{t} 条',
@@ -747,6 +823,7 @@ function newImportRunId() {
     backupCount: '{n} 份备份',
     neverBackup: '尚未备份',
     backupNow: '立即备份',
+    backingUp: '正在备份…',
     backupDone: '备份完成',
     defaultViewLabel: '默认视图',
     pageSizeLabel: '每页条数',
@@ -912,6 +989,8 @@ function newImportRunId() {
     workspaceTarget: 'Writes to workspace',
     export: 'Export',
     import: 'Import',
+    refreshList: 'Refresh list',
+    exporting: 'Exporting…',
     exportDone: 'Exported {n} memories',
     importTitle: 'Import memories',
     importNew: 'New',
@@ -925,6 +1004,7 @@ function newImportRunId() {
     exportSkipped: '{n} damaged file(s) were not exported',
     importAllDup: 'All entries already exist; nothing to import.',
     importingProgress: 'Importing {d}/{t}…',
+    previewingProgress: 'Previewing {d}/{t}…',
     importPartialFail: 'Interrupted after writing {d}/{t} entries; retry is safe (existing entries are deduplicated/merged)',
     stopImport: 'Stop import',
     importStopped: 'Import stopped: wrote {d}/{t} entries',
@@ -977,6 +1057,7 @@ function newImportRunId() {
     backupCount: '{n} backups',
     neverBackup: 'No backup yet',
     backupNow: 'Back up now',
+    backingUp: 'Backing up…',
     backupDone: 'Backup complete',
     defaultViewLabel: 'Default view',
     pageSizeLabel: 'Entries per page',
@@ -1279,7 +1360,9 @@ function newImportRunId() {
     '@keyframes dm_pop_in_up{from{opacity:0;transform:translateY(4px) scale(.98);}to{opacity:1;transform:translateY(0) scale(1);}}',
     // ---- v2：来源徽章 / 状态装饰 / 钉选归档 / 过期日 ----
     '.dm_origin{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;font-weight:600;padding:1.5px 8px;border-radius:999px;corner-shape:round;}',
-    '.dm_origin_auto{color:var(--dm-primary2);background:color-mix(in srgb,var(--dm-primary2) 12%,transparent);}',
+    // 浅色下 #8b5cf6 对浅底仅 3.64:1，改用 #6d28d9（≥4.5:1）；深色分支保持原浅色值。
+    '.dm_origin_auto{color:#6d28d9;background:color-mix(in srgb,var(--dm-primary2) 12%,transparent);}',
+    'body[data-ds-dark-theme] .dm_origin_auto{color:var(--dm-primary2);}',
     '.dm_origin_manual{color:var(--dm-ink3);background:color-mix(in srgb,var(--dm-ink) 6%,transparent);}',
     '.dm_status{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;font-weight:600;padding:1.5px 8px;border-radius:999px;corner-shape:round;}',
     '.dm_status_superseded{color:var(--dm-ink3);background:color-mix(in srgb,var(--dm-ink) 7%,transparent);}',
@@ -1405,6 +1488,8 @@ function newImportRunId() {
       }
 
       function legacyCopy(text) {
+        // 临时 textarea 会抢焦点、移除后焦点掉 body：先记住触发元素，复制完归还。
+        var previous = document.activeElement
         var ta = document.createElement('textarea')
         ta.value = text
         ta.style.position = 'fixed'
@@ -1414,6 +1499,9 @@ function newImportRunId() {
         var ok = false
         try { ok = document.execCommand('copy') } catch { ok = false }
         ta.remove()
+        if (previous && previous.focus && document.contains(previous)) {
+          try { previous.focus() } catch { /* 归还失败不影响复制结果 */ }
+        }
         return ok
       }
 
@@ -1433,14 +1521,30 @@ function newImportRunId() {
       }
 
       // ===== API（同源 fetch + token 生命周期） =====
-      function createApi(tokenRef) {
+      // abortRef：页面级取消（卸载时 abort 全部在途请求），与超时信号合并使用。
+      function createApi(tokenRef, abortRef) {
         function request(path, options) {
           var opts = Object.assign({ credentials: 'same-origin', cache: 'no-store' }, options)
           var timeoutMs = Number(opts.timeoutMs) > 0 ? Number(opts.timeoutMs) : REQUEST_TIMEOUT_MS
           delete opts.timeoutMs
           // 超时即中止：超时/网络失败统一转成带 code 的错误，交给 errorText 本地化。
-          if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
-            opts.signal = AbortSignal.timeout(timeoutMs)
+          var timeoutSignal = (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') ? AbortSignal.timeout(timeoutMs) : null
+          var pageSignal = abortRef && abortRef.current ? abortRef.current.signal : null
+          var release = function () {}
+          if (timeoutSignal && pageSignal) {
+            // 合并超时与页面取消：任一触发即中止；请求结束后摘除监听，避免泄漏。
+            var merged = new AbortController()
+            var onAbort = function () { merged.abort() }
+            timeoutSignal.addEventListener('abort', onAbort)
+            pageSignal.addEventListener('abort', onAbort)
+            if (timeoutSignal.aborted || pageSignal.aborted) merged.abort()
+            release = function () {
+              timeoutSignal.removeEventListener('abort', onAbort)
+              pageSignal.removeEventListener('abort', onAbort)
+            }
+            opts.signal = merged.signal
+          } else if (timeoutSignal || pageSignal) {
+            opts.signal = timeoutSignal || pageSignal
           }
           return fetch(path, opts).catch(function (err) {
             var timedOut = err && (err.name === 'TimeoutError' || err.name === 'AbortError')
@@ -1466,6 +1570,12 @@ function newImportRunId() {
               }
               return payload
             })
+          }).then(function (payload) {
+            release()
+            return payload
+          }, function (err) {
+            release()
+            throw err
           })
         }
         function post(path, input, timeoutMs) {
@@ -1484,11 +1594,11 @@ function newImportRunId() {
           stats: function (params) { return request(API_BASE + '/stats' + buildEntriesQuery(params)) },
           similar: function (params) { return request(API_BASE + '/similar' + buildEntriesQuery(params)) },
           recallPreview: function (workspace) { return request(API_BASE + '/recall-preview' + (workspace ? '?workspace=' + encodeURIComponent(workspace) : '')) },
-          export: function (params) { return request(API_BASE + '/export' + buildEntriesQuery(params || {})) },
+          export: function (params) { return request(API_BASE + '/export' + buildEntriesQuery(params || {}), { timeoutMs: EXPORT_TIMEOUT_MS }) },
           settings: function () { return request(API_BASE + '/settings') },
           saveSettings: function (input) { return post(API_BASE + '/settings', input).then(unwrapResult) },
           resetSettings: function () { return post(API_BASE + '/settings/reset', {}).then(unwrapResult) },
-          backup: function () { return post(API_BASE + '/backup', {}) },
+          backup: function () { return post(API_BASE + '/backup', {}, EXPORT_TIMEOUT_MS) },
           save: function (input) { return post(API_BASE + '/save', input) },
           update: function (input) { return post(API_BASE + '/update', input) },
           forget: function (input) { return post(API_BASE + '/forget', input) },
@@ -1870,10 +1980,11 @@ function newImportRunId() {
             : null,
           h('div', { className: 'dm_dialog_footer' },
             props.progress
-              ? h('span', { className: 'dm_hint' }, t('importingProgress').replace('{d}', String(props.progress.done)).replace('{t}', String(props.progress.total)))
+              ? h('span', { className: 'dm_hint', role: 'status' }, t(props.progress.preview ? 'previewingProgress' : 'importingProgress').replace('{d}', String(props.progress.done)).replace('{t}', String(props.progress.total)))
               : null,
             h('button', { className: 'dm_btn', onClick: props.onClose, disabled: props.busy }, t('cancel')),
-            props.busy && props.confirming && props.onStop ? h('button', { className: 'dm_btn dm_btn_mini dm_linkbtn', onClick: props.onStop }, t('stopImport')) : null,
+            // 预演期同样可停止（预演无写盘，安全）。
+            props.busy && (props.confirming || props.previewing) && props.onStop ? h('button', { className: 'dm_btn dm_btn_mini dm_linkbtn', onClick: props.onStop }, t('stopImport')) : null,
             h('button', { className: 'dm_btn dm_btn_primary', onClick: props.onConfirm, disabled: props.busy || (summary.imported === 0 && summary.updated === 0) }, h(Icon, { name: 'check', size: 14, strokeWidth: 2.2 }), t('importConfirm'))))
       }
 
@@ -2038,7 +2149,7 @@ function newImportRunId() {
         if (!view || !draft) {
           // 首次加载失败：显示错误与重试入口，而不是永久骨架。
           if (props.error) {
-            return h('div', { className: 'dm_empty' },
+            return h('div', { className: 'dm_empty', role: 'alert' },
               h(Icon, { name: 'alert', size: 28, style: { color: 'var(--dm-danger)', marginBottom: 10 } }),
               h('div', null, t('loadError') + t('labelSep') + props.error),
               h('button', { className: 'dm_btn', style: { marginTop: 12 }, onClick: props.onRetry }, h(Icon, { name: 'undo', size: 13 }), t('retry')))
@@ -2061,7 +2172,7 @@ function newImportRunId() {
               h(Toggle, { checked: draft.decayEnabled !== false, onChange: set('decayEnabled'), label: t('decayEnabledLabel'), disabled: props.busy })),
             h(SettingRow, { label: t('budgetLabel'), desc: t('budgetDesc') },
               h(Slider, { min: 0, max: bounds.budgetMax, step: 100, value: draft.injectionBudgetChars, onChange: set('injectionBudgetChars'), label: t('budgetLabel'), disabled: props.busy })),
-            h(RecallPreview, { t: t, api: props.api, workspace: props.workspace, refreshKey: props.view && props.view.effective, active: props.active }),
+            h(RecallPreview, { t: t, api: props.api, workspace: props.workspace, refreshKey: settingsSignature(props.view), active: props.active }),
             h('div', { className: 'dm_setnote' }, h(Icon, { name: 'info', size: 14, style: { flexShrink: 0, marginTop: 1 } }), t('priorityNote')),
             h('div', { className: 'dm_setnote' }, h(Icon, { name: 'info', size: 14, style: { flexShrink: 0, marginTop: 1 } }), t('enabledNote'))),
           h(SettingsGroup, { icon: 'lock', title: t('groupPrivacy'), style: { color: 'var(--dm-success)', background: 'var(--dm-success-soft)' } },
@@ -2118,7 +2229,7 @@ function newImportRunId() {
               h(Toggle, { checked: draft.relativeTime, onChange: set('relativeTime'), label: t('relativeTimeLabel'), disabled: props.busy }))),
           h('div', { className: 'dm_setfooter' },
             h('button', { className: 'dm_btn dm_btn_danger', onClick: props.onReset, disabled: props.busy || (props.status && props.status.saving) }, h(Icon, { name: 'undo', size: 14 }), t('resetDefaults')),
-            h('span', { className: 'dm_savestate' },
+            h('span', { className: 'dm_savestate', role: 'status' },
               (props.status && props.status.saving) ? h(Icon, { name: 'clock', size: 13 })
                 : (props.status && props.status.error) ? h(Icon, { name: 'alert', size: 13, style: { color: 'var(--dm-danger)' } })
                   : (props.status && props.status.dirty) ? h(Icon, { name: 'edit', size: 13 })
@@ -2283,6 +2394,8 @@ function newImportRunId() {
             type: 'button', ref: triggerRef, id: props.id,
             className: 'dm_select_trigger' + (open ? ' dm_select_open' : '') + (disabled ? ' dm_select_disabled' : ''),
             disabled: disabled, 'aria-haspopup': 'listbox', 'aria-expanded': open, 'aria-label': props.ariaLabel,
+            // 浮层未渲染时不设 aria-controls（避免指向不存在的 id）。
+            'aria-controls': open ? idRef.current : undefined,
             onClick: function () { if (open) closeList(true); else openList() },
             onKeyDown: onTriggerKey,
           },
@@ -2295,7 +2408,7 @@ function newImportRunId() {
         var pop = h('div', {
           className: 'dm_select_pop' + (pos && pos.up ? ' dm_select_up' : ''),
           style: pos ? { top: pos.top, left: pos.left, width: pos.width } : { top: -9999, left: -9999, visibility: 'hidden' },
-          role: 'listbox', ref: listRef, tabIndex: -1, 'aria-label': props.ariaLabel,
+          role: 'listbox', ref: listRef, id: idRef.current, tabIndex: -1, 'aria-label': props.ariaLabel,
           'aria-activedescendant': active >= 0 ? (idRef.current + '-opt-' + active) : undefined,
           onKeyDown: onListKey,
         }, options.map(function (opt, idx) {
@@ -2334,8 +2447,11 @@ function newImportRunId() {
         var ctx = props.ctx
         var t = props.t
         var tokenRef = useRef('')
+        // 页面级取消（C5）：卸载时 abort 全部在途请求，避免孤儿响应继续写状态。
+        var pageAbortRef = useRef(null)
+        if (pageAbortRef.current === null) pageAbortRef.current = new AbortController()
         var apiRef = useRef(null)
-        if (apiRef.current === null) apiRef.current = createApi(tokenRef)
+        if (apiRef.current === null) apiRef.current = createApi(tokenRef, pageAbortRef)
         var api = apiRef.current
         var seqRef = useRef(0)
         var toastSeq = useRef(0)
@@ -2383,9 +2499,11 @@ function newImportRunId() {
         var importPlan = importState[0]; var setImportPlan = importState[1]
         var importProgressState = useState(null)
         var importProgress = importProgressState[0]; var setImportProgress = importProgressState[1]
-        // 「停止导入」只对真实写盘阶段有效：dry-run 预演期不显示（否则是空转按钮）。
+        // 「停止导入」在写盘阶段与预演阶段都可用：预演无写盘，取消是安全的。
         var importConfirmingState = useState(false)
         var importConfirming = importConfirmingState[0]; var setImportConfirming = importConfirmingState[1]
+        var importPreviewingState = useState(false)
+        var importPreviewing = importPreviewingState[0]; var setImportPreviewing = importPreviewingState[1]
         // 写操作成功计数：召回预览只随「数据真的变了」刷新，导出/查重/导入预演的 busy
         // 翻转不再各触发一次全量 /recall-preview 扫描。
         var dataVersionState = useState(0)
@@ -2554,8 +2672,8 @@ function newImportRunId() {
             // 来源/标签/状态均服务端过滤（分页口径一致）。
             setEntries(sliced.items)
             // 批量选择与列表同步：条目被删除/归档/过滤掉后不再保留在选中集合。
-            var visibleIds = {}
-            for (var vi = 0; vi < sliced.items.length; vi++) visibleIds[sliced.items[vi].id] = true
+            // 无原型集合：id 可能恰为 __proto__/constructor（ID_PATTERN 允许）。
+            var visibleIds = idSetOf(sliced.items)
             setSelected(function (prev) { return prev.filter(function (id) { return visibleIds[id] === true }) })
             setHasMore(sliced.hasMore)
             setListError('')
@@ -2710,6 +2828,7 @@ function newImportRunId() {
         function backupNow() {
           if (busy || settingsStatus.saving) return
           setBusy(true)
+          showToast('ok', t('backingUp'))
           api.backup().then(function () {
             showToast('ok', t('backupDone'))
             return loadSettings()
@@ -2727,10 +2846,13 @@ function newImportRunId() {
           }).catch(function () { /* 保留旧值 keep previous badge */ })
         }, [api, currentCwd])
 
+        // 依赖 effective 的内容签名而非 settings 对象引用：备份等触发的 loadSettings
+        // 会换新对象，内容未变时不得重扫全量 /recall-preview。
+        var recallSettingsKey = settingsSignature(settings)
         useEffect(function () {
           if (phase !== 'ready' || tab !== 'memories') return
           refreshRecall()
-        }, [phase, dataVersion, settings, currentCwd, tab, refreshRecall])
+        }, [phase, dataVersion, recallSettingsKey, currentCwd, tab, refreshRecall])
 
         // 选择/查询/分类/页码变化 → 刷新列表（查询防抖 300ms）
         useEffect(function () {
@@ -2738,6 +2860,28 @@ function newImportRunId() {
           var timer = setTimeout(function () { refreshEntries() }, (query || tagFilter) ? 300 : 0)
           return function () { clearTimeout(timer) }
         }, [phase, query, categoryFilter, originFilter, tagFilter, statusFilter, page, selection, currentCwd, refreshEntries])
+
+        // 外部写入感知（C8）：窗口重新聚焦/页面可见时刷新列表（≥30s 节流），
+        // 对话中写入的记忆不必手动刷新即可见；走现有 seq 守卫，不动滚动位置。
+        var phaseRef = useRef(phase)
+        phaseRef.current = phase
+        var lastAutoRefreshRef = useRef(0)
+        useEffect(function () {
+          function maybeRefresh() {
+            if (phaseRef.current !== 'ready') return
+            if (document.visibilityState === 'hidden') return
+            var now = Date.now()
+            if (!shouldAutoRefresh(lastAutoRefreshRef.current, now)) return
+            lastAutoRefreshRef.current = now
+            refreshRef.current().catch(function () { /* 列表错误态由 refreshEntries 自处理 */ })
+          }
+          window.addEventListener('focus', maybeRefresh)
+          document.addEventListener('visibilitychange', maybeRefresh)
+          return function () {
+            window.removeEventListener('focus', maybeRefresh)
+            document.removeEventListener('visibilitychange', maybeRefresh)
+          }
+        }, [])
 
         // 吐司进度条与 JS 计时同步冻结/恢复（否则条走完但撤销仍有效，视觉误导）。
         function setToastBarState(paused) {
@@ -2747,6 +2891,8 @@ function newImportRunId() {
 
         // toast 自动消失（可被悬停/聚焦暂停）；撤销吐司到期后继续展示排队提示。
         useEffect(function () {
+          // 换吐司时先清旧定时器：resume 设过的定时器不得成为孤儿（提前关掉新吐司）。
+          clearTimeout(toastTimerRef.current)
           if (!toast) return undefined
           var duration = toast.duration || 2600
           var active = typeof document !== 'undefined' ? document.activeElement : null
@@ -2764,23 +2910,33 @@ function newImportRunId() {
           return function () { clearTimeout(toastTimerRef.current) }
         }, [toast])
 
+        // 焦点是否仍在吐司内（键盘停在撤销按钮上时，鼠标移出不得恢复倒计时）。
+        function focusInsideToast() {
+          if (typeof document === 'undefined') return false
+          var node = document.querySelector('.dm_toast')
+          var active = document.activeElement
+          return !!(node && active && node.contains(active))
+        }
+
         function pauseToast() {
-          if (!toast) return
+          // 幂等：mouseenter 与 focusCapture 可能先后触发，重复暂停不得重复扣减。
+          if (!toast || toastPausedRef.current) return
+          var now = Date.now()
           clearTimeout(toastTimerRef.current)
-          var elapsed = Date.now() - toastStartedRef.current
-          toastRemainingRef.current = Math.max(300, toastRemainingRef.current - elapsed)
+          toastRemainingRef.current = toastRemainingMs(toastStartedRef.current, now, now, toastRemainingRef.current)
           setToastBarState(true)
           toastPausedRef.current = true
           // 同步延长撤销保护窗口：暂停期间其它普通提示不得替换撤销吐司。
-          toast.until = Date.now() + toastRemainingRef.current
+          toast.until = now + toastRemainingRef.current
         }
 
         function resumeToast() {
-          if (!toast) return
+          if (!toast || !shouldResumeToast(toastPausedRef.current, focusInsideToast())) return
           toastPausedRef.current = false
           setToastBarState(false)
           toast.until = Date.now() + toastRemainingRef.current
           toastStartedRef.current = Date.now()
+          clearTimeout(toastTimerRef.current)
           toastTimerRef.current = setTimeout(dismissToast, toastRemainingRef.current)
         }
 
@@ -2799,6 +2955,17 @@ function newImportRunId() {
           }
           document.addEventListener('keydown', onKey)
           return function () { document.removeEventListener('keydown', onKey) }
+        }, [])
+
+        // 卸载取消（C5）：停止分片导入/预演链并 abort 在途请求，
+        // 避免孤儿响应在面板卸载后继续写状态/弹吐司。
+        useEffect(function () {
+          // 开发态重挂载可能已 abort 旧控制器：换新保证重挂载后请求仍可用。
+          if (pageAbortRef.current.signal.aborted) pageAbortRef.current = new AbortController()
+          return function () {
+            importStopRef.current = true
+            pageAbortRef.current.abort()
+          }
         }, [])
 
         var options = [{ value: 'all', kind: 'all' }].concat(workspaceOptions({ workspaces: workspaces, currentCwd: currentCwd }))
@@ -2932,8 +3099,10 @@ function newImportRunId() {
             if (key === 'similarSaved') showToast('ok', t('similarSaved').replace('{n}', String(sim.length)).replace('{id}', sim[0].id))
             else showToast('ok', t(key))
             // 新建条目按更新时间排在最前：回到第一页让它可见。
-            if (started.mode === 'create') setPage(0)
-            return refreshRef.current()
+            if (started.mode === 'create') { setPage(0); resetListScroll() }
+            // 写已成功：刷新失败单独兜底（列表错误态由 refreshEntries 自处理），
+            // 不得落入 writeFailure 误报写失败。
+            return refreshRef.current().catch(function () {})
           }).then(function () {
             return refreshWorkspaces()
           }).catch(writeFailure).then(function () { setBusy(false) })
@@ -2954,16 +3123,9 @@ function newImportRunId() {
               .then(function () { return { ok: targets, failed: [] } })
           } else {
             // 批量删除走单请求（服务端一次扫描/一次取代指针清理），不再 N 次全量扫描。
+            // 结算按宿主 {ids, notFound, failed} 分别归因：failed=文件被占用 → busy。
             outcomePromise = api.forgetMany({ ids: targets.map(function (e) { return e.id }) }).then(function (payload) {
-              var ids = (payload && payload.result && payload.result.ids) || []
-              var removed = {}
-              for (var i = 0; i < ids.length; i++) removed[ids[i]] = true
-              return {
-                ok: targets.filter(function (e) { return removed[e.id] === true }),
-                failed: targets.filter(function (e) { return removed[e.id] !== true }).map(function (e) {
-                  return { item: e, error: { code: 'not-found', message: t('errNotFound') } }
-                }),
-              }
+              return settleBulkDelete(targets, payload && payload.result)
             })
           }
           outcomePromise.then(function (outcome) {
@@ -2971,8 +3133,7 @@ function newImportRunId() {
             if (confirmRef.current === started) setConfirm(null)
             setSelected([])
             // 成功项先从当前页移除，不必等刷新（刷新也仍会执行）。
-            var removed = {}
-            for (var i = 0; i < outcome.ok.length; i++) removed[outcome.ok[i].id] = true
+            var removed = idSetOf(outcome.ok)
             setEntries(function (prev) { return prev.filter(function (e) { return removed[e.id] !== true }) })
             if (outcome.ok.length > 0) {
               var text = outcome.ok.length === 1 ? t('deleted') : t('deletedN').replace('{n}', String(outcome.ok.length))
@@ -2986,7 +3147,8 @@ function newImportRunId() {
             } else if (outcome.failed.length > 0) {
               showToast('error', t('deleteFailed') + t('errJoin') + errorText(outcome.failed[0].error, t))
             }
-            return refreshRef.current()
+            // 删除已结算：刷新失败单独兜底，不误报写失败。
+            return refreshRef.current().catch(function () {})
           }).then(function () {
             return refreshWorkspaces()
           }).catch(writeFailure).then(function () { setBusy(false) })
@@ -3018,6 +3180,7 @@ function newImportRunId() {
         function handleExport() {
           if (busy) return
           setBusy(true)
+          showToast('ok', t('exporting'))
           var scopeParams = exportParams(selection, currentCwd)
           api.export(scopeParams).then(function (doc) {
             var blob = new Blob([JSON.stringify(doc, null, 2)], { type: 'application/json' })
@@ -3034,22 +3197,30 @@ function newImportRunId() {
         }
 
         // 整档 dry-run 超过服务端单请求上限（1000 条）时分片预览并聚合计数。
+        // 预演分片上报进度（preview 标记区分写盘文案）；复用 importStopRef 支持取消，
+        // 停止后不再发送后续片，resolve null 让调用方保留原状、不弹错误。
         function previewImport(entries, mode) {
           var chunks = chunkEntriesPreservingLinks(entries, IMPORT_PREVIEW_CHUNK)
           // 分片会重排条目顺序：保留「条目对象 → 原始文件下标」映射，用于 rejected 重定位。
           var indexByEntry = new Map()
           for (var ei = 0; ei < entries.length; ei++) indexByEntry.set(entries[ei], ei)
           var plans = []
+          var done = 0
+          importStopRef.current = false
+          setImportProgress({ done: 0, total: entries.length, preview: true })
           var chain = Promise.resolve()
           chunks.forEach(function (chunk) {
             chain = chain.then(function () {
+              if (importStopRef.current) return undefined
               return api.import({ entries: chunk, dryRun: true, mode: mode }).then(function (payload) {
                 var plan = (payload && payload.result) || {}
                 plans.push(Object.assign({}, plan, { rejected: rebaseRejectedIndexes(plan.rejected, chunk, indexByEntry) }))
+                done += chunk.length
+                setImportProgress({ done: done, total: entries.length, preview: true })
               })
             })
           })
-          return chain.then(function () { return aggregateImportPlans(plans) })
+          return chain.then(function () { return importStopRef.current ? null : aggregateImportPlans(plans) })
         }
 
         function handleImportFile(e) {
@@ -3069,21 +3240,38 @@ function newImportRunId() {
               showToast('error', t(parsed.errorKey))
               return undefined
             }
+            // 预演期即打开弹窗（plan=null）：大文件分片预演可能数十秒，
+            // 进度与「停止」入口必须可见可达；预演完成后回填 plan。
+            var runId = newImportRunId()
+            setImportPlan({ entries: parsed.doc.entries, plan: null, mode: 'skip', runId: runId })
+            setImportPreviewing(true)
             return previewImport(parsed.doc.entries, 'skip').then(function (plan) {
-              setImportPlan({ entries: parsed.doc.entries, plan: plan, mode: 'skip', runId: newImportRunId() })
+              if (!plan) { setImportPlan(null); return } // 用户停止预演：不报错，直接收起
+              setImportPlan({ entries: parsed.doc.entries, plan: plan, mode: 'skip', runId: runId })
             })
           }).catch(function (err) {
+            setImportPlan(null)
             if (err && err.code) writeFailure(err)
             else showToast('error', t('errReadFile') + t('labelSep') + errorText(err, t))
-          }).then(function () { setBusy(false) })
+          }).then(function () {
+            setImportPreviewing(false)
+            setImportProgress(null)
+            setBusy(false)
+          })
         }
 
         function changeImportMode(mode) {
           if (busy || !importPlan) return
           setBusy(true)
+          setImportPreviewing(true)
           previewImport(importPlan.entries, mode).then(function (plan) {
+            if (!plan) return // 用户停止预演：保留原 plan 与模式
             setImportPlan({ entries: importPlan.entries, plan: plan, mode: mode, runId: importPlan.runId })
-          }).catch(writeFailure).then(function () { setBusy(false) })
+          }).catch(writeFailure).then(function () {
+            setImportPreviewing(false)
+            setImportProgress(null)
+            setBusy(false)
+          })
         }
 
         function confirmImport() {
@@ -3126,14 +3314,17 @@ function newImportRunId() {
               if (writeActual > 0 || Number(totals.repaired) > 0) bumpDataVersion()
               showToast('ok', t('importStopped').replace('{d}', String(writeActual)).replace('{t}', String(entries.length)))
               setPage(0)
-              return refreshRef.current()
+              resetListScroll()
+              // 写已结算：刷新失败单独兜底，不得落入 partial-fail 误报、不二次 bump。
+              return refreshRef.current().catch(function () {})
             }
             if (writeActual > 0 || Number(totals.repaired) > 0) bumpDataVersion()
             var summary = importSummary(totals)
             var repairedNote = summary.repaired > 0 ? ' · ' + t('importRepaired').replace('{n}', String(summary.repaired)) : ''
             showToast('ok', t('imported') + ' · ' + t('importNew') + ' ' + summary.imported + ' / ' + t('importUpdated') + ' ' + summary.updated + ' / ' + t('importDup') + ' ' + summary.deduplicated + ' / ' + t('importRej') + ' ' + summary.rejected + repairedNote)
             setPage(0)
-            return refreshRef.current()
+            resetListScroll()
+            return refreshRef.current().catch(function () {})
           }).catch(function (err) {
             // 分片导入中途失败：已提交的片是完整的；保留弹窗，用户可用同一 runId 重试，
             // 已成功的片由服务端幂等回执直接返回、不会二次写盘。
@@ -3142,7 +3333,8 @@ function newImportRunId() {
             var text = t('importPartialFail').replace('{d}', String(writeActual)).replace('{t}', String(entries.length)) + t('errJoin') + errorText(err, t)
             showToast('error', text)
             setImportProgress(null)
-            return refreshRef.current()
+            // 已报 partial-fail：刷新失败再兜底一次，避免叠加 writeFailure 误报。
+            return refreshRef.current().catch(function () {})
           }).then(function () {
             return refreshWorkspaces()
           }).catch(writeFailure).then(function () { setBusy(false) })
@@ -3244,7 +3436,7 @@ function newImportRunId() {
               statusFilter !== 'all' ? h('button', { className: 'dm_btn dm_btn_mini', onClick: function () { changeStatus('all') } }, t('hiddenViewAll')) : null)
             : null
           if (listError) {
-            return h('div', { className: 'dm_empty' },
+            return h('div', { className: 'dm_empty', role: 'alert' },
               h(Icon, { name: 'alert', size: 28, style: { color: 'var(--dm-danger)', marginBottom: 10 } }),
               h('div', null, t('listError') + t('labelSep') + listError),
               h('button', { className: 'dm_btn', style: { marginTop: 12 }, onClick: function () { focusPage(); refreshEntries() } }, h(Icon, { name: 'undo', size: 13 }), t('retry')))
@@ -3360,6 +3552,7 @@ function newImportRunId() {
                   h('button', { className: 'dm_btn dm_toolbtn', onClick: handleExport, disabled: busy || phase !== 'ready' }, h(Icon, { name: 'export', size: 15 }), t('export')),
                   h('button', { className: 'dm_btn dm_toolbtn', onClick: function () { if (fileInputRef.current) fileInputRef.current.click() }, disabled: busy || phase !== 'ready' }, h(Icon, { name: 'import', size: 15 }), t('import')),
                   h('button', { className: 'dm_btn dm_toolbtn', onClick: handleAudit, disabled: busy || phase !== 'ready' }, h(Icon, { name: 'copy', size: 15 }), t('audit')),
+                  h('button', { className: 'dm_btn dm_toolbtn', 'aria-label': t('refreshList'), title: t('refreshList'), onClick: function () { refreshRef.current().catch(function () {}) }, disabled: busy || phase !== 'ready' }, h(Icon, { name: 'undo', size: 15 }), t('refreshList')),
                   h('input', { ref: fileInputRef, type: 'file', accept: '.json,application/json', style: { display: 'none' }, onChange: handleImportFile }))),
               unknownWorkspaces.length > 0 ? h('div', { className: 'dm_hint', style: { margin: '8px 0 0' } }, t('unknownWorkspaceHint')) : null,
               // 批量选择浮栏放在列表之前（视觉仍是 fixed 底部）：键盘 Tab 顺序靠近工具栏，
@@ -3385,7 +3578,7 @@ function newImportRunId() {
             })),
           editor ? h(EditorModal, { draft: editor, setDraft: setEditor, t: t, workspaceTarget: workspaceTarget, busy: busy, onSave: handleSave, onClose: function () { if (!busy) setEditor(null) } }) : null,
           confirm ? h(ConfirmModal, { entries: confirm.entries, t: t, busy: busy, onConfirm: handleDelete, onClose: function () { if (!busy) setConfirm(null) } }) : null,
-          importPlan ? h(ImportModal, { plan: importPlan.plan, mode: importPlan.mode, progress: importProgress, confirming: importConfirming, t: t, busy: busy, onStop: function () { importStopRef.current = true }, onConfirm: confirmImport, onModeChange: changeImportMode, onClose: function () { if (!busy) setImportPlan(null) } }) : null,
+          importPlan ? h(ImportModal, { plan: importPlan.plan, mode: importPlan.mode, progress: importProgress, confirming: importConfirming, previewing: importPreviewing, t: t, busy: busy, onStop: function () { importStopRef.current = true }, onConfirm: confirmImport, onModeChange: changeImportMode, onClose: function () { if (!busy) setImportPlan(null) } }) : null,
           audit ? h(AuditModal, { pairs: audit.pairs, t: t, busy: busy, onSupersede: handleSupersedePair, onDismiss: dismissPair, onClose: function () { if (!busy) setAudit(null) } }) : null,
           toast ? h(Toast, { key: toast.id, toast: toast, t: t, raised: selected.length > 0, onClose: dismissToast, actionRef: toastActionRef, onPause: pauseToast, onResume: resumeToast }) : null)
       }

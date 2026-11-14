@@ -19,7 +19,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { withLock } from '../lib/lock.js'
 import { atomicWrite } from '../lib/store.js'
-import { snapshotDataRoot, diffSnapshots } from './data-snapshot.mjs'
+import { snapshotDataRoot, diffSnapshots, evacuateOldestBackup, restoreEvacuatedBackups } from './data-snapshot.mjs'
 import { acquireVerifyLock } from './verify-lock.mjs'
 import { startCleanupWatchdog } from './watchdog.mjs'
 
@@ -59,20 +59,21 @@ async function check(name, fn) {
   if (FAIL_AT && name.includes(FAIL_AT)) throw new Error(`fail-at 注入：${name}`)
 }
 
-async function req(method, path, { body, token, base = API } = {}) {
+async function req(method, path, { body, token, base = API, timeoutMs = 30000 } = {}) {
   const headers = { 'Content-Type': 'application/json' }
   if (token) headers['X-RPC-Key'] = token
-  const res = await fetch(`${base}${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) })
+  // O8：宿主冻结时不得永久挂起（连中断路径都卡死）；导入类长操作单独放宽。
+  const res = await fetch(`${base}${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs) })
   let json = null
   try { json = await res.json() } catch { /* non-JSON */ }
   return { status: res.status, json }
 }
 
 // 原样发送 body（用于验证非对象 JSON / 坏 JSON 的路由错误映射）。
-async function reqRaw(method, path, { raw, token, base = API } = {}) {
+async function reqRaw(method, path, { raw, token, base = API, timeoutMs = 30000 } = {}) {
   const headers = { 'Content-Type': 'application/json' }
   if (token) headers['X-RPC-Key'] = token
-  const res = await fetch(`${base}${path}`, { method, headers, body: raw })
+  const res = await fetch(`${base}${path}`, { method, headers, body: raw, signal: AbortSignal.timeout(timeoutMs) })
   let json = null
   try { json = await res.json() } catch { /* non-JSON */ }
   return { status: res.status, json }
@@ -93,17 +94,41 @@ function clientRev() {
 const created = []
 let statusRoot = ''
 let verifyLock = null
+// O3/O10：疏散备份与非标记工件登记，正常清理与看门狗中断路径都据此恢复。
+let evacuatedBackups = []
+const liveManifestPath = path.join(tmpdir(), `dsh-memory-live-watchdog-${process.pid}.json`)
+function updateWatchdogManifest(patch) {
+  try {
+    const m = JSON.parse(readFileSync(liveManifestPath, 'utf8'))
+    Object.assign(m, patch)
+    writeFileSync(liveManifestPath, JSON.stringify(m, null, 2), 'utf8')
+  } catch { /* 看门狗未启动时忽略 */ }
+}
+function registerArtifact(p) {
+  try {
+    const m = JSON.parse(readFileSync(liveManifestPath, 'utf8'))
+    const list = Array.isArray(m.artifacts) ? m.artifacts : []
+    if (!list.includes(p)) list.push(p)
+    m.artifacts = list
+    writeFileSync(liveManifestPath, JSON.stringify(m, null, 2), 'utf8')
+  } catch { /* ignore */ }
+}
 
-/** 启动时清理上次中断残留（只认 __gui_/__livecheck_ 内容标记的测试条目）。 */
+/** 启动时清理上次中断残留（只认 __gui_/__livecheck_ 内容标记的测试条目）。
+ *  O7：分页清完（此前 limit=200 无分页，大量残留会被基线吸收后零残留自检假绿）。 */
 async function cleanupResidueMarkers(token) {
-  const ids = []
   for (const marker of ['__gui_', '__livecheck_']) {
-    const { json } = await req('GET', `/entries?query=${encodeURIComponent(marker)}&scope=all&limit=200&include_superseded=true&include_expired=true&include_archived=true`)
-    for (const entry of json?.entries || []) {
-      if (String(entry.content || '').includes(marker)) ids.push(entry.id)
+    for (;;) {
+      const { json } = await req('GET', `/entries?query=${encodeURIComponent(marker)}&scope=all&limit=200&include_superseded=true&include_expired=true&include_archived=true`)
+      const ids = []
+      for (const entry of json?.entries || []) {
+        if (String(entry.content || '').includes(marker)) ids.push(entry.id)
+      }
+      if (ids.length === 0) break
+      await req('POST', '/forget', { token, body: { ids } })
+      if ((json?.entries || []).length < 200) break
     }
   }
-  if (ids.length > 0) await req('POST', '/forget', { token, body: { ids } })
 }
 
 async function main() {
@@ -183,6 +208,8 @@ async function main() {
         if (!backupsSnapshot.includes(name)) rmSync(path.join(dir, name), { force: true })
       }
     } catch { /* ignore */ }
+    // O3：恢复被轮转删除的疏散备份（保留份数临界保护）。
+    try { restoreEvacuatedBackups(statusRoot, evacuatedBackups) } catch { /* ignore */ }
     try { if (verifyLock) verifyLock.release() } catch { /* ignore */ }
     try { watchdog?.stop() } catch { /* ignore */ }
   }
@@ -201,7 +228,7 @@ async function main() {
       markers: ['__gui_', '__livecheck_'],
       settingsBefore: readSettingsRaw(statusRoot),
       backupsBefore: backupsSnapshot,
-    }, { manifestPath: path.join(tmpdir(), `dsh-memory-live-watchdog-${process.pid}.json`), logPath: path.join(tmpdir(), `dsh-memory-live-watchdog-${process.pid}.log`) })
+    }, { manifestPath: liveManifestPath, logPath: path.join(tmpdir(), `dsh-memory-live-watchdog-${process.pid}.log`) })
   } catch { /* 看门狗启动失败不阻断验证 */ }
   const abortAndExit = (code, err) => {
     if (err !== undefined) console.error('live-check 中断：', err)
@@ -349,8 +376,10 @@ async function main() {
 
   await check('未知异常统一 internal 且不泄漏本机路径（0.24.24）', async () => {
     const lock = path.join(statusRoot, '.lock-settings')
+    // O5：只删自己创建的锁——宿主若正持锁（EEXIST）不得误删。
+    let createdLock = false
+    try { mkdirSync(lock); createdLock = true } catch (e) { if (e?.code !== 'EEXIST') throw e }
     try {
-      mkdirSync(lock, { recursive: true })
       const r = await req('POST', '/settings', { token, body: { autoInject: true } })
       const body = JSON.stringify(r.json ?? {})
       // 0.24.34：锁争用是可重试的 busy → 503，而不是伪装成未知内部错误。
@@ -359,7 +388,7 @@ async function main() {
       ok('错误体不回传数据根路径', !body.includes(statusRoot), body.slice(0, 200))
       ok('错误体不含锁/临时文件名', !/\.lock-|\.tmp-/.test(body), body.slice(0, 200))
     } finally {
-      try { rmSync(lock, { recursive: true, force: true }) } catch { /* ignore */ }
+      if (createdLock) try { rmSync(lock, { recursive: true, force: true }) } catch { /* ignore */ }
     }
     const back = await req('GET', '/settings', { token })
     ok('锁释放后设置可读', back.status === 200, `got ${back.status}`)
@@ -420,7 +449,7 @@ async function main() {
       ok('update workspace HTTP 200', up.status === 200, `got ${up.status}`)
       const after = await req('GET', '/workspaces')
       const afterSeen = findKey(after.json)?.lastSeen
-      ok('lastSeen 被刷新', Boolean(afterSeen) && Boolean(beforeSeen) && afterSeen >= beforeSeen, `${beforeSeen} -> ${afterSeen}`)
+      ok('lastSeen 被刷新', Boolean(afterSeen) && Boolean(beforeSeen) && afterSeen > beforeSeen, `${beforeSeen} -> ${afterSeen}`)
     } finally {
       await req('POST', '/forget', { token, body: { id, workspace: wsCwd } })
     }
@@ -474,6 +503,7 @@ async function main() {
       ok('文件名权威（非 frontmatter id）', !(found.json?.entries ?? []).some((e) => e.id === 'm-deadbeef'))
       // 2) 坏文件可按 id 删除。
       writeFileSync(brokenFile, 'not frontmatter', 'utf8')
+      registerArtifact(brokenFile) // O10：强杀时看门狗据此清理非标记工件
       const delBroken = await req('POST', '/forget', { token, body: { id: brokenId } })
       ok('损坏文件可按 id 删除', delBroken.status === 200 && delBroken.json?.result?.deleted === true, JSON.stringify(delBroken.json))
       ok('损坏文件已消失', !existsSync(brokenFile))
@@ -615,6 +645,10 @@ async function main() {
     const retentionNow = Number(settingsNow?.effective?.backupRetention) || 7
     const safeRetention = Math.max(retentionNow, backupsSnapshot.length + 2)
     await req('POST', '/settings', { token, body: { backupRetention: safeRetention } })
+    // O3：保留份数被 RETENTION_MAX=30 夹取——已有 ≥30 份插件备份时，触发备份会轮转
+    // 删掉用户最旧一份。先疏散最旧备份到临时目录，正常/中断路径都恢复。
+    evacuatedBackups = evacuateOldestBackup(statusRoot, path.join(tmpdir(), `dsh-memory-live-evac-${process.pid}`))
+    if (evacuatedBackups.length > 0) updateWatchdogManifest({ evacuatedBackups })
     const beforeTrigger = listBackups().length
     // 用户手放的 JSON 不应被轮转删除（0.24.18：只轮转插件自己的时间戳备份）。
     const manualFile = path.join(statusRoot, 'backups', 'user-manual-note.json')
@@ -633,8 +667,10 @@ async function main() {
 
   await check('备份在导入锁期间快速失败（busy，0.24.21）', async () => {
     const lock = path.join(statusRoot, '.lock-import')
+    // O5：只删自己创建的锁。
+    let createdLock = false
+    try { mkdirSync(lock); createdLock = true } catch (e) { if (e?.code !== 'EEXIST') throw e }
     try {
-      mkdirSync(lock, { recursive: true })
       const started = Date.now()
       const r = await req('POST', '/backup', { token, body: {} })
       const elapsed = Date.now() - started
@@ -642,7 +678,7 @@ async function main() {
       ok('backup busy code=busy', r.json?.code === 'busy', JSON.stringify(r.json))
       ok('backup busy 快速返回（≤3s）', elapsed < 3000, `${elapsed}ms`)
     } finally {
-      try { rmSync(lock, { recursive: true, force: true }) } catch { /* ignore */ }
+      if (createdLock) try { rmSync(lock, { recursive: true, force: true }) } catch { /* ignore */ }
     }
   })
 
@@ -698,6 +734,7 @@ async function main() {
       mkdirSync(path.join(statusRoot, 'workspaces'), { recursive: true })
       ok('阻塞路径可用', !existsSync(blocker))
       writeFileSync(blocker, 'blocker', 'utf8')
+      registerArtifact(blocker) // O10：强杀时看门狗据此清理非标记工件
       const r = await req('POST', '/import', { token, body: { entries: [
         { content: `${RUN} 原子全局`, scope: 'global' },
         { content: `${RUN} 原子工作区`, scope: 'workspace', workspaceKey: key },

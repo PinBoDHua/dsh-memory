@@ -7,7 +7,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { resolveBenchRebuild } from '../scripts/bench.mjs'
+import { resolveBenchRebuild, resolveBenchWriteMode } from '../scripts/bench.mjs'
 
 function tmpDir(prefix = 'dsh-memtest-') {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix))
@@ -44,4 +44,18 @@ test('non-bench directory is never touched without force', (t) => {
   assert.throws(() => resolveBenchRebuild({ dir, regen: true }), (err) => err.code === 'refuse')
   assert.equal(resolveBenchRebuild({ dir, regen: true, force: true }), 'build')
   assert.equal(fs.readFileSync(path.join(dir, 'important.txt'), 'utf8'), 'keep', 'decision must not delete anything')
+})
+
+test('O2: reuse without marker is read-only (must not delete real memories)', (t) => {
+  const dir = tmpDir('user-data-')
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  fs.mkdirSync(path.join(dir, 'global'), { recursive: true })
+  // 无 marker/基准目录名的真实数据根：reuse 但只读。
+  assert.equal(resolveBenchRebuild({ dir }), 'reuse')
+  assert.equal(resolveBenchWriteMode({ dir, mode: 'reuse' }), 'read-only')
+  // 带 marker 的基准根：可写（forget/flush 测量）。
+  fs.writeFileSync(path.join(dir, '.bench-root'), 'generated', 'utf8')
+  assert.equal(resolveBenchWriteMode({ dir, mode: 'reuse' }), 'read-write')
+  // build 模式总是可写。
+  assert.equal(resolveBenchWriteMode({ dir, mode: 'build' }), 'read-write')
 })

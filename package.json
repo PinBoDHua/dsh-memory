@@ -1,6 +1,6 @@
 {
   "name": "dsh-memory",
-  "version": "0.24.38",
+  "version": "0.24.39",
   "description": "记忆 —— DSH 跨会话长期记忆插件：自动沉淀用户偏好、项目事实与重要决策，新会话按分类优先与字符预算自动注入；相关度检索（分页＋隐藏态计数＋来源/标签过滤）；写入时相似记忆提示（避免并存矛盾）、同内容归档/过期复活；面板相似记忆查重治理＋注入召回预览＋取代链双向导航＋作用域感知导出＋检索隐藏态提示＋列表注入徽章＋导入合并模式＋来源/标签/状态服务端过滤；「记忆星丛」面板含记忆与设置双标签：统计分布、分类色轨卡片、标签直达、批量选择、删除撤销、导出导入，以及注入/隐私/存储备份/面板偏好设置（settings.json 实时生效、自动备份）；Markdown 一事一文件、手工可编辑，密码/密钥/token 永不写入。Cross-session long-term memory for DeepSeek Harness with a Web management panel.",
   "type": "module",
   "main": "index.js",
@@ -54,7 +54,7 @@
     "lib",
     "client",
     "locale/*.json",
-    "docs",
+    "docs/DETAIL.md",
     "scripts",
     "tests",
     "cordis.patch.yml",

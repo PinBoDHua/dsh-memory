@@ -17,6 +17,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { listEverywhere, forgetEntries, pruneAccessLedger } from '../lib/store.js'
+import { restoreEvacuatedBackups } from './data-snapshot.mjs'
 
 export const MARKER_PREFIXES = ['__gui_', '__livecheck_']
 export const VERIFY_LOCK_NAMES = ['.lock-verify', '.lock-settings', '.lock-import']
@@ -36,15 +37,43 @@ function parentAlive(pid) {
   }
 }
 
+/** 读锁 owner 第一行 pid（verify-lock 新格式 pid\nnonce；旧格式仅 pid）。 */
+function lockOwnerPid(target) {
+  try {
+    const raw = fs.readFileSync(path.join(target, 'owner'), 'utf8').trim()
+    const pid = Number(raw.split('\n')[0])
+    return Number.isInteger(pid) && pid > 0 ? pid : null
+  } catch {
+    return null
+  }
+}
+
+/** 删锁前校验归属（第七轮审计 O5）：活 owner 的锁绝不删（宿主可能正持锁导入/写设置）。 */
 function removeLockDirs(root) {
   const removed = []
   for (const name of VERIFY_LOCK_NAMES) {
     const target = path.join(root, name)
     try {
-      if (fs.existsSync(target)) {
-        fs.rmSync(target, { recursive: true, force: true })
-        removed.push(name)
+      if (!fs.existsSync(target)) continue
+      if (name === '.lock-verify') {
+        const pid = lockOwnerPid(target)
+        if (pid !== null && parentAlive(pid)) continue // 活 owner：不删
+        if (pid === null) {
+          // 无 owner 文件：按 mtime 陈旧判据（10min），新鲜锁不动。
+          let stale = false
+          try { stale = Math.abs(Date.now() - fs.statSync(target).mtimeMs) > 10 * 60_000 } catch { continue }
+          if (!stale) continue
+        }
+        // pid 已死：崩溃残留，删除。
+      } else {
+        // lib 锁（.lock-settings/.lock-import）owner 是 nonce：仅陈旧（>10s）才删，
+        // 新鲜锁可能正被宿主持有。
+        let stale = false
+        try { stale = Math.abs(Date.now() - fs.statSync(target).mtimeMs) > 10_000 } catch { continue }
+        if (!stale) continue
       }
+      fs.rmSync(target, { recursive: true, force: true })
+      removed.push(name)
     } catch { /* ignore */ }
   }
   return removed
@@ -99,17 +128,26 @@ export function runWatchdogOnce(manifest) {
     const content = String(entry?.content ?? '')
     if (markers.some((prefix) => content.startsWith(prefix))) ids.push(entry.id)
   }
-  let forgotten = { deleted: [], notFound: [] }
+  let forgotten = { deleted: [], notFound: [], failed: [] }
   if (ids.length > 0) {
     try { forgotten = forgetEntries(root, ids) } catch { /* 单个损坏文件不应阻断后续恢复 */ }
     try { pruneAccessLedger(root) } catch { /* ignore */ }
   }
   const settings = restoreSettings(root, manifest.settingsBefore)
   const backups = pruneNewBackups(root, manifest.backupsBefore)
+  // O3：恢复被轮转删除的疏散备份（备份用例前复制到临时目录的最旧一份）。
+  const evacuated = restoreEvacuatedBackups(root, manifest.evacuatedBackups)
+  // O10：删除登记的非标记磁盘工件（损坏文件/阻塞文件等，内容标记扫不到）。
+  const artifacts = []
+  for (const p of Array.isArray(manifest.artifacts) ? manifest.artifacts : []) {
+    try { fs.rmSync(p, { force: true }); artifacts.push(p) } catch { /* ignore */ }
+  }
   return {
-    entries: { matched: ids.length, deleted: forgotten.deleted?.length ?? 0 },
+    entries: { matched: ids.length, deleted: forgotten.deleted?.length ?? 0, failed: forgotten.failed?.length ?? 0 },
     settings,
     backups,
+    evacuated,
+    artifacts,
     locks,
   }
 }
@@ -137,6 +175,8 @@ export function startCleanupWatchdog(manifest, opts = {}) {
     stop() {
       try { child.kill() } catch { /* ignore */ }
       try { fs.rmSync(manifestPath, { force: true }) } catch { /* ignore */ }
+      // O14：日志一并清理，不在 TEMP 永久累积。
+      try { if (opts.logPath) fs.rmSync(opts.logPath, { force: true }) } catch { /* ignore */ }
     },
   }
 }
@@ -155,18 +195,31 @@ function spawnWatchdog(manifestPath) {
 
 async function runLoop(manifestPath) {
   const { setTimeout: delay } = await import('node:timers/promises')
+  let attempts = 0
   for (;;) {
     const manifest = readJson(manifestPath)
     if (!manifest) return // 父进程正常收尾已停掉看门狗并删除 manifest
     if (manifest.parentPid && !parentAlive(manifest.parentPid)) {
+      // O6：清理失败（抛错 / 条目 failed / settings 恢复失败）保留 manifest 退避重试，
+      // 不再「失败一次即永久放弃」；成功或达上限才删 manifest。
+      let result = null
+      let failed = false
       try {
-        const result = runWatchdogOnce(manifest)
-        if (manifest.logPath) {
-          try { fs.writeFileSync(manifest.logPath, JSON.stringify({ at: new Date().toISOString(), ...result }, null, 2), 'utf8') } catch { /* ignore */ }
-        }
-      } catch { /* 下一轮再试（例如宿主正忙） */ }
-      try { fs.rmSync(manifestPath, { force: true }) } catch { /* ignore */ }
-      return
+        result = runWatchdogOnce(manifest)
+        failed = (result?.entries?.failed ?? 0) > 0 || result?.settings === 'failed'
+      } catch {
+        failed = true
+      }
+      if (manifest.logPath) {
+        try { fs.writeFileSync(manifest.logPath, JSON.stringify({ at: new Date().toISOString(), attempts, failed, ...result }, null, 2), 'utf8') } catch { /* ignore */ }
+      }
+      if (!failed || attempts >= 5) {
+        try { fs.rmSync(manifestPath, { force: true }) } catch { /* ignore */ }
+        return
+      }
+      attempts += 1
+      await delay(Math.min(1500 * 2 ** attempts, 15_000))
+      continue
     }
     await delay(1500)
   }

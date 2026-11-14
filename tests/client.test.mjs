@@ -8,7 +8,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import helpers from '../client/client.js'
 
-const { validateDraft, groupEntries, nextToken, entriesParams, buildEntriesQuery, workspaceOptions, errorKeyFor, shouldQueueToast, partitionSettled, parseTags, unwrapResult, settingsStatusNext, savedToastKey, exportParams, defaultViewSelection, sectionCountsExact, chunkEntries, chunkEntriesPreservingLinks, aggregateImportPlans, shouldFocusToastAction, categoryChipCount, importRejectText, importWriteCount, rebaseRejectedIndexes, parseImportText, validateImportDoc, importSummary, pageSlice, entryDetailRows, relativeTime, formatBytes, isExpired, statusOf, originOf, statusQueryFlags } = helpers
+const { validateDraft, groupEntries, nextToken, entriesParams, buildEntriesQuery, workspaceOptions, errorKeyFor, shouldQueueToast, partitionSettled, parseTags, unwrapResult, settingsStatusNext, savedToastKey, exportParams, defaultViewSelection, sectionCountsExact, chunkEntries, chunkEntriesPreservingLinks, aggregateImportPlans, shouldFocusToastAction, categoryChipCount, importRejectText, importWriteCount, rebaseRejectedIndexes, parseImportText, validateImportDoc, importSummary, pageSlice, entryDetailRows, relativeTime, formatBytes, isExpired, statusOf, originOf, statusQueryFlags, settleBulkDelete, idSetOf, toastRemainingMs, shouldResumeToast, settingsSignature, shouldAutoRefresh } = helpers
 
 test('validateDraft accepts a complete draft and rejects bad ones', () => {
   assert.deepEqual(validateDraft({ content: '一条事实', category: 'fact' }), { ok: true })
@@ -544,4 +544,94 @@ test('statusQueryFlags maps hidden statuses to include_* params', () => {
 
 test('statusQueryFlags: all reveals every hidden state', () => {
   assert.deepEqual(statusQueryFlags('all'), { include_superseded: true, include_expired: true, include_archived: true })
+})
+
+// ===== 第 7 轮审计 C1/C2：批量删除按宿主 {ids, notFound, failed} 归因 + 原型键安全集合 =====
+
+test('settleBulkDelete attributes host failed→busy and notFound→not-found, ids stay undoable', () => {
+  const targets = [{ id: 'm-a' }, { id: 'm-b' }, { id: 'm-c' }, { id: 'm-d' }]
+  const out = settleBulkDelete(targets, { deleted: 1, ids: ['m-a'], notFound: ['m-b'], failed: ['m-c'] })
+  assert.deepEqual(out.ok.map((e) => e.id), ['m-a'], '成功项进撤销集')
+  assert.equal(out.failed.length, 3)
+  assert.equal(out.failed[0].item.id, 'm-b')
+  assert.equal(out.failed[0].error.code, 'not-found')
+  assert.equal(out.failed[1].item.id, 'm-c')
+  assert.equal(out.failed[1].error.code, 'busy', '文件被占用归因 busy 而非 not-found')
+  assert.equal(out.failed[2].item.id, 'm-d')
+  assert.equal(out.failed[2].error.code, 'not-found', '未归因项兜底 not-found')
+  assert.equal(errorKeyFor(out.failed[1].error), 'errBusy')
+  assert.equal(errorKeyFor(out.failed[0].error), 'errNotFound')
+  assert.deepEqual(settleBulkDelete([], { ids: ['x'] }), { ok: [], failed: [] })
+  assert.deepEqual(settleBulkDelete(null, null), { ok: [], failed: [] })
+})
+
+test('settleBulkDelete keeps __proto__/constructor ids (prototype setter must not swallow them)', () => {
+  const targets = [{ id: '__proto__' }, { id: 'constructor' }, { id: 'hasOwnProperty' }]
+  const out = settleBulkDelete(targets, { ids: ['__proto__'], notFound: ['constructor'], failed: ['hasOwnProperty'] })
+  assert.deepEqual(out.ok.map((e) => e.id), ['__proto__'], '删除成功的原型键 id 不得漏出撤销集')
+  assert.equal(out.failed.length, 2)
+  assert.equal(out.failed[0].item.id, 'constructor')
+  assert.equal(out.failed[0].error.code, 'not-found')
+  assert.equal(out.failed[1].item.id, 'hasOwnProperty')
+  assert.equal(out.failed[1].error.code, 'busy')
+  const none = settleBulkDelete(targets, {})
+  assert.equal(none.ok.length, 0)
+  assert.equal(none.failed.length, 3, '空结果不静默丢项')
+})
+
+test('idSetOf builds a null-prototype membership set for selection sync', () => {
+  const set = idSetOf([{ id: '__proto__' }, { id: 'constructor' }, { id: 'toString' }, { id: 'm-1' }])
+  assert.equal(Object.getPrototypeOf(set), null)
+  assert.equal(set['__proto__'], true, '选择同步不得吞掉原型键 id')
+  assert.equal(set['constructor'], true)
+  assert.equal(set['toString'], true)
+  assert.equal(set['m-1'], true)
+  assert.equal(set['m-absent'], undefined)
+  const empty = idSetOf(null)
+  assert.equal(Object.getPrototypeOf(empty), null)
+  assert.equal(empty['constructor'], undefined, '普通对象会继承 constructor，必须无原型')
+})
+
+// ===== 第 7 轮审计 C3：toast 暂停/恢复状态机（重复暂停不扣减、焦点在内不恢复） =====
+
+test('toastRemainingMs freezes elapsed at pause; repeated pauses do not double-deduct', () => {
+  // 未暂停：按 now 扣减已走时间。
+  assert.equal(toastRemainingMs(1000, null, 3000, 6000), 4000)
+  // 暂停后 elapsed 冻结在 pausedAt：now 再大也不继续扣。
+  assert.equal(toastRemainingMs(1000, 2000, 2000, 6000), 5000)
+  assert.equal(toastRemainingMs(1000, 2000, 9000, 6000), 5000)
+  // 重复暂停（同一 pausedAt）结果不变 → 不会把 6s 窗口蚕食到 300ms。
+  assert.equal(toastRemainingMs(1000, 2000, 99999, 6000), toastRemainingMs(1000, 2000, 2000, 6000))
+  // 下限 300ms；时钟回拨不产生负 elapsed。
+  assert.equal(toastRemainingMs(0, null, 9000, 6000), 300)
+  assert.equal(toastRemainingMs(5000, null, 1000, 6000), 6000)
+  assert.equal(toastRemainingMs(1000, undefined, 2000, 6000), 5000, 'pausedAt 缺省等同未暂停')
+})
+
+test('shouldResumeToast only resumes a paused toast when focus has left it', () => {
+  assert.equal(shouldResumeToast(true, false), true)
+  assert.equal(shouldResumeToast(true, true), false, '焦点仍在吐司内（键盘停在撤销按钮）不得恢复')
+  assert.equal(shouldResumeToast(false, false), false, '未暂停无需恢复（幂等）')
+  assert.equal(shouldResumeToast(false, true), false)
+})
+
+// ===== 第 7 轮审计 C13/C8：设置内容签名（备份不换内容不重扫）+ 外部写入刷新节流 =====
+
+test('settingsSignature is content-based: equal effective in new objects keeps recall stable', () => {
+  const a = { effective: { autoInject: true, injectionBudgetChars: 4000 } }
+  const b = { effective: { autoInject: true, injectionBudgetChars: 4000 } }
+  assert.notEqual(a, b, '前提：两个不同引用')
+  assert.equal(settingsSignature(a), settingsSignature(b), '内容相同 → 签名相同，不触发重扫')
+  assert.notEqual(settingsSignature(a), settingsSignature({ effective: { autoInject: false, injectionBudgetChars: 4000 } }))
+  assert.equal(settingsSignature(null), '')
+  assert.equal(settingsSignature({}), '')
+  assert.equal(settingsSignature(undefined), '')
+})
+
+test('shouldAutoRefresh throttles focus/visibility refreshes to a 30s gap', () => {
+  assert.equal(shouldAutoRefresh(0, 1000), true, '首次聚焦允许刷新')
+  assert.equal(shouldAutoRefresh(1000, 30999), false, '不足 30s 不刷新')
+  assert.equal(shouldAutoRefresh(1000, 31000), true, '满 30s 允许刷新')
+  assert.equal(shouldAutoRefresh(1000, 5000, 2000), true, '自定义间隔')
+  assert.equal(shouldAutoRefresh(NaN, 1000), true, '无效上次时间视为首次')
 })

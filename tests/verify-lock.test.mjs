@@ -13,11 +13,23 @@ function tmpRoot() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-memory-vlock-'))
 }
 
+// O13①：不假定某个真实 pid 必死（Windows 已退出进程仍可能响应 kill(0)，Linux 高
+// pid_max 可能复用）。用哨兵 pid + process.kill mock 确定性地模拟「owner 已死」。
+const DEAD_PID = 999999
+const realKill = process.kill
+process.kill = function (pid, sig) {
+  if (pid === DEAD_PID && (sig === 0 || sig === undefined)) {
+    const e = new Error('ESRCH: no such process'); e.code = 'ESRCH'; throw e
+  }
+  return realKill.call(process, pid, sig)
+}
+
 test('acquire/release creates and removes the lock directory', () => {
   const root = tmpRoot()
   const lock = acquireVerifyLock(root)
   assert.ok(fs.existsSync(path.join(root, VERIFY_LOCK_NAME)))
-  assert.equal(fs.readFileSync(path.join(lock.path, 'owner'), 'utf8'), String(process.pid))
+  // owner 第一行 pid，第二行 nonce（release 只删自己的锁）。
+  assert.equal(fs.readFileSync(path.join(lock.path, 'owner'), 'utf8').split('\n')[0], String(process.pid))
   lock.release()
   assert.equal(fs.existsSync(path.join(root, VERIFY_LOCK_NAME)), false)
 })
@@ -35,10 +47,11 @@ test('second concurrent acquire fails fast with code=busy', () => {
   again.release()
 })
 
-test('stale lock self-heals after staleMs', () => {
+test('stale lock from a dead owner self-heals after staleMs', () => {
   const root = tmpRoot()
   const stale = path.join(root, VERIFY_LOCK_NAME)
   fs.mkdirSync(stale)
+  fs.writeFileSync(path.join(stale, 'owner'), String(DEAD_PID), 'utf8')
   const old = Date.now() - 60_000
   fs.utimesSync(stale, new Date(old), new Date(old))
   const lock = acquireVerifyLock(root, { staleMs: 1000 })
@@ -46,12 +59,24 @@ test('stale lock self-heals after staleMs', () => {
   lock.release()
 })
 
+test('O4: live owner with stale mtime is NOT stolen (heartbeat keeps it alive)', () => {
+  const root = tmpRoot()
+  const stale = path.join(root, VERIFY_LOCK_NAME)
+  fs.mkdirSync(stale)
+  // 活 owner（本进程）但 mtime 陈旧：不得抢锁（心跳失败也不剥夺运行中的脚本）。
+  fs.writeFileSync(path.join(stale, 'owner'), `${process.pid}\nsome-nonce`, 'utf8')
+  const old = Date.now() - 60_000
+  fs.utimesSync(stale, new Date(old), new Date(old))
+  assert.throws(() => acquireVerifyLock(root, { staleMs: 1000 }), (err) => err.code === 'busy')
+  assert.ok(fs.existsSync(stale), 'live-owner lock must remain')
+  fs.rmSync(stale, { recursive: true, force: true })
+})
+
 test('lock from a dead owner process self-heals immediately', () => {
   const root = tmpRoot()
   const stale = path.join(root, VERIFY_LOCK_NAME)
   fs.mkdirSync(stale)
-  // 999999 在 Windows 上不是合法进程 id，process.kill(pid,0) 会抛 ESRCH。
-  fs.writeFileSync(path.join(stale, 'owner'), '999999', 'utf8')
+  fs.writeFileSync(path.join(stale, 'owner'), String(DEAD_PID), 'utf8')
   const lock = acquireVerifyLock(root, { staleMs: 10 * 60 * 1000 })
   assert.ok(lock)
   lock.release()
