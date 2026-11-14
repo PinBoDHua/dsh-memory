@@ -30,8 +30,10 @@ function seed(root) {
   const markerLive = service.save({ content: '__livecheck_残留测试', scope: 'global' })
   const user = service.save({ content: '真实用户记忆', scope: 'global' })
   fs.mkdirSync(path.join(root, 'backups'), { recursive: true })
-  fs.writeFileSync(path.join(root, 'backups', 'dsh-memory-baseline.json'), '{}', 'utf8')
-  fs.writeFileSync(path.join(root, 'backups', 'dsh-memory-test-new.json'), '{}', 'utf8')
+  // O7：只轮转插件自己的时间戳备份；用户手放文件绝不动。用合法插件备份名。
+  fs.writeFileSync(path.join(root, 'backups', 'dsh-memory-2026-01-01T00-00-00-000Z.json'), '{}', 'utf8')
+  fs.writeFileSync(path.join(root, 'backups', 'dsh-memory-2026-01-02T00-00-00-000Z.json'), '{}', 'utf8')
+  fs.writeFileSync(path.join(root, 'backups', 'user-manual-note.json'), '{"user":true}', 'utf8')
   fs.writeFileSync(path.join(root, 'settings.json'), '{"autoInject":false}', 'utf8')
   const dead = String(DEAD_PID)
   const old = new Date(Date.now() - 60_000)
@@ -52,18 +54,37 @@ test('watchdog removes test markers, restores settings/backups and clears locks'
     root,
     markers: ['__gui_', '__livecheck_'],
     settingsBefore: { exists: false },
-    backupsBefore: ['dsh-memory-baseline.json'],
+    backupsBefore: ['dsh-memory-2026-01-01T00-00-00-000Z.json'],
+    startedAt: Date.now() - 60_000,
   })
   assert.equal(result.entries.deleted, 2)
   assert.equal(result.settings, 'removed')
-  assert.deepEqual(result.backups, ['dsh-memory-test-new.json'])
+  assert.deepEqual(result.backups, ['dsh-memory-2026-01-02T00-00-00-000Z.json'])
   assert.deepEqual(result.locks.sort(), ['.lock-import', '.lock-settings', '.lock-verify'])
   const after = createMemoryService({ root }).list({ scope: 'global' })
   assert.deepEqual(after.map((e) => e.id).sort(), [user.entry.id], 'only real user entry remains')
-  assert.deepEqual(fs.readdirSync(path.join(root, 'backups')), ['dsh-memory-baseline.json'])
+  const backupsLeft = fs.readdirSync(path.join(root, 'backups')).sort()
+  assert.deepEqual(backupsLeft, ['dsh-memory-2026-01-01T00-00-00-000Z.json', 'user-manual-note.json'], 'baseline backup + user manual file kept (O7)')
   assert.equal(fs.existsSync(path.join(root, 'settings.json')), false)
   assert.deepEqual(fs.readdirSync(root).filter((n) => n.startsWith('.lock')), [])
   assert.ok(marker.entry.id && markerLive.entry.id)
+})
+
+test('O3: a thrown forgetEntries batch counts as failed (watchdog must retry, not delete manifest)', (t) => {
+  const root = tmpRoot()
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  seed(root)
+  // 让写锁被「另一进程」持有：forgetEntries 获取 .lock-write 超时抛错。
+  // 预先创建新鲜锁目录即可（withLock 等待 3s 后抛 code=busy）。
+  fs.mkdirSync(path.join(root, '.lock-write'))
+  try {
+    const result = runWatchdogOnce({ root, markers: ['__gui_', '__livecheck_'], backupsBefore: [] })
+    assert.equal(result.entries.matched, 2)
+    assert.equal(result.entries.deleted, 0)
+    assert.equal(result.entries.failed, 2, 'thrown batch must be reported as failed (not silently "cleaned")')
+  } finally {
+    fs.rmSync(path.join(root, '.lock-write'), { recursive: true, force: true })
+  }
 })
 
 test('watchdog restores a pre-existing settings baseline verbatim', (t) => {

@@ -84,7 +84,14 @@ async function connect() {
 }
 const send = (method, params = {}) => new Promise((resolve, reject) => {
   const id = ++nextId
-  pending.set(id, { resolve, reject })
+  // O10（第九轮审计）：Edge 崩溃/挂起时不得永久挂起（与 gui-check 同一 30s 超时口径）。
+  const timer = setTimeout(() => {
+    if (pending.has(id)) { pending.delete(id); reject(new Error(`CDP ${method} 超时 / timed out`)) }
+  }, 30000)
+  pending.set(id, {
+    resolve: (v) => { clearTimeout(timer); resolve(v) },
+    reject: (e) => { clearTimeout(timer); reject(e) },
+  })
   ws.send(JSON.stringify({ id, method, params }))
 })
 async function evaluate(expression) {

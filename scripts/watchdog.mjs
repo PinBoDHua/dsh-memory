@@ -17,7 +17,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { listEverywhere, forgetEntries, pruneAccessLedger } from '../lib/store.js'
-import { restoreEvacuatedBackups } from './data-snapshot.mjs'
+import { restoreEvacuatedBackups, PLUGIN_BACKUP_PATTERN } from './data-snapshot.mjs'
 
 export const MARKER_PREFIXES = ['__gui_', '__livecheck_']
 export const VERIFY_LOCK_NAMES = ['.lock-verify', '.lock-settings', '.lock-import']
@@ -97,14 +97,23 @@ function restoreSettings(root, settingsBefore) {
   }
 }
 
-function pruneNewBackups(root, backupsBefore) {
+function pruneNewBackups(root, backupsBefore, startedAt) {
   const baseline = new Set(Array.isArray(backupsBefore) ? backupsBefore : [])
   const dir = path.join(root, 'backups')
   const removed = []
   let names = []
   try { names = fs.readdirSync(dir) } catch { return removed }
+  const windowStart = Number(startedAt) > 0 ? Number(startedAt) - 1000 : null
   for (const name of names) {
     if (!name.endsWith('.json') || baseline.has(name)) continue
+    // O7（第九轮审计）：只删本次运行窗口内新生成的插件格式备份——按运行前基线整根
+    // 回滚会把用户中途手动放的 .json / 中途触发的历史备份一并删掉（diff 还失明）。
+    if (!PLUGIN_BACKUP_PATTERN.test(name)) continue
+    if (windowStart !== null) {
+      let fresh = false
+      try { fresh = fs.statSync(path.join(dir, name)).mtimeMs >= windowStart } catch { fresh = true }
+      if (!fresh) continue
+    }
     try {
       fs.rmSync(path.join(dir, name), { force: true })
       removed.push(name)
@@ -130,17 +139,25 @@ export function runWatchdogOnce(manifest) {
   }
   let forgotten = { deleted: [], notFound: [], failed: [] }
   if (ids.length > 0) {
-    try { forgotten = forgetEntries(root, ids) } catch { /* 单个损坏文件不应阻断后续恢复 */ }
+    try {
+      forgotten = forgetEntries(root, ids)
+    } catch {
+      // O3（第九轮审计）：整批抛错（写锁 busy/IO 失败）不得静默当作「已清理」——
+      // 旧实现吞掉异常后 failed=0，runLoop 判定成功、删 manifest 退出，强杀残留
+      // 从此无人再清。记为失败条目，交给 runLoop 退避重试。
+      forgotten = { deleted: [], notFound: [], failed: ids }
+    }
     try { pruneAccessLedger(root) } catch { /* ignore */ }
   }
   const settings = restoreSettings(root, manifest.settingsBefore)
-  const backups = pruneNewBackups(root, manifest.backupsBefore)
+  const backups = pruneNewBackups(root, manifest.backupsBefore, manifest.startedAt)
   // O3：恢复被轮转删除的疏散备份（备份用例前复制到临时目录的最旧一份）。
   const evacuated = restoreEvacuatedBackups(root, manifest.evacuatedBackups)
   // O10：删除登记的非标记磁盘工件（损坏文件/阻塞文件等，内容标记扫不到）。
   const artifacts = []
+  let artifactFailures = 0
   for (const p of Array.isArray(manifest.artifacts) ? manifest.artifacts : []) {
-    try { fs.rmSync(p, { force: true }); artifacts.push(p) } catch { /* ignore */ }
+    try { fs.rmSync(p, { force: true }); artifacts.push(p) } catch { artifactFailures += 1 }
   }
   return {
     entries: { matched: ids.length, deleted: forgotten.deleted?.length ?? 0, failed: forgotten.failed?.length ?? 0 },
@@ -148,13 +165,18 @@ export function runWatchdogOnce(manifest) {
     backups,
     evacuated,
     artifacts,
+    artifactFailures,
     locks,
   }
 }
 
 export function writeManifest(manifestPath, manifest) {
   fs.mkdirSync(path.dirname(manifestPath), { recursive: true })
-  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf8')
+  // O4（第九轮审计）：原子替换——非原子 truncate+write 窗口会让轮询的看门狗读到
+  // 半截 JSON 并误判「父进程已收尾」而退出。
+  const tmp = `${manifestPath}.tmp-${process.pid}`
+  fs.writeFileSync(tmp, JSON.stringify(manifest, null, 2), 'utf8')
+  fs.renameSync(tmp, manifestPath)
   return manifestPath
 }
 
@@ -196,17 +218,27 @@ function spawnWatchdog(manifestPath) {
 async function runLoop(manifestPath) {
   const { setTimeout: delay } = await import('node:timers/promises')
   let attempts = 0
+  let manifestMisses = 0
   for (;;) {
     const manifest = readJson(manifestPath)
-    if (!manifest) return // 父进程正常收尾已停掉看门狗并删除 manifest
+    if (!manifest) {
+      // O4（第九轮审计）：父进程收尾会「先杀看门狗再删 manifest」。单次读不到可能
+      // 落在 manifest 更新窗口（现父进程已改原子写，这里是双保险）：连续 3 次
+      // （约 4.5s）读不到才判定收尾退出；读到即重置计数。
+      manifestMisses += 1
+      if (manifestMisses >= 3) return
+      await delay(1500)
+      continue
+    }
+    manifestMisses = 0
     if (manifest.parentPid && !parentAlive(manifest.parentPid)) {
-      // O6：清理失败（抛错 / 条目 failed / settings 恢复失败）保留 manifest 退避重试，
-      // 不再「失败一次即永久放弃」；成功或达上限才删 manifest。
+      // O6：清理失败（抛错 / 条目 failed / settings 恢复失败 / 工件删除失败）保留
+      // manifest 退避重试，不再「失败一次即永久放弃」；成功或达上限才删 manifest。
       let result = null
       let failed = false
       try {
         result = runWatchdogOnce(manifest)
-        failed = (result?.entries?.failed ?? 0) > 0 || result?.settings === 'failed'
+        failed = (result?.entries?.failed ?? 0) > 0 || result?.settings === 'failed' || (result?.artifactFailures ?? 0) > 0
       } catch {
         failed = true
       }

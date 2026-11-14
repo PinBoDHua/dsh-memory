@@ -77,6 +77,29 @@ test('O3: below the ceiling nothing is evacuated', () => {
   fs.rmSync(tmp, { recursive: true, force: true })
 })
 
+test('O6: evacuation is sized by the effective retention (multiple rotations)', () => {
+  const root = makeRoot()
+  const dir = path.join(root, 'backups')
+  const names = []
+  for (let i = 0; i < 9; i += 1) {
+    const name = `dsh-memory-2026-02-${String(i + 1).padStart(2, '0')}T00-00-00-000Z.json`
+    fs.writeFileSync(path.join(dir, name), `{"n":${i}}`, 'utf8')
+    const t = new Date(Date.now() - (9 - i) * 60_000)
+    fs.utimesSync(path.join(dir, name), t, t)
+    names.push(name)
+  }
+  fs.writeFileSync(path.join(dir, 'user-manual.json'), '{"user":true}', 'utf8')
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-memory-evac-'))
+  // 9 份新建 + makeRoot 预置 1 份 = 10；触发 1 份后 11 份、保留 7 → 轮转删除 4 份最旧。
+  const evacuated = evacuateOldestBackup(root, tmp, 7)
+  assert.deepEqual(evacuated.map((x) => x.name), names.slice(0, 4), 'oldest 4 must be evacuated')
+  assert.ok(evacuated.every((x) => PLUGIN_BACKUP_PATTERN.test(x.name)))
+  // 备份数不超过保留份数时不疏散。
+  assert.deepEqual(evacuateOldestBackup(root, tmp, 12), [], 'no rotation needed → no evacuation')
+  fs.rmSync(root, { recursive: true, force: true })
+  fs.rmSync(tmp, { recursive: true, force: true })
+})
+
 test('snapshot captures entries, backup hashes, settings and meta', () => {
   const root = makeRoot()
   const snap = snapshotDataRoot(root)

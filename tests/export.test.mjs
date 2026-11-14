@@ -51,6 +51,22 @@ test('service.export workspace without cwd throws no-workspace; invalid scope th
   assert.throws(() => service.export({ scope: 'bogus' }), (e) => e.code === 'invalid')
 })
 
+test('H5: export is serialized against imports (busy while .lock-import is held)', () => {
+  const { root, service } = tmpService()
+  fs.mkdirSync(path.join(root, '.lock-import')) // 模拟另一进程正在导入/备份
+  try {
+    assert.throws(() => service.export({ scope: 'all' }), (e) => e.code === 'busy')
+  } finally {
+    fs.rmSync(path.join(root, '.lock-import'), { recursive: true, force: true })
+  }
+  // 锁释放后导出恢复正常（backup 内部走无锁变体，不受影响）。
+  const doc = service.export({ scope: 'all' })
+  assert.equal(doc.format, 'dsh-memory-export')
+  assert.equal(doc.entries.length, 2)
+  const backupDoc = service.backup()
+  assert.equal(typeof backupDoc.file, 'string')
+})
+
 test('service.export reads each workspace by directory key, not by stale index cwd', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-memory-export-stale-'))
   const service = createMemoryService({ root })

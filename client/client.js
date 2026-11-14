@@ -2632,6 +2632,14 @@ function newImportRunId() {
         var viewInitialized = useRef(false)
         var settingsSeq = useRef(0)
         var pageSize = (settings && settings.effective && settings.effective.pageSize) || PAGE_SIZE
+        // 每页条数变化（设置页保存）时页码口径失效：render 阶段归零，避免先按旧
+        // page×新 pageSize 发一次错位请求（超界时还会逐页串行回退，每轮都带全量
+        // stats 扫描）。React 官方支持的「前次渲染值调整状态」模式，不额外提交。
+        var prevPageSizeRef = useRef(pageSize)
+        if (prevPageSizeRef.current !== pageSize) {
+          prevPageSizeRef.current = pageSize
+          setPage(0)
+        }
 
         // 带操作按钮的吐司（删除撤销）出现时把焦点移到动作按钮：确认删除后原触发按钮
 // 已随卡片卸载，不主动接管焦点的话键盘用户既丢失上下文、也无法到达撤销。
@@ -2993,7 +3001,16 @@ function newImportRunId() {
             var typing = el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable || (el.closest && el.closest('.dm_select_pop') !== null))
             if (e.key === '/' && !typing) {
               e.preventDefault()
-              if (searchRef.current) searchRef.current.focus()
+              // 搜索框在记忆 tabpanel 内：设置页下 hidden 元素不可聚焦（focus 静默
+              // 失败还吞掉按键）。先切回记忆页，等面板可见后再聚焦。
+              if (tab !== 'memories') switchTab('memories')
+              var tries = 0
+              function tryFocusSearch() {
+                var el = searchRef.current
+                if (el && el.offsetParent !== null) { try { el.focus() } catch { /* ignore */ } return }
+                if (tries++ < 10) requestAnimationFrame(tryFocusSearch)
+              }
+              tryFocusSearch()
             } else if (e.key === 'Escape' && !typing && selectedRef.current.length > 0) {
               setSelected([])
             }
@@ -3082,7 +3099,9 @@ function newImportRunId() {
           api.update(Object.assign({ id: entry.id, workspace: entry.scope === 'workspace' ? workspaceTarget : undefined }, patch)).then(function () {
             bumpDataVersion()
             showToast('ok', t(okKey), action)
-            return refreshRef.current()
+            // 写已成功：刷新失败单独兜底（列表错误态由 refreshEntries 自处理），
+            // 不得落入 writeFailure 把已成功的操作误报成失败。
+            return refreshRef.current().catch(function () {})
           }).catch(writeFailure).then(function () { if (!forced) setBusy(false) })
         }
         function togglePin(entry) {
@@ -3214,7 +3233,10 @@ function newImportRunId() {
             bumpDataVersion()
             var n = payload && payload.result ? payload.result.imported : 0
             showToast('ok', t('undone').replace('{n}', String(n)))
-            return refreshRef.current()
+            // 恢复已成功：undoFailed 只覆盖 import 本身；列表/工作区刷新失败
+            // 单独兜底（refreshEntries 已有列表错误态），否则会先弹「已恢复」再弹
+            // 「恢复失败」误导用户重复操作（撤销是删除后 6 秒内唯一防线）。
+            return refreshRef.current().catch(function () {})
           }).then(function () {
             return refreshWorkspaces()
           }).catch(function (err) {
@@ -3405,10 +3427,12 @@ function newImportRunId() {
           api.update({ id: pair.newer.id, supersedes: pair.older.id, workspace: pair.newer.scope === 'workspace' ? params.workspace : undefined }).then(function () {
             bumpDataVersion()
             showToast('ok', t('auditSuperseded'))
-            return api.similar(params)
+            // 取代已成功：相似对刷新失败保留旧列表（弹窗可重开），列表刷新失败自处理，
+            // 都不落入 writeFailure 误报「取代失败」。
+            return api.similar(params).catch(function () { return null })
           }).then(function (payload) {
-            setAudit({ pairs: (payload && payload.pairs) || [], params: params })
-            return refreshRef.current()
+            if (payload) setAudit({ pairs: (payload && payload.pairs) || [], params: params })
+            return refreshRef.current().catch(function () {})
           }).catch(writeFailure).then(function () { setBusy(false) })
         }
         function dismissPair(pair) {
@@ -3485,6 +3509,11 @@ function newImportRunId() {
               h(Icon, { name: 'alert', size: 28, style: { color: 'var(--dm-danger)', marginBottom: 10 } }),
               h('div', null, t('listError') + t('labelSep') + listError),
               h('button', { className: 'dm_btn', style: { marginTop: 12 }, onClick: function () { focusPage(); refreshEntries() } }, h(Icon, { name: 'undo', size: 13 }), t('retry')))
+          }
+          if (entries.length === 0 && page > 0) {
+            // 翻页回退进行中（删除末页最后几条触发自动回退 / 页码超界）：显示加载态
+            // 而非空态——否则闪现「记忆库还是空的」且与统计条旧 total 同屏矛盾。
+            return h('div', null, hiddenHint, h(Skeletons))
           }
           if (entries.length === 0) {
             // 空态区分「筛选无结果 / 某工作区为空 / 整库为空」，避免切到空工作区误报「记忆库还是空的」。

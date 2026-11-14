@@ -13,13 +13,13 @@
  * 仅打回环地址 127.0.0.1（与任务目标一致，不使用任何代理）。
  */
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync as fsRenameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { withLock } from '../lib/lock.js'
 import { atomicWrite } from '../lib/store.js'
-import { snapshotDataRoot, diffSnapshots, evacuateOldestBackup, restoreEvacuatedBackups } from './data-snapshot.mjs'
+import { snapshotDataRoot, diffSnapshots, evacuateOldestBackup, restoreEvacuatedBackups, PLUGIN_BACKUP_PATTERN } from './data-snapshot.mjs'
 import { acquireVerifyLock } from './verify-lock.mjs'
 import { startCleanupWatchdog } from './watchdog.mjs'
 
@@ -96,28 +96,42 @@ let statusRoot = ''
 let verifyLock = null
 // O3/O10：疏散备份与非标记工件登记，正常清理与看门狗中断路径都据此恢复。
 let evacuatedBackups = []
+// O5（第九轮审计）：脚本自身登记的非标记工件——中断路径 cleanupAll 也要删（此前
+// 只有看门狗会删，而 cleanupAll 还会顺手停掉看门狗）。
+const registeredArtifacts = []
 const liveManifestPath = path.join(tmpdir(), `dsh-memory-live-watchdog-${process.pid}.json`)
+// O4（第九轮审计）：manifest 更新必须是原子替换（tmp+rename）。父进程 truncate+write
+// 的非原子窗口会被看门狗读到半截 JSON → 误判「父进程已收尾」而静默退出。
+function writeManifestAtomic(file, manifest) {
+  const tmp = `${file}.tmp-${process.pid}`
+  writeFileSync(tmp, JSON.stringify(manifest, null, 2), 'utf8')
+  fsRenameSync(tmp, file)
+}
 function updateWatchdogManifest(patch) {
   try {
     const m = JSON.parse(readFileSync(liveManifestPath, 'utf8'))
     Object.assign(m, patch)
-    writeFileSync(liveManifestPath, JSON.stringify(m, null, 2), 'utf8')
+    writeManifestAtomic(liveManifestPath, m)
   } catch { /* 看门狗未启动时忽略 */ }
 }
 function registerArtifact(p) {
+  registeredArtifacts.push(p)
   try {
     const m = JSON.parse(readFileSync(liveManifestPath, 'utf8'))
     const list = Array.isArray(m.artifacts) ? m.artifacts : []
     if (!list.includes(p)) list.push(p)
     m.artifacts = list
-    writeFileSync(liveManifestPath, JSON.stringify(m, null, 2), 'utf8')
+    writeManifestAtomic(liveManifestPath, m)
   } catch { /* ignore */ }
 }
 
 /** 启动时清理上次中断残留（只认 __gui_/__livecheck_ 内容标记的测试条目）。
- *  O7：分页清完（此前 limit=200 无分页，大量残留会被基线吸收后零残留自检假绿）。 */
+ *  O7：分页清完（此前 limit=200 无分页，大量残留会被基线吸收后零残留自检假绿）。
+ *  O2（第九轮审计）：forget 的结果必须核实——503 busy/网络抖动被忽略会把残留拍进
+ *  基线，当次「零残留」自检假绿；失败重试 3 次仍不行则抛错终止（不拍基线）。 */
 async function cleanupResidueMarkers(token) {
   for (const marker of ['__gui_', '__livecheck_']) {
+    let attempts = 0
     for (;;) {
       const { json } = await req('GET', `/entries?query=${encodeURIComponent(marker)}&scope=all&limit=200&include_superseded=true&include_expired=true&include_archived=true`)
       const ids = []
@@ -125,7 +139,15 @@ async function cleanupResidueMarkers(token) {
         if (String(entry.content || '').includes(marker)) ids.push(entry.id)
       }
       if (ids.length === 0) break
-      await req('POST', '/forget', { token, body: { ids } })
+      const { status, json: forgetJson } = await req('POST', '/forget', { token, body: { ids } })
+      const deletedIds = forgetJson?.result?.ids || []
+      const fullyDeleted = status === 200 && ids.every((id) => deletedIds.includes(id))
+      if (!fullyDeleted) {
+        attempts += 1
+        if (attempts >= 3) throw new Error(`残留清理 forget 未生效（HTTP ${status}）：${ids.join(', ')}`)
+        await new Promise((r) => setTimeout(r, 500))
+        continue
+      }
       if ((json?.entries || []).length < 200) break
     }
   }
@@ -165,17 +187,23 @@ async function main() {
   // 清理上次中断残留（__gui_*/__livecheck_*），再拍零残留基线（快照在下方 settings 快照之后）。
 
   // ===== 真实数据根快照 + 幂等清理（正常结束/异常/中断都要恢复） =====
+  const runStartedAt = Date.now()
   let settingsSnapshot = null
   let backupsSnapshot = []
   let cleaned = false
+  // O1（第九轮审计）：基线必须真实取得。基线获取失败（超时/非 JSON/坏状态）时绝不能
+  // 让清理走「空基线」的破坏性默认值——旧实现会 reset 用户 overlay＋删除全部备份。
+  let baselineReady = false
   const listBackups = () => {
     try {
       return readdirSync(path.join(statusRoot, 'backups')).filter((n) => n.endsWith('.json')).sort()
-    } catch {
-      return []
+    } catch (err) {
+      if (err?.code === 'ENOENT') return []
+      throw err
     }
   }
   const restoreSettings = async () => {
+    if (!baselineReady) return // 基线缺失：不做任何破坏性回滚，保留现状
     await req('POST', '/settings/reset', { token, body: {} })
     if (settingsSnapshot && Object.keys(settingsSnapshot).length > 0) {
       await req('POST', '/settings', { token, body: settingsSnapshot })
@@ -203,22 +231,48 @@ async function main() {
     pruneAccessLedger()
     try { await restoreSettings() } catch { /* ignore */ }
     try {
-      const dir = path.join(statusRoot, 'backups')
-      for (const name of listBackups()) {
-        if (!backupsSnapshot.includes(name)) rmSync(path.join(dir, name), { force: true })
+      // O1：基线缺失时不得按空清单删除全部备份；O7：只删本次运行窗口内新生成的
+      // 插件格式备份（用户手放文件/中途手动备份的旧文件不在删除面）。
+      if (baselineReady) {
+        const dir = path.join(statusRoot, 'backups')
+        const startedAt = runStartedAt
+        for (const name of listBackups()) {
+          if (backupsSnapshot.includes(name)) continue
+          if (!PLUGIN_BACKUP_PATTERN.test(name)) continue
+          let fresh = false
+          try { fresh = statSync(path.join(dir, name)).mtimeMs >= startedAt - 1000 } catch { fresh = true }
+          if (fresh) rmSync(path.join(dir, name), { force: true })
+        }
       }
     } catch { /* ignore */ }
+    // O5（第九轮审计）：中断路径也要清理已登记的非标记工件（此前只有看门狗会删）。
+    for (const p of registeredArtifacts) {
+      try { rmSync(p, { force: true }) } catch { /* ignore */ }
+    }
     // O3：恢复被轮转删除的疏散备份（保留份数临界保护）。
     try { restoreEvacuatedBackups(statusRoot, evacuatedBackups) } catch { /* ignore */ }
     try { if (verifyLock) verifyLock.release() } catch { /* ignore */ }
     try { watchdog?.stop() } catch { /* ignore */ }
   }
   try {
-    settingsSnapshot = (await req('GET', '/settings')).json?.overlay ?? {}
+    const baseline = await req('GET', '/settings')
+    if (baseline.status !== 200 || !baseline.json || typeof baseline.json.overlay !== 'object' || baseline.json.overlay === null) {
+      throw new Error(`settings 基线获取失败：HTTP ${baseline.status}`)
+    }
+    settingsSnapshot = baseline.json.overlay
     backupsSnapshot = listBackups()
     // 先清理历史残留，再拍基线：否则残留清理会被快照自检当成「删除真实条目」。
     await cleanupResidueMarkers(token)
-  } catch { /* ignore */ }
+    baselineReady = true
+  } catch (err) {
+    // O1：拿不到基线＝无法安全恢复，立即终止（不做任何破坏性用例）。
+    console.error('live-check 无法取得设置/备份基线，终止：', err?.message ?? err)
+    fail += 1
+    failures.push('settings/备份基线获取')
+    try { if (verifyLock) verifyLock.release() } catch { /* ignore */ }
+    finish(1)
+    return
+  }
   const dataSnapshotBefore = snapshotDataRoot(statusRoot)
   // 强杀看门狗：父进程被 taskkill/CI 超时杀死时由 detached 子进程清理测试条目、
   // 恢复 settings/backups 并删除残留锁（正常结束时在 cleanupAll 里停掉）。
@@ -228,6 +282,7 @@ async function main() {
       markers: ['__gui_', '__livecheck_'],
       settingsBefore: readSettingsRaw(statusRoot),
       backupsBefore: backupsSnapshot,
+      startedAt: runStartedAt,
     }, { manifestPath: liveManifestPath, logPath: path.join(tmpdir(), `dsh-memory-live-watchdog-${process.pid}.log`) })
   } catch { /* 看门狗启动失败不阻断验证 */ }
   const abortAndExit = (code, err) => {
@@ -644,22 +699,34 @@ async function main() {
     const settingsNow = (await req('GET', '/settings')).json
     const retentionNow = Number(settingsNow?.effective?.backupRetention) || 7
     const safeRetention = Math.max(retentionNow, backupsSnapshot.length + 2)
-    await req('POST', '/settings', { token, body: { backupRetention: safeRetention } })
-    // O3：保留份数被 RETENTION_MAX=30 夹取——已有 ≥30 份插件备份时，触发备份会轮转
-    // 删掉用户最旧一份。先疏散最旧备份到临时目录，正常/中断路径都恢复。
-    evacuatedBackups = evacuateOldestBackup(statusRoot, path.join(tmpdir(), `dsh-memory-live-evac-${process.pid}`))
+    // O6（第九轮审计）：抬高必须核实生效（503 busy/夹取都会让轮转继续删历史备份）；
+    // 失败则本用例判失败并跳过触发备份，绝不让轮转碰用户备份。
+    const raised = await req('POST', '/settings', { token, body: { backupRetention: safeRetention } })
+    const effectiveRetention = Number(raised.json?.result?.effective?.backupRetention) || 0
+    ok('抬高备份保留份数成功', raised.status === 200 && effectiveRetention >= Math.min(safeRetention, 30), `HTTP ${raised.status} effective=${effectiveRetention}`)
+    if (raised.status !== 200) return
+    // O6：疏散按实际生效保留份数判定——触发备份会轮转删除 (count+1-effective) 份，
+    // 全部疏散到临时目录（旧实现只在 ≥30 份时且只救 1 份）。
+    evacuatedBackups = evacuateOldestBackup(statusRoot, path.join(tmpdir(), `dsh-memory-live-evac-${process.pid}`), effectiveRetention)
     if (evacuatedBackups.length > 0) updateWatchdogManifest({ evacuatedBackups })
     const beforeTrigger = listBackups().length
     // 用户手放的 JSON 不应被轮转删除（0.24.18：只轮转插件自己的时间戳备份）。
-    const manualFile = path.join(statusRoot, 'backups', 'user-manual-note.json')
+    // O11（第九轮审计）：固定名可能撞上用户同名文件——加运行时间戳并拒绝覆盖。
+    const manualFile = path.join(statusRoot, 'backups', `user-manual-note-${RUN}.json`)
+    if (existsSync(manualFile)) throw new Error(`用户文件已存在，跳过用例：${manualFile}`)
     writeFileSync(manualFile, '{"user":"manual"}', 'utf8')
-    const bk = await req('POST', '/backup', { token, body: {} })
-    ok('backup 返回 file', typeof bk.json?.result?.file === 'string')
-    ok('backup 未裁剪既有历史备份', listBackups().length >= beforeTrigger + 2, `${beforeTrigger} -> ${listBackups().length}`)
-    ok('备份不删除用户手放文件', existsSync(manualFile))
+    registerArtifact(manualFile) // 中断路径也要清理（O5）
+    try {
+      const bk = await req('POST', '/backup', { token, body: {}, timeoutMs: 120000 })
+      ok('backup 返回 file', typeof bk.json?.result?.file === 'string')
+      ok('backup 未裁剪既有历史备份', listBackups().length >= beforeTrigger + 2, `${beforeTrigger} -> ${listBackups().length}`)
+      ok('备份不删除用户手放文件', existsSync(manualFile))
+    } finally {
+      try { rmSync(manualFile, { force: true }) } catch { /* ignore */ }
+    }
     const ex = await req('GET', '/export')
     ok('export format', ex.json?.format === 'dsh-memory-export')
-    const im = await req('POST', '/import', { token, body: { dryRun: true, entries: [{ content: `${RUN} 导入预览`, scope: 'global' }] } })
+    const im = await req('POST', '/import', { token, body: { dryRun: true, entries: [{ content: `${RUN} 导入预览`, scope: 'global' }] }, timeoutMs: 180000 })
     ok('import dryRun imported=1', im.json?.result?.dryRun === true && im.json?.result?.imported === 1)
     const ws = await req('GET', '/workspaces')
     ok('workspaces 数组', Array.isArray(ws.json?.workspaces))
@@ -801,27 +868,29 @@ async function main() {
     }))
     const started = Date.now()
     try {
-      const r = await req('POST', '/import', { token, body: { entries } })
+      // O9（第九轮审计）：大库（30k 冷启动首次建索引 19–23s）下 620 条导入可超默认
+      // 30s，与「导入 180s」口径对齐，避免假红。
+      const r = await req('POST', '/import', { token, body: { entries }, timeoutMs: 180000 })
       const elapsed = Date.now() - started
       ok('620 条导入 HTTP 200', r.status === 200, `got ${r.status}`)
       ok('620 条全部落盘', r.json?.result?.imported === 620, JSON.stringify({ imported: r.json?.result?.imported, elapsed }))
       ok('导入耗时合理（≤15s）', elapsed < 15000, `${elapsed}ms`)
-      const forget = await req('POST', '/forget', { token, body: { ids: entries.map((e) => e.id) } })
+      const forget = await req('POST', '/forget', { token, body: { ids: entries.map((e) => e.id) }, timeoutMs: 180000 })
       ok('620 条批量删除', forget.json?.result?.deleted === 620, JSON.stringify(forget.json?.result))
       const left = await req('GET', `/entries?query=${encodeURIComponent(`${RUN} 分片导入`)}&scope=global&limit=10`)
       ok('分片导入条目清理干净', (left.json?.entries ?? []).length === 0, JSON.stringify((left.json?.entries ?? []).map((e) => e.id)))
     } finally {
       // 异常路径也清一次（已删除时服务端返回 not-found，忽略）。
-      await req('POST', '/forget', { token, body: { ids: entries.map((e) => e.id) } }).catch(() => {})
+      await req('POST', '/forget', { token, body: { ids: entries.map((e) => e.id) }, timeoutMs: 180000 }).catch(() => {})
     }
   })
 
   await check('>1MB 导入备份可恢复（0.24.15）', async () => {
     const bigContent = `${RUN} 大备份 ` + 'x'.repeat(1_200_000)
-    const dry = await req('POST', '/import', { token, body: { dryRun: true, entries: [{ content: bigContent, scope: 'global' }] } })
+    const dry = await req('POST', '/import', { token, body: { dryRun: true, entries: [{ content: bigContent, scope: 'global' }] }, timeoutMs: 180000 })
     ok('大 body dryRun HTTP 200', dry.status === 200, `got ${dry.status}`)
     ok('大 body dryRun 返回预览计划', dry.json?.result?.imported === 1 && Array.isArray(dry.json?.result?.entries))
-    const real = await req('POST', '/import', { token, body: { entries: [{ content: bigContent, scope: 'global' }] } })
+    const real = await req('POST', '/import', { token, body: { entries: [{ content: bigContent, scope: 'global' }] }, timeoutMs: 180000 })
     ok('大 body 落盘 HTTP 200', real.status === 200, `got ${real.status}`)
     ok('落盘响应不回传 entries', real.status === 200 && real.json?.result?.entries === undefined)
     const found = await req('GET', `/entries?query=${encodeURIComponent(`${RUN} 大备份`)}&scope=global`)

@@ -150,24 +150,32 @@ export function diffSnapshots(before, after) {
 // 临时目录，结束后（含 watchdog 中断路径）若原文件已不在则复制回。
 export const PLUGIN_BACKUP_PATTERN = /^dsh-memory-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z(?:-\d{1,3})?\.json$/
 
-/** 插件备份数 ≥ retentionMax 时疏散最旧（mtime）一份；返回 [{name, tempPath}]。 */
-export function evacuateOldestBackup(root, tmpDir, retentionMax = 30) {
+/** 触发一次备份前，按「实际生效保留份数」疏散将被轮转删除的最旧插件备份。
+ *  触发备份后共 count+1 份、保留 retention 份 → 轮转删除 (count+1-retention) 份最旧。
+ *  旧实现只在 count ≥ 30 时且只救 1 份：count 在 (retention, 30) 区间时用户备份
+ *  仍会被轮转删掉（第九轮审计 O6）。返回 [{name, tempPath}]。 */
+export function evacuateOldestBackup(root, tmpDir, retentionLimit = 30) {
   const dir = path.join(root, 'backups')
   let names = []
   try { names = readdirSync(dir).filter((n) => PLUGIN_BACKUP_PATTERN.test(n)) } catch { return [] }
-  if (names.length < retentionMax) return []
-  let oldest = null
+  const limit = Math.max(1, Math.floor(Number(retentionLimit) || 30))
+  const rotations = names.length + 1 - limit
+  if (rotations <= 0) return []
+  const byAge = []
   for (const name of names) {
-    try {
-      const m = statSync(path.join(dir, name)).mtimeMs
-      if (oldest === null || m < oldest.m) oldest = { name, m }
-    } catch { /* ignore */ }
+    try { byAge.push({ name, m: statSync(path.join(dir, name)).mtimeMs }) } catch { /* ignore */ }
   }
-  if (!oldest) return []
+  byAge.sort((a, b) => a.m - b.m || a.name.localeCompare(b.name))
+  const victims = byAge.slice(0, rotations)
+  if (victims.length === 0) return []
   mkdirSync(tmpDir, { recursive: true })
-  const tempPath = path.join(tmpDir, `evacuated-${oldest.name}`)
-  copyFileSync(path.join(dir, oldest.name), tempPath)
-  return [{ name: oldest.name, tempPath }]
+  const out = []
+  for (const victim of victims) {
+    const tempPath = path.join(tmpDir, `evacuated-${victim.name}`)
+    copyFileSync(path.join(dir, victim.name), tempPath)
+    out.push({ name: victim.name, tempPath })
+  }
+  return out
 }
 
 /** 恢复被轮转删除的疏散备份（原文件仍在则只清理临时副本）。 */

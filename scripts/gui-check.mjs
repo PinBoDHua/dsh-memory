@@ -17,10 +17,10 @@
  */
 import { spawn } from 'node:child_process'
 import { createHash, createHmac } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { snapshotDataRoot, diffSnapshots, evacuateOldestBackup, restoreEvacuatedBackups } from './data-snapshot.mjs'
+import { snapshotDataRoot, diffSnapshots, evacuateOldestBackup, restoreEvacuatedBackups, PLUGIN_BACKUP_PATTERN } from './data-snapshot.mjs'
 import { acquireVerifyLock } from './verify-lock.mjs'
 import { startCleanupWatchdog } from './watchdog.mjs'
 
@@ -44,26 +44,39 @@ let verifyLock = null
 let dataSnapshotBefore = null
 let overlayBaseline = {}
 let backupsBaseline = []
+// O1（第九轮审计）：基线必须真实取得；获取失败时清理不得走「空基线」破坏性默认值。
+let baselineReady = false
+let runStartedAt = Date.now()
 let watchdog = null
 // O3/O10：疏散备份与非标记工件登记，正常清理与看门狗中断路径都据此恢复。
 let evacuatedBackupsGui = []
 const guiManifestPath = path.join(os.tmpdir(), `dsh-memory-gui-watchdog-${process.pid}.json`)
+// O4（第九轮审计）：manifest 更新必须原子替换（tmp+rename），否则轮询的看门狗会
+// 读到半截 JSON 并误判「父进程已收尾」而静默退出。
+function writeGuiManifestAtomic(file, manifest) {
+  const tmp = `${file}.tmp-${process.pid}`
+  writeFileSync(tmp, JSON.stringify(manifest, null, 2), 'utf8')
+  renameSync(tmp, file)
+}
 function updateGuiManifest(patch) {
   try {
     const m = JSON.parse(readFileSync(guiManifestPath, 'utf8'))
     Object.assign(m, patch)
-    writeFileSync(guiManifestPath, JSON.stringify(m, null, 2), 'utf8')
+    writeGuiManifestAtomic(guiManifestPath, m)
   } catch { /* 看门狗未启动时忽略 */ }
 }
 function registerGuiArtifact(p) {
+  registeredArtifactsGui.push(p)
   try {
     const m = JSON.parse(readFileSync(guiManifestPath, 'utf8'))
     const list = Array.isArray(m.artifacts) ? m.artifacts : []
     if (!list.includes(p)) list.push(p)
     m.artifacts = list
-    writeFileSync(guiManifestPath, JSON.stringify(m, null, 2), 'utf8')
+    writeGuiManifestAtomic(guiManifestPath, m)
   } catch { /* ignore */ }
 }
+// O5（第九轮审计）：脚本自身登记的非标记工件，中断路径 cleanupHooks 也要删。
+const registeredArtifactsGui = []
 
 /** 看门狗恢复 settings 用的原始基线（不存在则删除）。 */
 function readSettingsRaw(root) {
@@ -95,15 +108,23 @@ async function runCleanupHooks() {
 
 async function forgetIds(ids) {
   const list = (ids || []).filter(Boolean)
-  if (list.length === 0) return
-  await apiJson('/forget', { method: 'POST', token: TOKEN, body: { ids: list } }).catch(() => {})
+  if (list.length === 0) return { ok: true }
+  try {
+    const { status, json } = await fetchJson('/forget', { method: 'POST', token: TOKEN, body: { ids: list } })
+    const deleted = json?.result?.ids || []
+    return { ok: status === 200 && list.every((id) => deleted.includes(id)), status }
+  } catch (err) {
+    return { ok: false, error: err }
+  }
 }
 
 /** 启动时清理上次中断留下的测试条目（只认 __gui_/__livecheck_ 内容标记，不碰真实记忆）。
- *  O7：分页清完，避免大量残留被基线吸收后零残留自检假绿。 */
+ *  O7：分页清完，避免大量残留被基线吸收后零残留自检假绿。
+ *  O2（第九轮审计）：forget 结果必须核实，失败重试 3 次仍不行则抛错终止（不拍基线）。 */
 async function cleanupResidueMarkers() {
   if (!TOKEN) return
   for (const marker of ['__gui_', '__livecheck_']) {
+    let attempts = 0
     for (;;) {
       const doc = await apiJson(`/entries?query=${encodeURIComponent(marker)}&scope=all&limit=200&include_superseded=true&include_expired=true&include_archived=true`).catch(() => null)
       const ids = []
@@ -112,7 +133,13 @@ async function cleanupResidueMarkers() {
         if (content.startsWith(marker) || content.includes(marker)) ids.push(entry.id)
       }
       if (ids.length === 0) break
-      await forgetIds(ids)
+      const result = await forgetIds(ids)
+      if (!result.ok) {
+        attempts += 1
+        if (attempts >= 3) throw new Error(`残留清理 forget 未生效：${ids.join(', ')}`)
+        await sleep(500)
+        continue
+      }
       if ((doc?.entries || []).length < 200) break
     }
   }
@@ -146,23 +173,36 @@ function listBackups() {
 }
 
 function removeNewBackups(before) {
-  if (!ROOT) return
+  if (!ROOT || !baselineReady) return
   const dir = path.join(ROOT, 'backups')
   for (const name of listBackups()) {
     if (before.includes(name)) continue
+    // O7（第九轮审计）：只删本次运行窗口内新生成的插件格式备份——用户中途手动放的
+    // .json 或中途触发的历史备份不删（旧实现按运行前基线整根回滚，且 diff 失明）。
+    if (!PLUGIN_BACKUP_PATTERN.test(name)) continue
+    let fresh = false
+    try { fresh = statSync(path.join(dir, name)).mtimeMs >= runStartedAt - 1000 } catch { fresh = true }
+    if (!fresh) continue
     try { rmSync(path.join(dir, name), { force: true }) } catch { /* ignore */ }
   }
 }
 
 // 先 reset 再写回原 overlay：恢复成「运行前精确状态」（reset 清除测试期间新增键）。
+// O1：基线缺失时绝不执行（否则会清空用户 overlay 且无法回写）。
 async function restoreSettingsOverlay(overlay) {
-  if (!TOKEN) return
+  if (!TOKEN || !baselineReady) return
   await apiJson('/settings/reset', { method: 'POST', token: TOKEN, body: {} })
   if (overlay && Object.keys(overlay).length > 0) await apiJson('/settings', { method: 'POST', token: TOKEN, body: overlay })
 }
 
 // 浏览器之外的直连 API（仅本机回环）：用于创建/清理验收临时记忆、核对撤销结果。
 async function apiJson(pathname, { method = 'GET', body, token, timeoutMs = 30000 } = {}) {
+  const res = await fetchJson(pathname, { method, body, token, timeoutMs })
+  return res.json
+}
+
+// 带 HTTP 状态的直连请求（基线获取/清理结果核实用：不能把「请求失败」当「空数据」）。
+async function fetchJson(pathname, { method = 'GET', body, token, timeoutMs = 30000 } = {}) {
   const headers = { 'Content-Type': 'application/json' }
   if (token) headers['X-RPC-Key'] = token
   // O8：宿主冻结时不得永久挂起；导入类长操作单独放宽。
@@ -172,7 +212,7 @@ async function apiJson(pathname, { method = 'GET', body, token, timeoutMs = 3000
     body: body === undefined ? undefined : JSON.stringify(body),
     signal: AbortSignal.timeout(timeoutMs),
   })
-  return res.json().catch(() => null)
+  return { status: res.status, json: await res.json().catch(() => null) }
 }
 
 // ===== 浏览器会话 cookie 自签（host: dsh-client-connection browser-session） =====
@@ -344,6 +384,7 @@ function sweepStaleProfiles() {
 }
 
 async function main() {
+  runStartedAt = Date.now()
   if (!existsSync(EDGE)) throw new Error(`找不到 Edge：${EDGE}（可用 EDGE_PATH 指定）`)
   sweepStaleProfiles()
   try { rmSync(USER_DATA, { recursive: true, force: true }) } catch { /* ignore */ }
@@ -441,11 +482,22 @@ async function main() {
     registerCleanup(async () => { try { verifyLock.release() } catch { /* ignore */ } })
     // 先清理上次中断残留（__gui_*/__livecheck_* 测试条目），再拍零残留基线。
     await cleanupResidueMarkers()
-    overlayBaseline = (await apiJson('/settings'))?.overlay ?? {}
+    // O1（第九轮审计）：基线必须真实取得——请求失败（超时/非 JSON/坏状态）绝不
+    // 回落到 {}，否则清理会 reset 用户 overlay 且无法回写。
+    const baselineDoc = await fetchJson('/settings')
+    if (baselineDoc.status !== 200 || !baselineDoc.json || typeof baselineDoc.json.overlay !== 'object' || baselineDoc.json.overlay === null) {
+      throw new Error(`settings 基线获取失败：HTTP ${baselineDoc.status}（不做任何破坏性用例）`)
+    }
+    overlayBaseline = baselineDoc.json.overlay
     backupsBaseline = listBackups()
+    baselineReady = true
     registerCleanup(async () => {
       try { await restoreSettingsOverlay(overlayBaseline) } catch { /* ignore */ }
       removeNewBackups(backupsBaseline)
+      // O5：已登记的非标记工件（损坏文件/阻塞文件）也在此统一清理。
+      for (const p of registeredArtifactsGui) {
+        try { rmSync(p, { force: true }) } catch { /* ignore */ }
+      }
     })
     // 运行前后用户数据零差异自检（快照默认排除 access.json/index.json 等派生数据）。
     dataSnapshotBefore = snapshotDataRoot(ROOT)
@@ -457,6 +509,7 @@ async function main() {
         markers: ['__gui_', '__livecheck_'],
         settingsBefore: readSettingsRaw(ROOT),
         backupsBefore: backupsBaseline,
+        startedAt: runStartedAt,
       }, { manifestPath: guiManifestPath, logPath: path.join(os.tmpdir(), `dsh-memory-gui-watchdog-${process.pid}.log`) })
       registerCleanup(async () => { try { watchdog.stop() } catch { /* ignore */ } })
     } catch { /* 看门狗启动失败不阻断验证 */ }
@@ -595,7 +648,9 @@ async function main() {
       const exportRecallAfter = requests.filter((u) => u.includes('/recall-preview')).length
       check('导出不触发 recall-preview 全量刷新', exportRecallAfter === exportRecallBefore, `${exportRecallBefore} -> ${exportRecallAfter}`)
       // 0.24.29：导出 skipped 在 UI 可见（临时放一个损坏 .md，导出后删掉）。
-      const brokenExportPath = path.join(ROOT, 'global', 'm-gui-broken-export.md')
+      // O11（第九轮审计）：固定文件名可能撞上用户同名真实文件——加时间戳并拒绝覆盖。
+      const brokenExportPath = path.join(ROOT, 'global', `m-gui-broken-export-${Date.now().toString(36)}.md`)
+      if (existsSync(brokenExportPath)) throw new Error(`损坏文件路径已被占用：${brokenExportPath}`)
       registerCleanup(async () => { try { rmSync(brokenExportPath, { force: true }) } catch { /* ignore */ } })
       writeFileSync(brokenExportPath, 'not frontmatter', 'utf8')
       registerGuiArtifact(brokenExportPath) // O10：强杀时看门狗据此清理非标记工件
@@ -1442,20 +1497,31 @@ async function main() {
       await sleep(1900)
       await setRetention(Math.min(30, safeRetention + 1))
       await sleep(150)
-      // O3：保留份数被夹取到 30——已有 ≥30 份插件备份时触发备份会轮转删用户最旧一份。
-      // 先疏散最旧备份，正常/中断路径都恢复。
-      evacuatedBackupsGui = evacuateOldestBackup(ROOT, path.join(os.tmpdir(), `dsh-memory-gui-evac-${process.pid}`))
-      if (evacuatedBackupsGui.length > 0) updateGuiManifest({ evacuatedBackups: evacuatedBackupsGui })
+      // O6（第九轮审计）：触发备份前核实「抬高后的保留份数」已真实落盘生效——
+      // 保存失败（503 busy）时轮转仍按旧值删用户历史备份。疏散按实际生效值判定，
+      // 触发 1 份备份后会轮转删除 (count+1-effective) 份最旧，全部疏散。
+      const raisedSettings = await apiJson('/settings')
+      const effectiveRetention = Number(raisedSettings?.effective?.backupRetention) || 0
+      const backupSafe = effectiveRetention > 0
+      check('备份前保留份数已生效（可安全轮转）', backupSafe && (effectiveRetention >= safeRetention || effectiveRetention >= backupsBefore.length + 1), `effective=${effectiveRetention} safe=${safeRetention} count=${backupsBefore.length}`)
+      if (backupSafe) {
+        evacuatedBackupsGui = evacuateOldestBackup(ROOT, path.join(os.tmpdir(), `dsh-memory-gui-evac-${process.pid}`), effectiveRetention)
+        if (evacuatedBackupsGui.length > 0) updateGuiManifest({ evacuatedBackups: evacuatedBackupsGui })
+      }
       const backupCountBeforeTrigger = listBackups().length
       const backupSentBefore = requests.filter((u) => u.includes('/backup')).length
-      await clickButton(/立即备份|Back up now/)
-      // O13②：轮询「备份请求已发出」而非固定 280ms（大库冷导出可达秒级，固定 sleep 会假失败）；
-      // 再留短窗口让重载返回，仍早于 600ms 防抖保存。
-      for (let i = 0; i < 60; i += 1) {
-        await sleep(50)
-        if (requests.filter((u) => u.includes('/backup')).length > backupSentBefore) break
+      if (backupSafe) {
+        await clickButton(/立即备份|Back up now/)
+        // O13②：轮询「备份请求已发出」而非固定 280ms（大库冷导出可达秒级，固定 sleep 会假失败）；
+        // 再留短窗口让重载返回，仍早于 600ms 防抖保存。
+        for (let i = 0; i < 60; i += 1) {
+          await sleep(50)
+          if (requests.filter((u) => u.includes('/backup')).length > backupSentBefore) break
+        }
+      } else {
+        check('设置不可读，跳过破坏性备份触发', false)
       }
-      await sleep(200)
+      await sleep(backupSafe ? 200 : 0)
       const draftAtReload = await readRetentionInput()
       const docAtReload = await apiJson('/settings')
       check('备份触发的设置重载不覆盖未保存草稿', String(draftAtReload) === String(Math.min(30, safeRetention + 1)) && Number(docAtReload?.effective?.backupRetention) === safeRetention, `${draftAtReload} / ${docAtReload?.effective?.backupRetention}`)

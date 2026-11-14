@@ -251,6 +251,25 @@ test('H5: import receipts survive a service restart (cross-instance merge replay
   assert.equal(store.findEntry(root, 'm-restart-1').content, '用户新编辑', 'merge replay must not roll back user edits')
 })
 
+test('H4: concurrent service instances do not clobber each other receipts on disk', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-memory-receipt2-'))
+  // 模拟两个 DSH 进程（各自 service 实例、独立内存 Map）先后导入：旧实现用
+  // 「进程内存整文件覆写」持久化，第二个实例会把第一个实例的回执从磁盘上清掉。
+  const a = createMemoryService({ root })
+  a.import({ entries: [{ id: 'm-merge-a', content: '回执合并甲', scope: 'global' }], importId: 'imp-merge-a', chunkIndex: 0 })
+  const b = createMemoryService({ root })
+  b.import({ entries: [{ id: 'm-merge-b', content: '回执合并乙', scope: 'global' }], importId: 'imp-merge-b', chunkIndex: 0 })
+  const doc = JSON.parse(fs.readFileSync(path.join(root, '.cache', 'import-receipts.json'), 'utf8'))
+  const ids = new Set(doc.receipts.map((r) => r.id))
+  assert.ok(ids.has('imp-merge-a'), 'older instance receipt survives on disk')
+  assert.ok(ids.has('imp-merge-b'), 'newer instance receipt present')
+  // 内存未命中时读盘兜底：不重启也能命中另一进程写入的回执（不重放 merge）。
+  a.update({ id: 'm-merge-b', content: '用户在实例甲的编辑' })
+  const replay = a.import({ entries: [{ id: 'm-merge-b', content: '回执合并乙', scope: 'global' }], importId: 'imp-merge-b', chunkIndex: 0 })
+  assert.equal(replay.cached, true, 'disk fallback must find the other instance receipt')
+  assert.equal(store.findEntry(root, 'm-merge-b').content, '用户在实例甲的编辑', 'no merge replay rollback')
+})
+
 test('H13: import cycle repair clears both superseded_by and mutual supersedes', () => {
   const { root, service } = tmpService()
   const result = service.import({
