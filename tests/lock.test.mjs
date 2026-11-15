@@ -130,6 +130,48 @@ test('withLock times out while a fresh lock is held', () => {
   fs.rmSync(lockPath, { recursive: true, force: true })
 })
 
+test('H1: lock timeout message carries no data-root path (tool surface leak)', () => {
+  const root = tmpRoot()
+  const lockPath = path.join(root, '.lock-leak')
+  fs.mkdirSync(lockPath)
+  try {
+    withLock(lockPath, () => 'never', { timeoutMs: 30, staleMs: 60_000 })
+    assert.fail('expected lock timeout')
+  } catch (err) {
+    assert.equal(err.code, 'busy')
+    assert.ok(!String(err.message).includes(root), `message leaked data root: ${err.message}`)
+    assert.ok(!String(err.message).includes('.lock'), `message leaked lock path: ${err.message}`)
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('H4: stale lock that cannot be renamed still respects timeoutMs (no CPU spin)', () => {
+  const root = tmpRoot()
+  const lockPath = path.join(root, '.lock-spin')
+  fs.mkdirSync(lockPath)
+  const old = new Date(Date.now() - 60_000)
+  fs.utimesSync(lockPath, old, old)
+  const realRename = fs.renameSync
+  fs.renameSync = function () {
+    const err = new Error('EBUSY: resource busy or locked')
+    err.code = 'EBUSY'
+    throw err
+  }
+  const started = Date.now()
+  try {
+    assert.throws(
+      () => withLock(lockPath, () => 'never', { timeoutMs: 200, staleMs: 1000, retryMs: 20 }),
+      (err) => err.code === 'busy',
+    )
+  } finally {
+    fs.renameSync = realRename
+  }
+  const elapsed = Date.now() - started
+  assert.ok(elapsed >= 150 && elapsed < 2000, `timeout must bound the wait, got ${elapsed}ms`)
+  fs.rmSync(root, { recursive: true, force: true })
+})
+
 test('H9: failed put-back of a claimed fresh lock cleans the orphan .heal-* directory', () => {
   const root = tmpRoot()
   const lockPath = path.join(root, '.lock-test')

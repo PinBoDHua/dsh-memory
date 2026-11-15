@@ -10,6 +10,8 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { spawn } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 import { createMemoryService } from '../lib/service.js'
 import * as store from '../lib/store.js'
 
@@ -360,4 +362,30 @@ test('successful batch import writes all entries and refreshes workspace index',
   assert.equal(service.list({ scope: 'global' }).length, 1)
   assert.equal(store.listScope(root, 'workspace', WS).length, 1)
   assert.ok(fs.existsSync(path.join(root, 'workspaces', 'index.json')))
+})
+
+test('H3: import materializes reverse links inside the lock — concurrent edit during lock wait is preserved', async () => {
+  const { root, service } = tmpService()
+  const target = service.save({ content: '目标记忆 v1', scope: 'global' }).entry
+  const worker = fileURLToPath(new URL('./fixtures/hold-import-lock.mjs', import.meta.url))
+  const child = spawn(process.execPath, [worker, root, target.id, '400'], { stdio: ['ignore', 'pipe', 'inherit'] })
+  await new Promise((resolve, reject) => {
+    let buf = ''
+    child.stdout.on('data', (chunk) => {
+      buf += String(chunk)
+      if (buf.includes('ready')) resolve()
+    })
+    child.on('error', reject)
+  })
+  const started = Date.now()
+  const result = service.import({ entries: [{ content: '新条目', scope: 'global', supersedes: target.id }] })
+  const elapsed = Date.now() - started
+  await new Promise((resolve) => child.on('exit', resolve))
+  assert.equal(result.imported, 1)
+  assert.ok(elapsed >= 300, `import must wait for the import lock (waited ${elapsed}ms)`)
+  const after = store.findEntry(root, target.id)
+  assert.match(after.content, /并发编辑/, 'stale planning snapshot must not revert a concurrent edit')
+  const follower = service.list({ scope: 'global' }).find((e) => e.content === '新条目')
+  assert.ok(follower, 'imported entry must exist')
+  assert.equal(after.superseded_by, follower.id, 'supersede back-reference must be materialized from fresh disk state')
 })

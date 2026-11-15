@@ -238,3 +238,27 @@ test('findSimilarPairs stays fast on a 1500-entry library (inverted candidates)'
   assert.ok(pairs.some((p) => p.older.id === 'm-big-near-a' && p.newer.id === 'm-big-near-b'), 'near pair still found')
   assert.ok(elapsed < 1500, `1500-entry similar scan took ${elapsed}ms (was O(N^2) seconds)`)
 })
+
+test('M8: similar results never contain the same pair twice (rare + sampled candidates overlap)', () => {
+  const root = tmpRoot()
+  const now = '2026-01-01T00:00:00.000Z'
+  // 构造第十轮审计 M8 复现场景：一个高频特征把所有条目串成候选，再叠加一对真实近重复；
+  // 旧实现会把同一对同时从「稀有特征候选」与「高频采样」各 push 一次。
+  for (let i = 0; i < 40; i += 1) {
+    store.writeEntry(root, {
+      id: `m-poc08-${String(i).padStart(5, '0')}`,
+      category: 'fact',
+      scope: 'global',
+      tags: [],
+      created: now,
+      updated: now,
+      source: '',
+      content: `公共高频词 ${i} ${Array.from({ length: 6 }, (_, k) => String.fromCharCode(0x4e00 + i * 7 + k)).join('')}`,
+    })
+  }
+  store.writeEntry(root, { id: 'm-poc08-pair-a', category: 'fact', scope: 'global', tags: [], created: now, updated: now, source: '', content: '所有测试必须先写失败用例再实现，最后重构' })
+  store.writeEntry(root, { id: 'm-poc08-pair-b', category: 'fact', scope: 'global', tags: [], created: now, updated: now, source: '', content: '所有测试必须先写失败用例，再实现并重构' })
+  const pairs = store.findSimilarPairs(root, { scope: 'global', limit: 100 })
+  const keys = pairs.map((p) => `${p.older.id}->${p.newer.id}`)
+  assert.equal(new Set(keys).size, keys.length, `duplicate pairs in result: ${keys.join(', ')}`)
+})

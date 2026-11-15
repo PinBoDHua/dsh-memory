@@ -630,7 +630,7 @@ test('render: category priority — preference before decision before fact, rece
   assert.ok(iPref >= 0 && iDec >= 0 && iFact >= 0)
   assert.ok(iPref < iDec && iDec < iFact, 'preference → decision → fact order')
   // Tight budget keeps the preference even though it is the oldest entry.
-  const line = '- [preference] 最旧偏好 (id: m-pref)'
+  const line = '- [global/preference] 最旧偏好 (id: m-pref)'
   const tight = renderSection(entries, { budgetChars: line.length + 1 })
   assert.ok(tight.includes('m-pref'))
   assert.ok(!tight.includes('m-fact'))
@@ -643,7 +643,7 @@ test('render: category priority — preference before decision before fact, rece
   assert.ok(sameCat.indexOf('m-new') < sameCat.indexOf('m-old'))
 })
 
-test('render: guidance, budget, grouping, empty', () => {
+test('render: guidance, budget, flat scope-tagged ordering, empty', () => {
   assert.ok(GUIDANCE.includes('memory_save'))
   assert.ok(renderSection([], {}).includes('暂无记忆'))
   assert.equal(renderSection([{ id: 'x', scope: 'global', category: 'fact', content: 'c', updated: '' }], { autoInject: false }), GUIDANCE)
@@ -653,13 +653,72 @@ test('render: guidance, budget, grouping, empty', () => {
     { id: 'm-3', scope: 'workspace', category: 'decision', content: '工作区决策丙', updated: '2026-01-01' },
   ]
   const full = renderSection(entries, { budgetChars: 6000 })
-  assert.ok(full.includes('全局 Global:'))
-  assert.ok(full.includes('当前工作区 Current workspace:'))
-  assert.ok(full.includes('(id: m-1)'))
+  // 平铺输出：scope 写进行内标记，跨作用域也保持「偏好→决策→事实」优先级（第十轮审计 M7）。
+  assert.ok(full.includes('- [global/preference] 全局偏好甲'))
+  assert.ok(full.includes('- [workspace/decision] 工作区决策丙'))
+  assert.ok(full.includes('- [workspace/fact] 工作区事实乙'))
+  assert.ok(full.indexOf('m-1') < full.indexOf('m-3') && full.indexOf('m-3') < full.indexOf('m-2'))
   assert.ok(!full.includes('未注入'))
   const tiny = renderSection(entries, { budgetChars: 30 })
   assert.ok(tiny.includes('未注入'))
   assert.ok(tiny.includes('memory_search'))
   const multiline = renderSection([{ id: 'm-x', scope: 'global', category: 'fact', content: '第一行\n第二行', updated: '' }], {})
   assert.ok(multiline.includes('第一行 第二行'))
+})
+
+test('M7: cross-scope injection follows priority order (workspace preference before global fact)', () => {
+  const entries = [
+    { id: 'm-ws-pref', scope: 'workspace', category: 'preference', content: '工作区偏好', updated: '2026-01-01' },
+    { id: 'm-g-fact', scope: 'global', category: 'fact', content: '全局事实', updated: '2026-01-03' },
+    { id: 'm-ws-dec', scope: 'workspace', category: 'decision', content: '工作区决策', updated: '2026-01-02' },
+  ]
+  const text = renderSection(entries, { budgetChars: 6000 })
+  const iPref = text.indexOf('m-ws-pref')
+  const iDec = text.indexOf('m-ws-dec')
+  const iFact = text.indexOf('m-g-fact')
+  assert.ok(iPref >= 0 && iDec >= 0 && iFact >= 0)
+  assert.ok(iPref < iDec && iDec < iFact, `injection order must be preference → decision → fact regardless of scope: ${text}`)
+})
+
+test('M1: save dedupe applies explicit origin correction', () => {
+  const root = tmpRoot()
+  const service = createMemoryService({ root })
+  const first = service.save({ content: '来源修正', scope: 'global', origin: 'auto' })
+  assert.equal(store.findEntry(root, first.entry.id)?.origin, 'auto')
+  const second = service.save({ content: '来源修正', scope: 'global', origin: 'manual', explicitFields: ['content', 'scope', 'origin'] })
+  assert.equal(second.deduplicated, true)
+  assert.equal(store.findEntry(root, first.entry.id)?.origin, 'manual', 'explicit origin must be applied on dedupe hit')
+})
+
+test('M6: save dedupe hit refreshes workspace lastSeen (recently-used ordering)', () => {
+  const root = tmpRoot()
+  const service = createMemoryService({ root })
+  service.save({ content: '工作区去重', scope: 'workspace', workspace: CWD_A })
+  const indexFile = path.join(root, 'workspaces', 'index.json')
+  const key = store.workspaceKey(CWD_A)
+  const index = JSON.parse(fs.readFileSync(indexFile, 'utf8'))
+  index[key].lastSeen = '2020-01-01T00:00:00.000Z'
+  fs.writeFileSync(indexFile, JSON.stringify(index, null, 2))
+  service.save({
+    content: '工作区去重', scope: 'workspace', workspace: CWD_A,
+    pinned: false, explicitFields: ['content', 'scope', 'pinned'],
+  })
+  const after = JSON.parse(fs.readFileSync(indexFile, 'utf8'))[key].lastSeen
+  assert.ok(after > '2020-01-01T00:00:00.000Z', `lastSeen must be refreshed on dedupe hit (${after})`)
+})
+
+test('M5: access ledger tolerates UTF-8 BOM (hand-edited file is not treated as empty)', () => {
+  const root = tmpRoot()
+  const service = createMemoryService({ root })
+  const { entry } = service.save({ content: 'BOM 账本', scope: 'global' })
+  service.search({ query: '', scope: 'global', limit: 10 }) // 命中一次，写账本
+  const ledgerFile = path.join(root, 'access.json')
+  assert.ok(fs.existsSync(ledgerFile), 'ledger must exist after a hit')
+  const original = fs.readFileSync(ledgerFile, 'utf8')
+  const record = JSON.parse(original)[entry.id]
+  assert.ok(record && record.count >= 1, 'ledger records the hit')
+  // Windows 记事本手改账本后保存会加 BOM：旧实现解析失败当空账本、下一次命中覆写丢历史。
+  fs.writeFileSync(ledgerFile, `\uFEFF${original}`, 'utf8')
+  const hit = service.list({ scope: 'global' }).find((e) => e.id === entry.id)
+  assert.equal(hit.hit_count, record.count, 'BOM must not reset hit_count to the file default')
 })

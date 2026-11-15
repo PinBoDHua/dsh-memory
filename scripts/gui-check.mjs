@@ -553,6 +553,20 @@ async function main() {
     }))()`)
     check('← 键切回记忆页且焦点跟随', tabLeft.memoriesSelected === 'true' && tabLeft.focused === 'dm-tab-memories' && tabLeft.panel, JSON.stringify(tabLeft))
 
+    // 0.26.0（第十轮审计 C1）：设置页按 / 必须切回记忆页并聚焦搜索。
+    // 旧实现 effect 依赖 []，闭包读到首帧 tab，按键被吞且页面不切（假绿缺口）。
+    await evaluate(`(() => { const t = document.querySelector('#dm-tab-settings'); if (t) t.click(); return Boolean(t) })()`)
+    await sleep(500)
+    const settingsBeforeSlash = await evaluate(`(document.querySelector('#dm-tab-settings') || {}).getAttribute ? document.querySelector('#dm-tab-settings').getAttribute('aria-selected') : null`)
+    await key('/', 'Slash', 191)
+    await sleep(600)
+    const slashState = await evaluate(`(() => ({
+      memSelected: (document.querySelector('#dm-tab-memories') || {}).getAttribute ? document.querySelector('#dm-tab-memories').getAttribute('aria-selected') : null,
+      panelHidden: (document.querySelector('#dm-panel-memories') || {}).hasAttribute ? document.querySelector('#dm-panel-memories').hasAttribute('hidden') : null,
+      activeCls: document.activeElement ? document.activeElement.className : null,
+    }))()`)
+    check('设置页按 / 切回记忆页并聚焦搜索（闭包不陈旧）', settingsBeforeSlash === 'true' && slashState.memSelected === 'true' && slashState.panelHidden === false && slashState.activeCls === 'dm_search', JSON.stringify({ settingsBeforeSlash, slashState }))
+
     // 1) 自定义下拉键盘：Enter 打开 → 焦点进入浮层 → ArrowDown 移动高亮 → Esc 关闭
     const kbdOpened = await evaluate(`(() => { const t = document.querySelector('.dm_select_trigger'); if (!t) return false; t.focus(); return document.activeElement === t })()`)
     await key('Enter', 'Enter', 13)
@@ -687,6 +701,30 @@ async function main() {
         ta.dispatchEvent(new Event('input', { bubbles: true }))
         return true
       })()`)
+      // 0.26.0（第十轮审计 C4）：过去过期日必须被拒（保存后立即隐藏 = 用户以为丢数据）。
+      const expiryPastBefore = await evaluate(`(() => {
+        const input = document.querySelector('#dm-expires')
+        if (!input) return null
+        Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(input, '2020-01-01')
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+        return { min: input.getAttribute('min'), value: input.value }
+      })()`)
+      await sleep(200)
+      await evaluate(`(() => { const b = [...document.querySelectorAll('.dm_dialog button')].find((el) => /保存|Save/.test((el.textContent || '').trim()) && !/取消|Cancel/.test((el.textContent || '').trim())); if (b) b.click(); return Boolean(b) })()`)
+      await sleep(500)
+      const expiryPastState = await evaluate(`(() => ({
+        dialogOpen: document.querySelector('.dm_dialog') !== null,
+        toast: (document.querySelector('.dm_toast_text') || {}).textContent || '',
+      }))()`)
+      check('过去过期日被拒且弹窗不关闭', expiryPastBefore !== null && expiryPastBefore.min !== null && expiryPastState.dialogOpen && /过期日|Expiry/.test(expiryPastState.toast), JSON.stringify({ expiryPastBefore, expiryPastState }))
+      await evaluate(`(() => {
+        const input = document.querySelector('#dm-expires')
+        if (!input) return false
+        Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(input, '')
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+        return true
+      })()`)
+      await sleep(200)
       // 1c) 分类 radiogroup：←/→ 循环切换且焦点跟随（WAI-ARIA radiogroup 模式）
       const catBefore = await evaluate(`(() => {
         const grid = document.querySelector('.dm_catgrid')
@@ -1007,6 +1045,7 @@ async function main() {
       check('切 tab 恢复的是被夹取前的最大滚动位置', scrollState !== null && scrollState.set > 400 && scrollState.set > settingsScroll + 50 && Math.abs(scrollAfter - scrollState.set) <= 2, `${JSON.stringify(scrollState)} settingsMax=${settingsScroll} after=${scrollAfter}`)
 
       // 0.24.23：翻页是导航，应回到列表顶部，而不是停在新页中后段。
+      const statsCountBeforePage = requests.filter((u) => u.includes('/stats')).length
       const pagerState = await evaluate(`(() => {
         const page = document.querySelector('.dm_page')
         if (page) page.scrollTop = page.scrollHeight
@@ -1020,6 +1059,9 @@ async function main() {
       await sleep(1000)
       const afterNext = await evaluate(`(() => ({ scroll: document.querySelector('.dm_page') ? document.querySelector('.dm_page').scrollTop : -1, pageText: (document.querySelector('.dm_pageinfo') || {}).textContent || '' }))()`)
       check('翻页后回到列表顶部', pagerState !== null && pagerState.hasNext && afterNext.scroll <= 4, `${JSON.stringify(pagerState)} -> ${JSON.stringify(afterNext)}`)
+      // 0.26.0（第十轮审计 C7）：翻页只改 offset，/stats 参数与页码无关，不应重扫全库。
+      const statsCountAfterPage = requests.filter((u) => u.includes('/stats')).length
+      check('翻页不重复请求 /stats（参数与页码无关）', statsCountAfterPage === statsCountBeforePage, `${statsCountBeforePage} -> ${statsCountAfterPage}`)
       // 翻回第一页，后续卡片操作依赖 A/B/K/L 在第一页。
       await evaluate(`(() => { const prev = document.querySelector('.dm_pager button'); if (prev && !prev.disabled) prev.click(); return Boolean(prev) })()`)
       await sleep(900)
@@ -1182,17 +1224,30 @@ async function main() {
       check('连续删除的两条记忆都能撤销恢复', restoredIds.has(idK) && restoredIds.has(idL), JSON.stringify({ idK, idL, restored: [...restoredIds].filter((id) => id === idK || id === idL) }))
 
       // 0.24.25：批量删除单请求 + 一次撤销恢复多条。
+      // 前序删除/撤销会触发列表刷新：等卡片真正渲染出来再查（骨架期 DOM 无卡片 → picked=0 假失败）。
+      for (let i = 0; i < 25; i += 1) {
+        if (await evaluate(`document.querySelector('.dm_card .dm_check input') !== null`)) break
+        await sleep(200)
+      }
       const forgetReqBefore = requests.filter((u) => u.includes('/forget')).length
-      const bulkPicked = await evaluate(`(() => {
+      // 不按内容文本找卡片（前序撤销触发的列表刷新期间文本节点可能处于过渡态）：
+      // 直接勾选当前可见的前两张测试卡片并记录其 id，批量删除/撤销语义等价。
+      const bulkPick = await evaluate(`(() => {
         const cards = [...document.querySelectorAll('.dm_card')]
+        const ids = []
         let picked = 0
-        for (const text of [${JSON.stringify(`${marker} M`)}, ${JSON.stringify(`${marker} N`)}]) {
-          const card = cards.find((el) => (el.innerText || '').includes(text))
-          const box = card ? card.querySelector('.dm_check input') : null
-          if (box) { box.click(); picked += 1 }
+        for (const card of cards.slice(0, 2)) {
+          const idEl = card.querySelector('.dm_id')
+          const id = idEl ? (idEl.textContent || '').trim() : ''
+          const box = card.querySelector('.dm_check input')
+          if (!box) continue
+          box.click()
+          picked += 1
+          if (id) ids.push(id)
         }
-        return picked
+        return { picked, ids, cardCount: cards.length }
       })()`)
+      const bulkIds = bulkPick.ids
       await sleep(300)
       const selbarState = await evaluate(`(() => { const bar = document.querySelector('.dm_selbar'); return { exists: bar !== null, text: bar ? (bar.innerText || '').replace(/\\s+/g, ' ') : '' } })()`)
       await evaluate(`(() => { const b = [...document.querySelectorAll('.dm_selbar button')].find((x) => /删除所选|Delete selected/.test((x.textContent || '').trim())); if (b) b.click(); return Boolean(b) })()`)
@@ -1209,8 +1264,8 @@ async function main() {
         if (bulkToast.hasAction) break
       }
       const forgetReqAfter = requests.filter((u) => u.includes('/forget')).length
-      const bulkInfo = { picked: bulkPicked, selbar: selbarState, dialog: bulkDialog, confirmState, clickedConfirm, dialogAfterClick, forgetBefore: forgetReqBefore, forgetAfter: forgetReqAfter, recentRequests: requests.slice(-8), recentConsole: consoleLines.slice(-8) }
-      check('批量删除只发一次 /forget 请求', bulkToast.hasAction && forgetReqAfter - forgetReqBefore === 1, JSON.stringify(bulkInfo))
+      const bulkInfo = { picked: bulkPick.picked, ids: bulkIds, cardCount: bulkPick.cardCount, selbar: selbarState, dialog: bulkDialog, confirmState, clickedConfirm, dialogAfterClick, forgetBefore: forgetReqBefore, forgetAfter: forgetReqAfter, recentRequests: requests.slice(-8), recentConsole: consoleLines.slice(-8) }
+      check('批量删除只发一次 /forget 请求', bulkPick.picked === 2 && bulkToast.hasAction && forgetReqAfter - forgetReqBefore === 1, JSON.stringify(bulkInfo))
       if (bulkToast.hasAction) {
         await evaluate(`(() => { const btn = document.querySelector('.dm_toast_action'); if (btn) btn.click(); return Boolean(btn) })()`)
       }
@@ -1219,9 +1274,9 @@ async function main() {
         await sleep(300)
         const listed = await apiJson(`/entries?query=${encodeURIComponent(marker)}&scope=global&limit=100&include_superseded=true&include_expired=true&include_archived=true`)
         bulkRestored = new Set((listed?.entries || []).map((e) => e.id))
-        if (bulkRestored.has(idM) && bulkRestored.has(idN)) break
+        if (bulkIds.length === 2 && bulkIds.every((id) => bulkRestored.has(id))) break
       }
-      check('批量删除可一次撤销恢复多条', bulkToast.hasAction && bulkRestored.has(idM) && bulkRestored.has(idN), JSON.stringify({ bulkInfo, idM, idN, restored: [idM, idN].filter((id) => bulkRestored.has(id)) }))
+      check('批量删除可一次撤销恢复多条', bulkIds.length === 2 && bulkIds.every((id) => bulkRestored.has(id)), JSON.stringify({ bulkInfo, bulkIds, restored: bulkIds.filter((id) => bulkRestored.has(id)) }))
     } finally {
       // 清理验收临时记忆（失败路径也要清；批量单请求，兼容并发/中断清理钩子）。
       try {

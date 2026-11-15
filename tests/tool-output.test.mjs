@@ -10,7 +10,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { saveResultValue, updateResultValue } from '../index.js'
+import { saveResultValue, updateResultValue, sanitizeToolError, withSanitizedToolErrors } from '../index.js'
 import { createMemoryService } from '../lib/service.js'
 import * as store from '../lib/store.js'
 
@@ -93,4 +93,28 @@ test('normal entries keep their origin unchanged (no behavior drift)', () => {
   assert.equal(updateResultValue(updated).origin, 'auto')
   const dup = service.save({ content: '普通条目更新', scope: 'global' })
   assert.equal(saveResultValue(dup.entry, dup.deduplicated, [], false).origin, 'auto')
+})
+
+test('H1: tool errors sanitize infrastructure codes (no local paths reach the model)', () => {
+  const leaked = Object.assign(new Error('lock timeout: C:\\Users\\someone\\.dsh\\.dsh-memory\\.lock-write'), { code: 'busy' })
+  const busy = sanitizeToolError(leaked)
+  assert.equal(busy.code, 'busy')
+  assert.ok(!busy.message.includes('Users') && !busy.message.includes('.lock'), 'busy message must not leak paths')
+  const ioErr = sanitizeToolError(Object.assign(new Error('ENOENT: C:\\secret\\dir'), { code: 'io' }))
+  assert.ok(!ioErr.message.includes('secret'), 'io message must not leak paths')
+  // 业务错误（invalid/secret）保留原始文案，方便模型自我纠正。
+  const invalid = Object.assign(new Error('未知分类 unknown category: xx'), { code: 'invalid' })
+  assert.equal(sanitizeToolError(invalid), invalid)
+  const plain = new Error('boom')
+  assert.equal(sanitizeToolError(plain), plain)
+  // 包装器只改 execute 的错误面，其余字段与成功返回值不变。
+  const tool = { name: 't', isConcurrencySafe: () => false, execute: () => ({ ok: true }) }
+  const wrapped = withSanitizedToolErrors(tool)
+  assert.equal(wrapped.name, 't')
+  assert.equal(wrapped.isConcurrencySafe(), false)
+  assert.deepEqual(wrapped.execute({}, {}), { ok: true })
+  assert.throws(
+    () => withSanitizedToolErrors({ name: 't2', execute: () => { throw Object.assign(new Error('x'), { code: 'io' }) } }).execute({}, {}),
+    (err) => err.code === 'io' && !/x$/u.test(err.message),
+  )
 })

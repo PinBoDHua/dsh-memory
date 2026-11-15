@@ -84,6 +84,37 @@ export function updateResultValue(entry) {
   return { id: entry.id, updated: entry.updated ?? '', scope: entry.scope, origin: entry.origin ?? 'manual' }
 }
 
+/**
+ * 工具错误脱敏（第十轮审计 H1）：宿主会把 execute 抛出的 error.message 原样渲染给
+ * 模型（toolErrorResult），而锁/IO 原始错误可能含数据根绝对路径与用户名。工具面
+ * 统一把已知基础设施错误收敛为固定双语文案（HTTP 面 routes.js 有同一映射）。
+ * 未知错误原样抛出，交由宿主按内部错误处理。
+ */
+export function sanitizeToolError(err) {
+  const code = err?.code
+  if (code === 'busy') {
+    return Object.assign(new Error('另一个进程正在写入记忆，请稍后重试 / another process is writing; retry shortly'), { code: 'busy' })
+  }
+  if (code === 'io') {
+    return Object.assign(new Error('记忆写入失败，未做任何变更 / memory write failed; no changes were made'), { code: 'io' })
+  }
+  return err
+}
+
+/** 工具 execute 外层统一脱敏（不改变工具其余行为与并发声明）。 */
+export function withSanitizedToolErrors(tool) {
+  return {
+    ...tool,
+    execute(args, exec) {
+      try {
+        return tool.execute(args, exec)
+      } catch (err) {
+        throw sanitizeToolError(err)
+      }
+    },
+  }
+}
+
 /** memory_save 输出渲染（纯函数，可单测）。 */
 export function renderSaveResult(value) {
   let base
@@ -448,10 +479,10 @@ export function apply(ctx, rawConfig) {
   ctx.effect(() => {
     const disposers = [
       ctx.systemPrompt.section({ name: 'dsh-memory', order: 9500, interpolate: false, text: sectionText }),
-      ctx.tools.register(saveTool),
-      ctx.tools.register(searchTool),
-      ctx.tools.register(updateTool),
-      ctx.tools.register(forgetTool),
+      ctx.tools.register(withSanitizedToolErrors(saveTool)),
+      ctx.tools.register(withSanitizedToolErrors(searchTool)),
+      ctx.tools.register(withSanitizedToolErrors(updateTool)),
+      ctx.tools.register(withSanitizedToolErrors(forgetTool)),
     ]
     if (typeof ctx.systemPrompt?.context === 'function') {
       try {

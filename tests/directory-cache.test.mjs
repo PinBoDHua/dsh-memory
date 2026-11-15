@@ -329,3 +329,20 @@ test('H10: index with illegal field types falls back to markdown (no hidden-fore
   assert.ok(!hit.superseded_by, 'numeric superseded_by must not leak (would hide the entry forever)')
   assert.ok(!hit.pinned, 'string pinned must not leak (truthy forever-pinned)')
 })
+
+test('H2: cold start removes a stale persistent index after the library is deleted externally (privacy)', (t) => {
+  const root = tmpRoot()
+  t.after(() => { clearEntryCache(); fs.rmSync(root, { recursive: true, force: true }) })
+  seedLarge(root, 1030)
+  const service = createMemoryService({ root })
+  service.list({ scope: 'global' }) // 建目录缓存
+  flushSnapshotIndex(root)
+  const indexFile = path.join(root, '.cache', 'entries-v1.json')
+  assert.ok(fs.existsSync(indexFile), 'persistent index must exist after flush')
+  assert.ok(fs.readFileSync(indexFile, 'utf8').includes('大目录缓存条目'), 'index carries entry content copies')
+  // 模拟用户在 DSH 关闭期间手工删库/同步盘回滚：markdown 全没了，索引还在。
+  fs.rmSync(path.join(root, 'global'), { recursive: true, force: true })
+  clearEntryCache()
+  assert.equal(service.list({ scope: 'global' }).length, 0, 'cold start must not resurrect deleted entries')
+  assert.equal(fs.existsSync(indexFile), false, 'stale index with deleted plaintext content must be removed')
+})

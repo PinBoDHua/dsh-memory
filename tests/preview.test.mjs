@@ -28,7 +28,7 @@ test('selectInjection fills budget by priority, counts omitted and usedChars', (
   assert.equal(all.omitted, 0)
   assert.equal(all.selected[0].id, 'm-pref', 'preference first')
   assert.ok(all.usedChars > 0)
-  const prefLine = '- [preference] 偏好 (id: m-pref)'
+  const prefLine = '- [global/preference] 偏好 (id: m-pref)'
   const tight = selectInjection(entries, { budgetChars: prefLine.length + 1 })
   assert.equal(tight.selected.length, 1)
   assert.equal(tight.selected[0].id, 'm-pref')

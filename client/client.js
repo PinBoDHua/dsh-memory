@@ -45,7 +45,82 @@
     if (['preference', 'fact', 'decision'].indexOf(category) === -1) return { ok: false, error: 'bad-category' }
     var expires = draft && draft.expires
     if (expires !== undefined && expires !== null && expires !== '' && !isExpiresDate(expires)) return { ok: false, error: 'bad-expires' }
+    // 过去日期会让条目保存后立刻隐藏（「已保存」吐司 + 默认列表看不到 = 误以为丢数据）。
+    // 新建可直接拒绝；编辑只在用户真的改成过去日期时拒绝（保留既有过期条目的原值可继续编辑）。
+    if (expires && isExpiresDate(expires) && expires < todayUtcIso()) {
+      var unchanged = draft && draft.mode === 'edit' && expires === draft.expiresOriginal
+      if (!unchanged) return { ok: false, error: 'expires-past' }
+    }
     return { ok: true }
+  }
+
+  /** 当前 UTC 日期（YYYY-MM-DD）：与宿主 isExpired「按 UTC 日、当日含」口径一致。 */
+  function todayUtcIso(now) {
+    var d = new Date(typeof now === 'number' ? now : Date.now())
+    if (isNaN(d.getTime())) return ''
+    var mm = d.getUTCMonth() + 1
+    var dd = d.getUTCDate()
+    return d.getUTCFullYear() + '-' + (mm < 10 ? '0' : '') + mm + '-' + (dd < 10 ? '0' : '') + dd
+  }
+
+  /** 本地日期戳（导出文件名用）：UTC ISO 在 UTC+8 的凌晨会显示「昨天」。 */
+  function localDateStamp(now) {
+    var d = new Date(typeof now === 'number' ? now : Date.now())
+    if (isNaN(d.getTime())) return ''
+    var mm = d.getMonth() + 1
+    var dd = d.getDate()
+    return d.getFullYear() + '-' + (mm < 10 ? '0' : '') + mm + '-' + (dd < 10 ? '0' : '') + dd
+  }
+
+  /** 客户端运行平台是否 Windows（路径比较大小写不敏感）。 */
+  function platformIsWindows() {
+    try {
+      if (typeof navigator === 'undefined' || !navigator.userAgent) {
+        return typeof process !== 'undefined' && process.platform === 'win32'
+      }
+      var ua = String(navigator.userAgent || '')
+      if (/Windows/i.test(ua)) return true
+      var platform = navigator.userAgentData && navigator.userAgentData.platform
+      return /Windows/i.test(String(platform || navigator.platform || ''))
+    } catch { return false }
+  }
+
+  /** 面板「新建记忆」请求体（纯函数）：只带用户真正设置的字段——宿主去重命中时会
+   *  应用显式字段，把表单默认值（category=fact / tags=[] / pinned=false / origin=manual）
+   *  当显式字段发送会静默改写既有条目的分类/标签/钉选（第十轮审计 C2）。 */
+  function buildCreatePayload(editor, tags, workspaceTarget) {
+    var draft = editor || {}
+    var scope = draft.scope === 'global' ? 'global' : 'workspace'
+    var payload = {
+      content: String(draft.content || '').trim(),
+      scope: scope,
+    }
+    if (scope === 'workspace' && workspaceTarget) payload.workspace = workspaceTarget
+    if (draft.category && draft.category !== 'fact') payload.category = draft.category
+    var list = Array.isArray(tags) ? tags : []
+    if (list.length > 0) payload.tags = list
+    if (draft.pinned) payload.pinned = true
+    if (draft.expires) payload.expires = draft.expires
+    return payload
+  }
+
+  /** 页码夹取（纯函数）：总数变小/删末页后一次跳到有效末页，而不是逐页回退。 */
+  function clampPageToTotal(page, total, pageSize) {
+    var size = Math.max(1, Math.floor(Number(pageSize) || 1))
+    var count = Number(total) || 0
+    var lastPage = Math.max(0, Math.ceil(count / size) - 1)
+    return Math.max(0, Math.min(Number(page) || 0, lastPage))
+  }
+
+  /**
+   * 路径比较键（纯函数）：/workspaces 索引里的 cwd 经宿主 normalizeCwd（Windows 小写），
+   * /cwd 返回会话原始大小写；逐字符比较会让「● 当前工作区」永不命中。Windows 忽略
+   * 大小写，其他平台保持敏感（避免把 /home/A 与 /home/a 误并）。
+   */
+  function cwdCompareKey(cwd, caseInsensitive) {
+    var s = String(cwd == null ? '' : cwd)
+    var ci = caseInsensitive === undefined ? platformIsWindows() : !!caseInsensitive
+    return ci ? s.toLowerCase() : s
   }
 
   // 过期日必须是真实日历日期（YYYY-MM-DD）；坏日期一律 fail-open，不视为过期。
@@ -144,20 +219,36 @@
   function workspaceOptions(input) {
     var workspaces = (input && input.workspaces) || []
     var currentCwd = input && input.currentCwd
+    var ci = input && input.caseInsensitive !== undefined ? !!input.caseInsensitive : platformIsWindows()
     var options = [{ value: 'global', kind: 'global' }]
-    var seen = {}
+    // 无原型：路径经比较键归一后仍可能撞上 __proto__ 这类键（防御性，与 id 集合同口径）。
+    var seen = Object.create(null)
     for (var i = 0; i < workspaces.length; i++) {
       var ws = workspaces[i]
       if (!ws || typeof ws.cwd !== 'string' || ws.cwd === '') continue
-      var key = ws.cwd.toLowerCase()
+      var key = cwdCompareKey(ws.cwd, ci)
       if (seen[key]) continue
       seen[key] = true
       options.push({ value: ws.cwd, kind: 'workspace', count: ws.count || 0 })
     }
-    if (typeof currentCwd === 'string' && currentCwd !== '' && !seen[currentCwd.toLowerCase()]) {
+    if (typeof currentCwd === 'string' && currentCwd !== '' && !seen[cwdCompareKey(currentCwd, ci)]) {
       options.push({ value: currentCwd, kind: 'workspace', count: 0 })
     }
     return options
+  }
+
+  /** 把任意大小写的 cwd 映射回选项里的规范 value（Windows 上 /workspaces 下发小写路径）。 */
+  function canonicalWorkspaceValue(cwd, options, caseInsensitive) {
+    if (!cwd) return cwd
+    var list = Array.isArray(options) ? options : []
+    var ci = caseInsensitive === undefined ? platformIsWindows() : !!caseInsensitive
+    var key = cwdCompareKey(cwd, ci)
+    for (var i = 0; i < list.length; i++) {
+      var opt = list[i]
+      if (!opt || opt.kind !== 'workspace' || typeof opt.value !== 'string') continue
+      if (cwdCompareKey(opt.value, ci) === key) return opt.value
+    }
+    return cwd
   }
 
   /** 导入拒绝项展示：已知错误码走本地化文案，未知才回退服务端双语 reason。 */
@@ -329,12 +420,15 @@ function settingsStatusNext(status, event) {
 
   // 默认视图选择（纯函数）：「当前工作区」默认视图必须等 cwd 解析完成后再应用——
 // 过早标记 initialized 会让晚到的 cwd 永久失效。resolved=false 表示还需等待。
-  function defaultViewSelection(settings, currentCwd) {
+// options 可选：把 currentCwd 映射回 /workspaces 的规范 value（Windows 大小写不同
+// 时，否则 Select 匹配不到任何选项 → 空触发器）。
+  function defaultViewSelection(settings, currentCwd, options, caseInsensitive) {
     if (!settings || !settings.effective) return { selection: null, resolved: false }
     var dv = settings.effective.defaultView
     if (dv === 'global') return { selection: 'global', resolved: true }
     if (dv === 'workspace') {
-      return currentCwd ? { selection: currentCwd, resolved: true } : { selection: null, resolved: false }
+      if (!currentCwd) return { selection: null, resolved: false }
+      return { selection: canonicalWorkspaceValue(currentCwd, options, caseInsensitive), resolved: true }
     }
     return { selection: null, resolved: true }
   }
@@ -637,7 +731,7 @@ function pageSlice(entries, size) {
     return (mb < 10 ? mb.toFixed(1) : Math.round(mb)) + ' MB'
   }
 
-  var helpers = { validateDraft: validateDraft, groupEntries: groupEntries, nextToken: nextToken, entriesParams: entriesParams, buildEntriesQuery: buildEntriesQuery, workspaceOptions: workspaceOptions, errorKeyFor: errorKeyFor, shouldQueueToast: shouldQueueToast, toastRemainingMs: toastRemainingMs, shouldResumeToast: shouldResumeToast, settingsSignature: settingsSignature, shouldAutoRefresh: shouldAutoRefresh, partitionSettled: partitionSettled, idSetOf: idSetOf, settleBulkDelete: settleBulkDelete, parseTags: parseTags, unwrapResult: unwrapResult, settingsStatusNext: settingsStatusNext, savedToastKey: savedToastKey, exportParams: exportParams, defaultViewSelection: defaultViewSelection, sectionCountsExact: sectionCountsExact, chunkEntries: chunkEntries, chunkEntriesPreservingLinks: chunkEntriesPreservingLinks, parseImportText: parseImportText, validateImportDoc: validateImportDoc, importSummary: importSummary, importWriteCount: importWriteCount, rebaseRejectedIndexes: rebaseRejectedIndexes, aggregateImportPlans: aggregateImportPlans, shouldFocusToastAction: shouldFocusToastAction, categoryChipCount: categoryChipCount, importRejectText: importRejectText, pageSlice: pageSlice, entryDetailRows: entryDetailRows, relativeTime: relativeTime, formatBytes: formatBytes, isExpired: isExpired, statusOf: statusOf, originOf: originOf, statusQueryFlags: statusQueryFlags }
+  var helpers = { validateDraft: validateDraft, buildCreatePayload: buildCreatePayload, clampPageToTotal: clampPageToTotal, todayUtcIso: todayUtcIso, localDateStamp: localDateStamp, cwdCompareKey: cwdCompareKey, canonicalWorkspaceValue: canonicalWorkspaceValue, platformIsWindows: platformIsWindows, groupEntries: groupEntries, nextToken: nextToken, entriesParams: entriesParams, buildEntriesQuery: buildEntriesQuery, workspaceOptions: workspaceOptions, errorKeyFor: errorKeyFor, shouldQueueToast: shouldQueueToast, toastRemainingMs: toastRemainingMs, shouldResumeToast: shouldResumeToast, settingsSignature: settingsSignature, shouldAutoRefresh: shouldAutoRefresh, partitionSettled: partitionSettled, idSetOf: idSetOf, settleBulkDelete: settleBulkDelete, parseTags: parseTags, unwrapResult: unwrapResult, settingsStatusNext: settingsStatusNext, savedToastKey: savedToastKey, exportParams: exportParams, defaultViewSelection: defaultViewSelection, sectionCountsExact: sectionCountsExact, chunkEntries: chunkEntries, chunkEntriesPreservingLinks: chunkEntriesPreservingLinks, parseImportText: parseImportText, validateImportDoc: validateImportDoc, importSummary: importSummary, importWriteCount: importWriteCount, rebaseRejectedIndexes: rebaseRejectedIndexes, aggregateImportPlans: aggregateImportPlans, shouldFocusToastAction: shouldFocusToastAction, categoryChipCount: categoryChipCount, importRejectText: importRejectText, pageSlice: pageSlice, entryDetailRows: entryDetailRows, relativeTime: relativeTime, formatBytes: formatBytes, isExpired: isExpired, statusOf: statusOf, originOf: originOf, statusQueryFlags: statusQueryFlags }
 
   // ===== node 测试导出（CJS） =====
   if (typeof module !== 'undefined' && module.exports) {
@@ -659,6 +753,9 @@ var IMPORT_MAX_BYTES = 32 * 1024 * 1024
 var IMPORT_TIMEOUT_MS = 180000
 // 导出/备份要序列化全库（大库可达数十 MB），15s 默认超时不够；独立放宽到 120s。
 var EXPORT_TIMEOUT_MS = 120000
+// 查重是宿主同步全库计算（8k 库约 1.4s，30k 外推数秒），默认 15s 余量不足；
+// 独立放宽到 120s，避免大库查重被误报超时（第十轮审计 C5）。
+var SIMILAR_TIMEOUT_MS = 120000
   var IMPORT_CHUNK_SIZE = 300
 var IMPORT_PREVIEW_CHUNK = 800
 
@@ -792,9 +889,10 @@ function newImportRunId() {
     pinnedHint: '钉选的记忆在注入预算内最先召回，且不受软衰减影响',
     expiresLabel: '过期日（可选）',
     expiresOn: '过期日',
-    expiresHint: '到期后默认隐藏，不删除；留空表示永不过期',
+    expiresHint: '到期后默认隐藏，不删除；留空表示永不过期（按 UTC 日判定）',
     expiresClear: '清除',
     errBadExpires: '过期日需为 YYYY-MM-DD 格式的有效日期',
+    errExpiresPast: '过期日不能早于今天（按 UTC 日）；过去日期会让记忆保存后立即隐藏',
     lastAccessLabel: '最近命中',
     hitCountLabel: '命中次数',
     supersedesLabel: '取代了',
@@ -836,6 +934,7 @@ function newImportRunId() {
     audit: '查重',
     auditTitle: '相似记忆查重',
     auditHint: '扫描当前作用域内活跃记忆的相似度（≥50%）。可让较新条目取代较旧条目（保留历史），或忽略以保留两条。',
+    auditRunning: '正在查重相似记忆…',
     auditEmpty: '未发现相似记忆',
     auditScore: '相似度',
     auditOlder: '旧',
@@ -1026,9 +1125,10 @@ function newImportRunId() {
     pinnedHint: 'Pinned memories are recalled first within the injection budget and ignore soft decay',
     expiresLabel: 'Expires (optional)',
     expiresOn: 'Expires on',
-    expiresHint: 'Hidden (not deleted) after this date; empty means never expires',
+    expiresHint: 'Hidden (not deleted) after this date (UTC day); empty means never expires',
     expiresClear: 'Clear',
     errBadExpires: 'Expires must be a valid date in YYYY-MM-DD format',
+    errExpiresPast: 'Expiry cannot be before today (UTC day); a past date hides the memory immediately after saving',
     lastAccessLabel: 'Last hit',
     hitCountLabel: 'Hit count',
     supersedesLabel: 'Supersedes',
@@ -1070,6 +1170,7 @@ function newImportRunId() {
     audit: 'Audit',
     auditTitle: 'Similar memory audit',
     auditHint: 'Scans active memories in the current scope for similarity (≥50%). Supersede the older with the newer (history kept), or dismiss to keep both.',
+    auditRunning: 'Scanning for similar memories…',
     auditEmpty: 'No similar memories found',
     auditScore: 'Similarity',
     auditOlder: 'Older',
@@ -1138,312 +1239,330 @@ function newImportRunId() {
   }
 
   var CSS = [
-    // ---- 页面与调色板（浅色默认，深色跟随宿主） ----
-    '.dm_page,.dm_select_pop{--dm-bg:var(--dsw-alias-bg-base,#f5f6fa);--dm-surface:var(--dsw-alias-bg-layer-1,#ffffff);--dm-ink:var(--dsw-alias-label-primary,#15171e);--dm-ink2:var(--dsw-alias-label-secondary,#5b6272);--dm-ink3:var(--dsw-alias-label-tertiary,#99a1b2);--dm-line:var(--dsw-alias-border-l1,rgba(21,23,30,.07));--dm-line2:var(--dsw-alias-border-l2,rgba(21,23,30,.14));--dm-primary:var(--dsw-alias-state-business-primary,#5b5bd6);--dm-primary2:var(--dsw-alias-state-business-primary,#5b5bd6);--dm-on-primary:var(--dsw-alias-label-on-color,#ffffff);--dm-pref:#b45309;--dm-pref-soft:rgba(217,119,6,.12);--dm-fact:#1d4ed8;--dm-fact-soft:rgba(59,130,246,.12);--dm-dec:#047857;--dm-dec-soft:rgba(16,185,129,.13);--dm-danger:var(--dsw-alias-state-error-primary,#dc2626);--dm-danger-soft:rgba(220,38,38,.10);--dm-success:var(--dsw-alias-state-success-primary,#059669);--dm-success-soft:rgba(5,150,105,.12);--dm-shadow:0 1px 2px rgba(15,18,30,.05);--dm-shadow-hover:0 2px 6px rgba(15,18,30,.08);--dm-overlay-shadow:0 16px 48px -20px rgba(15,18,30,.35);--dm-ring:0 0 0 3px color-mix(in srgb,var(--dm-primary) 22%,transparent);}',
-    '.dm_page{height:100%;overflow-y:auto;box-sizing:border-box;color:var(--dm-ink);padding:0 24px 40px;font-size:13px;line-height:1.5;background-color:var(--dm-bg);scrollbar-width:thin;scrollbar-color:color-mix(in srgb,var(--dm-ink) 22%,transparent) transparent;}',
-    'body[data-ds-dark-theme] .dm_page,body[data-ds-dark-theme] .dm_select_pop{--dm-bg:var(--dsw-alias-bg-base,#0f1115);--dm-surface:var(--dsw-alias-bg-layer-1,#171a21);--dm-ink:var(--dsw-alias-label-primary,#e8eaf0);--dm-ink2:var(--dsw-alias-label-secondary,#a8aebd);--dm-ink3:var(--dsw-alias-label-tertiary,#6f7688);--dm-line:var(--dsw-alias-border-l1,rgba(232,234,240,.07));--dm-line2:var(--dsw-alias-border-l2,rgba(232,234,240,.15));--dm-pref:#fbbf24;--dm-pref-soft:rgba(251,191,36,.14);--dm-fact:#60a5fa;--dm-fact-soft:rgba(96,165,250,.15);--dm-dec:#34d399;--dm-dec-soft:rgba(52,211,153,.14);--dm-danger:var(--dsw-alias-state-error-primary,#f87171);--dm-danger-soft:rgba(248,113,113,.14);--dm-success:var(--dsw-alias-state-success-primary,#34d399);--dm-success-soft:rgba(52,211,153,.14);--dm-shadow:0 1px 2px rgba(0,0,0,.35);--dm-shadow-hover:0 2px 6px rgba(0,0,0,.45);--dm-overlay-shadow:0 16px 48px -20px rgba(0,0,0,.6);}',
+    // ---- 设计令牌：唯一强调色来自宿主，分类仅保留低饱和识别色；无渐变/无氛围光 ----
+    '.dm_page,.dm_select_pop{--dm-bg:var(--dsw-alias-bg-base,#f7f8fa);--dm-surface:var(--dsw-alias-bg-layer-1,#ffffff);--dm-raised:color-mix(in srgb,var(--dm-ink) 3%,var(--dm-bg));--dm-ink:var(--dsw-alias-label-primary,#141821);--dm-ink2:var(--dsw-alias-label-secondary,#4b5565);--dm-ink3:var(--dsw-alias-label-tertiary,#8a93a3);--dm-line:var(--dsw-alias-border-l1,rgba(20,24,33,.07));--dm-line2:var(--dsw-alias-border-l2,rgba(20,24,33,.14));--dm-primary:var(--dsw-alias-state-business-primary,#2154ce);--dm-primary2:var(--dsw-alias-state-business-primary,#2154ce);--dm-on-primary:var(--dsw-alias-label-on-color,#ffffff);--dm-pref:#9a6700;--dm-pref-soft:rgba(154,103,0,.10);--dm-fact:#2f5b9e;--dm-fact-soft:rgba(47,91,158,.10);--dm-dec:#2f6b4f;--dm-dec-soft:rgba(47,107,79,.10);--dm-danger:var(--dsw-alias-state-error-primary,#bf0f0f);--dm-danger-soft:rgba(191,15,15,.08);--dm-success:var(--dsw-alias-state-success-primary,#137036);--dm-success-soft:rgba(19,112,54,.09);--dm-mono:var(--ds-font-family-code,ui-monospace,"Cascadia Mono",Consolas,monospace);--dm-shadow:0 1px 2px rgba(16,25,45,.05);--dm-shadow-hover:0 2px 8px rgba(16,25,45,.07);--dm-pop:0 12px 36px -16px rgba(16,25,45,.28),0 2px 6px rgba(16,25,45,.06);--dm-overlay-shadow:0 26px 72px -30px rgba(16,25,45,.45),0 2px 8px rgba(16,25,45,.07);--dm-ring:0 0 0 3px color-mix(in srgb,var(--dm-primary) 18%,transparent);}',
+    '.dm_page{height:100%;overflow-y:auto;box-sizing:border-box;color:var(--dm-ink);font-size:13px;line-height:1.55;background-color:var(--dm-bg);background-image:none;scrollbar-width:thin;scrollbar-color:color-mix(in srgb,var(--dm-ink) 20%,transparent) transparent;}',
+    'body[data-ds-dark-theme] .dm_page,body[data-ds-dark-theme] .dm_select_pop{--dm-bg:var(--dsw-alias-bg-base,#0f1115);--dm-surface:var(--dsw-alias-bg-layer-1,#171a21);--dm-ink:var(--dsw-alias-label-primary,#e8eaf0);--dm-ink2:var(--dsw-alias-label-secondary,#a8aebd);--dm-ink3:var(--dsw-alias-label-tertiary,#6f7688);--dm-line:var(--dsw-alias-border-l1,rgba(232,234,240,.07));--dm-line2:var(--dsw-alias-border-l2,rgba(232,234,240,.15));--dm-pref:#d6ab52;--dm-pref-soft:rgba(214,171,82,.12);--dm-fact:#7ea6e8;--dm-fact-soft:rgba(126,166,232,.12);--dm-dec:#6cc79b;--dm-dec-soft:rgba(108,199,155,.12);--dm-danger:var(--dsw-alias-state-error-primary,#f87171);--dm-danger-soft:rgba(248,113,113,.12);--dm-success:var(--dsw-alias-state-success-primary,#34d399);--dm-success-soft:rgba(52,211,153,.12);--dm-shadow:0 1px 2px rgba(0,0,0,.4);--dm-shadow-hover:0 2px 8px rgba(0,0,0,.5);--dm-pop:0 16px 40px -18px rgba(0,0,0,.8),0 2px 8px rgba(0,0,0,.4);--dm-overlay-shadow:0 30px 80px -32px rgba(0,0,0,.85),0 2px 8px rgba(0,0,0,.4);}',
     '.dm_page::-webkit-scrollbar{width:10px;height:10px;}',
     '.dm_page::-webkit-scrollbar-track{background:transparent;}',
-    '.dm_page::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--dm-ink) 20%,transparent);border-radius:8px;border:2.5px solid transparent;background-clip:content-box;}',
-    '.dm_page::-webkit-scrollbar-thumb:hover{background:color-mix(in srgb,var(--dm-primary) 55%,transparent);border:2.5px solid transparent;background-clip:content-box;}',
-    '.dm_page ::selection{background:color-mix(in srgb,var(--dm-primary) 26%,transparent);}',
-    // ---- 头部 ----
-    '.dm_header{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-top:18px;margin-bottom:18px;}',
-    '.dm_brand{display:flex;gap:12px;align-items:center;min-width:0;}',
-    '.dm_brand_medal{flex-shrink:0;width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;color:var(--dm-ink2);background:var(--dm-line);}',
-    '.dm_title_row{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;}',
-    '.dm_title{margin:0;font-size:20px;font-weight:650;letter-spacing:-.01em;line-height:1.3;}',
-    '.dm_version{font-size:11px;color:var(--dm-ink3);font-variant-numeric:tabular-nums;white-space:nowrap;}',
-    '.dm_subtitle{color:var(--dm-ink2);margin-top:2px;font-size:12.5px;}',
-    // ---- 按钮 ----
-    '.dm_btn{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--dm-line2);background:var(--dm-surface);color:var(--dm-ink2);border-radius:8px;padding:6px 12px;cursor:pointer;font:inherit;font-size:12.5px;transition:color .15s,background .15s,border-color .15s;}',
-    '.dm_btn:hover{color:var(--dm-ink);border-color:color-mix(in srgb,var(--dm-ink) 24%,var(--dm-line2));background:color-mix(in srgb,var(--dm-ink) 4%,var(--dm-surface));}',
+    '.dm_page::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--dm-ink) 18%,transparent);border-radius:8px;border:3px solid transparent;background-clip:content-box;}',
+    '.dm_page::-webkit-scrollbar-thumb:hover{background:color-mix(in srgb,var(--dm-ink) 34%,transparent);border:3px solid transparent;background-clip:content-box;}',
+    '.dm_page ::selection{background:color-mix(in srgb,var(--dm-primary) 24%,transparent);}',
+    // ---- 版心与页头 ----
+    '.dm_inner{max-width:1040px;margin:0 auto;padding:0 32px 64px;}',
+    '.dm_header{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;margin-top:26px;margin-bottom:0;}',
+    '.dm_brand{display:flex;gap:11px;align-items:flex-start;min-width:0;}',
+    '.dm_brand_medal{flex-shrink:0;width:18px;height:24px;display:flex;align-items:center;justify-content:flex-start;color:var(--dm-ink3);background:none;border-radius:0;padding-top:2px;}',
+    '.dm_title_row{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap;}',
+    '.dm_title{margin:0;font-size:22px;font-weight:600;letter-spacing:-.02em;line-height:1.25;}',
+    '.dm_version{font:500 10.5px/1 var(--dm-mono);color:var(--dm-ink3);letter-spacing:.02em;border:1px solid var(--dm-line2);border-radius:3px;padding:3px 5px;position:relative;top:-2px;white-space:nowrap;}',
+    '.dm_subtitle{color:var(--dm-ink3);margin-top:5px;font-size:12.5px;}',
+    // ---- 按钮：中性描边为主，强调色只给主操作与焦点 ----
+    '.dm_btn{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--dm-line2);background:var(--dm-surface);color:var(--dm-ink2);border-radius:6px;padding:5px 10px;cursor:pointer;font:inherit;font-size:12.5px;line-height:1.2;transition:color .13s,background-color .13s,border-color .13s;}',
+    '.dm_btn:hover{color:var(--dm-ink);border-color:color-mix(in srgb,var(--dm-ink) 26%,var(--dm-line2));background:color-mix(in srgb,var(--dm-ink) 3%,var(--dm-surface));}',
     '.dm_btn:focus-visible{outline:none;box-shadow:var(--dm-ring);}',
-    '.dm_btn:disabled{opacity:.45;cursor:default;}',
-    '.dm_btn_primary{background:var(--dm-primary);border-color:transparent;color:var(--dm-on-primary);font-weight:600;}',
-    '.dm_btn_primary:hover{color:var(--dm-on-primary);background:color-mix(in srgb,var(--dm-primary) 88%,#000);border-color:transparent;}',
+    '.dm_btn:disabled{opacity:.42;cursor:default;}',
+    '.dm_btn_primary{background:var(--dm-primary);border-color:transparent;color:var(--dm-on-primary);font-weight:500;}',
+    '.dm_btn_primary:hover{color:var(--dm-on-primary);background:color-mix(in srgb,var(--dm-primary) 90%,#000);border-color:transparent;}',
     '.dm_btn_danger{color:var(--dm-danger);}',
-    '.dm_btn_danger:hover{color:var(--dm-danger);border-color:color-mix(in srgb,var(--dm-danger) 50%,var(--dm-line2));background:var(--dm-danger-soft);}',
-    '.dm_btn_danger_solid{background:var(--dm-danger);border-color:transparent;color:#fff;font-weight:600;}',
-    '.dm_btn_danger_solid:hover{color:#fff;background:color-mix(in srgb,var(--dm-danger) 88%,#000);}',
+    '.dm_btn_danger:hover{color:var(--dm-danger);border-color:color-mix(in srgb,var(--dm-danger) 45%,var(--dm-line2));background:var(--dm-danger-soft);}',
+    '.dm_btn_danger_solid{background:var(--dm-danger);border-color:transparent;color:#fff;font-weight:500;}',
+    '.dm_btn_danger_solid:hover{color:#fff;background:color-mix(in srgb,var(--dm-danger) 90%,#000);}',
     '.dm_btn_ghost{border-color:transparent;background:transparent;}',
-    '.dm_btn_mini{padding:3px 9px;font-size:11.5px;border-radius:6px;}',
-    '.dm_cta{height:34px;padding:0 16px;border-radius:8px;font-size:13px;flex-shrink:0;}',
-    // ---- 统计条 ----
-    '.dm_stats{display:flex;align-items:center;gap:20px;flex-wrap:wrap;background:var(--dm-surface);border:1px solid var(--dm-line);border-radius:10px;padding:14px 18px;margin-bottom:14px;}',
-    '.dm_stats_total{display:flex;align-items:baseline;gap:8px;}',
-    '.dm_stats_num{font-size:24px;font-weight:600;line-height:1;color:var(--dm-ink);font-variant-numeric:tabular-nums;}',
-    '.dm_stats_unit{font-size:11.5px;color:var(--dm-ink3);}',
-    '.dm_stats_div{width:1px;height:32px;background:var(--dm-line2);}',
-    '.dm_stats_dist{flex:1;min-width:230px;display:flex;flex-direction:column;gap:8px;}',
-    '.dm_dist_bar{display:flex;height:6px;border-radius:3px;overflow:hidden;background:var(--dm-line);}',
-    '.dm_dist_seg{transition:flex-grow .3s ease;min-width:0;}',
+    '.dm_btn_mini{padding:3px 8px;font-size:11.5px;border-radius:5px;}',
+    '.dm_cta{height:32px;padding:0 14px;border-radius:6px;font-size:12.5px;font-weight:500;flex-shrink:0;}',
+    '.dm_sr{position:absolute;width:1px;height:1px;margin:-1px;padding:0;border:0;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap;}',
+    // ---- 概览带：细线分区 + 单一强调色 ----
+    '.dm_stats{display:flex;align-items:center;gap:22px;flex-wrap:wrap;background:none;border:0;border-bottom:1px solid var(--dm-line);border-radius:0;padding:20px 0 14px;margin-bottom:0;}',
+    '.dm_stats_total{display:flex;align-items:baseline;gap:7px;}',
+    '.dm_stats_num{font-size:28px;font-weight:600;line-height:1;letter-spacing:-.03em;color:var(--dm-ink);font-variant-numeric:tabular-nums;}',
+    '.dm_stats_unit{font-size:11.5px;color:var(--dm-ink3);letter-spacing:.04em;}',
+    '.dm_stats_div{width:1px;height:26px;background:var(--dm-line2);}',
+    '.dm_stats_dist{flex:1;min-width:260px;display:flex;flex-direction:column;gap:9px;}',
+    '.dm_dist_bar{display:flex;height:2px;border-radius:0;overflow:hidden;background:var(--dm-line);}',
+    '.dm_dist_seg{transition:flex-grow .3s ease;min-width:0;opacity:.75;}',
     '.dm_dist_seg_preference{background:var(--dm-pref);}',
     '.dm_dist_seg_fact{background:var(--dm-fact);}',
     '.dm_dist_seg_decision{background:var(--dm-dec);}',
-    '.dm_chips{display:flex;gap:8px;flex-wrap:wrap;}',
-    '.dm_chip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--dm-line2);background:transparent;color:var(--dm-ink2);border-radius:6px;padding:4px 12px;cursor:pointer;font:inherit;font-size:12px;transition:color .15s,background .15s,border-color .15s;}',
-    '.dm_chip:hover{border-color:color-mix(in srgb,var(--dm-chip-c,var(--dm-primary)) 50%,var(--dm-line2));color:var(--dm-chip-c,var(--dm-primary));}',
+    '.dm_chips{display:flex;gap:1px;flex-wrap:wrap;align-items:center;margin-left:-7px;}',
+    '.dm_chip{display:inline-flex;align-items:center;gap:5px;border:0;background:none;color:var(--dm-ink3);border-radius:4px;padding:3px 7px;cursor:pointer;font:inherit;font-size:12px;font-weight:500;transition:color .13s,background-color .13s;}',
+    '.dm_chip:hover{color:var(--dm-ink);background:var(--dm-raised);}',
     '.dm_chip:focus-visible{outline:none;box-shadow:var(--dm-ring);}',
-    '.dm_chip[aria-pressed="true"]{background:var(--dm-chip-soft,color-mix(in srgb,var(--dm-primary) 12%,transparent));border-color:color-mix(in srgb,var(--dm-chip-c,var(--dm-primary)) 55%,transparent);color:var(--dm-chip-c,var(--dm-primary));font-weight:600;}',
-    '.dm_chip_n{font-size:11px;font-variant-numeric:tabular-nums;opacity:.75;}',
-    '.dm_stats_scope{font-size:11.5px;color:var(--dm-ink3);white-space:nowrap;}',
-    // ---- 工具栏（吸顶） ----
-    // top 必须为 0：Chromium 会把滚动容器 padding-top 叠加进 sticky 停驻位，
-    // 顶部呼吸空间改由 .dm_header 的 margin-top 提供（margin 不参与叠加）。
-    // 宿主并不定义 --dsh-frame-top-clearance，旧 48px 回退曾造成 114px 露出带遮断卡片（0.24.38 修复）。
-    '.dm_toolbar_wrap{position:sticky;top:0;z-index:30;margin:0 -24px 6px;padding:8px 24px;background:var(--dm-bg);border-bottom:1px solid var(--dm-line);}',
-    '.dm_toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}',
-    '.dm_select{appearance:none;-webkit-appearance:none;height:34px;border:1px solid var(--dm-line2);border-radius:8px;background:var(--dm-surface);color:var(--dm-ink);padding:0 30px 0 12px;font:inherit;font-size:12.5px;cursor:pointer;max-width:340px;background-image:url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'12\' height=\'12\' viewBox=\'0 0 24 24\' fill=\'none\' stroke=\'%2399a1b2\' stroke-width=\'2.2\' stroke-linecap=\'round\' stroke-linejoin=\'round\'%3E%3Cpath d=\'M6 9l6 6 6-6\'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 10px center;transition:border-color .15s,box-shadow .15s;}',
-    '.dm_select:hover{border-color:color-mix(in srgb,var(--dm-ink) 24%,var(--dm-line2));}',
-    '.dm_select:focus{outline:none;border-color:var(--dm-primary);box-shadow:var(--dm-ring);}',
-    '.dm_searchwrap{position:relative;flex:1;min-width:200px;}',
-    '.dm_search_icon{position:absolute;left:11px;top:50%;transform:translateY(-50%);color:var(--dm-ink3);pointer-events:none;display:flex;}',
-    '.dm_search{width:100%;height:34px;box-sizing:border-box;border:1px solid var(--dm-line2);border-radius:8px;background:var(--dm-surface);color:var(--dm-ink);padding:0 32px 0 34px;font:inherit;font-size:12.5px;transition:border-color .15s,box-shadow .15s;}',
+    '.dm_chip[aria-pressed="true"]{background:color-mix(in srgb,var(--dm-ink) 7%,transparent);color:var(--dm-ink);font-weight:600;}',
+    '.dm_chip svg{width:13px;height:13px;opacity:.7;}',
+    '.dm_chip_n{font:500 10.5px var(--dm-mono);color:var(--dm-ink3);opacity:.9;}',
+    '.dm_chips_status{margin-top:1px;}',
+    '.dm_stats_scope{font:500 10.5px var(--dm-mono);color:var(--dm-ink3);letter-spacing:.02em;white-space:nowrap;margin-left:auto;align-self:flex-start;padding-top:4px;}',
+    // ---- 工具栏（吸顶）：与列表同一条细线语言，非毛玻璃 ----
+    // top 必须为 0：Chromium 会把滚动容器 padding-top 叠加进 sticky 停驻位；
+    // 顶部呼吸空间由 .dm_header 的 margin 提供（margin 不参与叠加）。
+    '.dm_toolbar_wrap{position:sticky;top:0;z-index:30;margin:0 -32px;padding:9px 32px;background:var(--dm-bg);background-image:none;border-bottom:1px solid var(--dm-line);backdrop-filter:none;}',
+    '.dm_toolbar{display:flex;gap:6px;flex-wrap:wrap;align-items:center;}',
+    '.dm_searchwrap{position:relative;flex:1;min-width:160px;max-width:340px;order:-1;}',
+    '.dm_search_icon{position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--dm-ink3);pointer-events:none;display:flex;}',
+    '.dm_search{width:100%;height:30px;box-sizing:border-box;border:1px solid transparent;border-radius:5px;background:var(--dm-raised);color:var(--dm-ink);padding:0 30px 0 29px;font:inherit;font-size:12.5px;transition:border-color .13s,background-color .13s,box-shadow .13s;}',
     '.dm_search::placeholder{color:var(--dm-ink3);}',
-    '.dm_search:focus{outline:none;border-color:var(--dm-primary);box-shadow:var(--dm-ring);}',
-    '.dm_taginput{height:34px;width:140px;padding:0 12px;border:1px solid var(--dm-line2);border-radius:8px;background:var(--dm-bg);color:var(--dm-ink);font:inherit;font-size:13px;}',
-    '.dm_taginput:focus{outline:none;border-color:var(--dm-primary);box-shadow:var(--dm-ring);}',
-    '.dm_tagwrap{position:relative;display:inline-flex;align-items:center;}',
-    '.dm_tagwrap .dm_taginput{padding-right:30px;}',
-    '.dm_tagclear{position:absolute;right:6px;width:22px;height:22px;border:none;border-radius:4px;background:transparent;color:var(--dm-ink3);cursor:pointer;display:flex;align-items:center;justify-content:center;}',
-    '.dm_tagclear:hover{background:var(--dm-line);color:var(--dm-ink);}',
-    '.dm_search_clear{position:absolute;right:6px;top:50%;transform:translateY(-50%);width:24px;height:24px;border:none;border-radius:4px;background:transparent;color:var(--dm-ink3);cursor:pointer;display:flex;align-items:center;justify-content:center;}',
+    '.dm_search:hover{background:color-mix(in srgb,var(--dm-ink) 5%,var(--dm-bg));}',
+    '.dm_search:focus{outline:none;border-color:var(--dm-primary);background:var(--dm-surface);box-shadow:var(--dm-ring);}',
+    '.dm_search_clear{position:absolute;right:5px;top:50%;transform:translateY(-50%);width:22px;height:22px;border:none;border-radius:4px;background:transparent;color:var(--dm-ink3);cursor:pointer;display:flex;align-items:center;justify-content:center;}',
     '.dm_search_clear:hover{background:var(--dm-line);color:var(--dm-ink);}',
-    '.dm_toolbtn{height:34px;}',
-    // ---- 分组标题 ----
-    '.dm_section_title{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:600;color:var(--dm-ink2);margin:18px 0 10px;}',
-    '.dm_section_n{font-size:11px;font-weight:500;color:var(--dm-ink3);background:var(--dm-line);border-radius:4px;padding:1px 7px;}',
-    // ---- 记忆卡片 ----
-    '.dm_card{position:relative;display:flex;gap:12px;border:1px solid var(--dm-line);border-radius:10px;padding:14px 14px 12px 12px;margin-bottom:8px;background:var(--dm-surface);transition:border-color .15s ease,background .15s ease;}',
-    '.dm_card:hover{border-color:var(--dm-line2);}',
-    '.dm_card_selected{border-color:color-mix(in srgb,var(--dm-primary) 55%,transparent);background:color-mix(in srgb,var(--dm-primary) 5%,var(--dm-surface));}',
-    '.dm_rail{position:absolute;left:0;top:12px;bottom:12px;width:3px;border-radius:0 2px 2px 0;background:var(--dm-cat,var(--dm-primary));}',
-    '.dm_check{display:flex;align-items:flex-start;padding-top:3px;flex-shrink:0;}',
-    '.dm_check input{width:15px;height:15px;margin:0;accent-color:var(--dm-primary);cursor:pointer;opacity:0;transition:opacity .15s;}',
+    '.dm_select_trigger{display:inline-flex;align-items:center;gap:7px;height:30px;width:100%;box-sizing:border-box;border:1px solid transparent;border-radius:5px;background:transparent;color:var(--dm-ink2);padding:0 7px 0 9px;font:inherit;font-size:12.5px;cursor:pointer;max-width:320px;transition:color .13s,background-color .13s,border-color .13s;}',
+    '.dm_select_trigger:hover{color:var(--dm-ink);background:var(--dm-raised);}',
+    '.dm_select_trigger:focus-visible{outline:none;border-color:var(--dm-primary);box-shadow:var(--dm-ring);}',
+    '.dm_select_open{border-color:var(--dm-line2);background:var(--dm-surface);color:var(--dm-ink);}',
+    '.dm_select_disabled{opacity:.42;cursor:default;}',
+    '.dm_select_val_icon{display:flex;color:var(--dm-ink3);flex-shrink:0;}',
+    '.dm_select_value{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left;}',
+    '.dm_select_chev{display:flex;color:var(--dm-ink3);flex-shrink:0;transition:transform .18s;}',
+    '.dm_select_open .dm_select_chev{transform:rotate(180deg);color:var(--dm-ink2);}',
+    '.dm_select_pop{position:fixed;z-index:1200;box-sizing:border-box;background:var(--dm-surface);border:1px solid var(--dm-line2);border-radius:7px;box-shadow:var(--dm-pop);padding:4px;max-height:300px;overflow-y:auto;animation:dm_fade .12s ease;transform-origin:top center;scrollbar-width:thin;scrollbar-color:color-mix(in srgb,var(--dm-ink) 20%,transparent) transparent;}',
+    '.dm_select_pop::-webkit-scrollbar{width:8px;}',
+    '.dm_select_pop::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--dm-ink) 18%,transparent);border-radius:8px;}',
+    '.dm_select_up{transform-origin:bottom center;}',
+    '.dm_select_opt{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:5px;cursor:pointer;font-size:12.5px;color:var(--dm-ink);transition:background-color .1s,color .1s;}',
+    '.dm_select_opt_active{background:color-mix(in srgb,var(--dm-ink) 6%,transparent);}',
+    '.dm_select_opt_sel{color:var(--dm-ink);font-weight:600;background:color-mix(in srgb,var(--dm-ink) 5%,transparent);}',
+    '.dm_select_opt_sel.dm_select_opt_active{background:color-mix(in srgb,var(--dm-ink) 9%,transparent);}',
+    '.dm_select_opt_disabled{opacity:.4;cursor:default;}',
+    '.dm_select_opt_icon{display:flex;color:var(--dm-ink3);flex-shrink:0;}',
+    '.dm_select_opt_sel .dm_select_opt_icon{color:var(--dm-ink2);}',
+    '.dm_select_opt_spacer{width:14px;}',
+    '.dm_select_opt_label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
+    '.dm_select_opt_hint{font:500 10.5px var(--dm-mono);color:var(--dm-ink3);flex-shrink:0;}',
+    '.dm_select_opt_check{color:var(--dm-primary);flex-shrink:0;}',
+    '.dm_tagwrap{position:relative;display:inline-flex;align-items:center;}',
+    '.dm_taginput{height:30px;width:104px;padding:0 26px 0 9px;border:1px solid transparent;border-radius:5px;background:transparent;color:var(--dm-ink);font:inherit;font-size:12.5px;}',
+    '.dm_taginput::placeholder{color:var(--dm-ink3);}',
+    '.dm_taginput:hover{background:var(--dm-raised);}',
+    '.dm_taginput:focus{outline:none;border-color:var(--dm-primary);background:var(--dm-surface);box-shadow:var(--dm-ring);}',
+    '.dm_tagclear{position:absolute;right:4px;width:20px;height:20px;border:none;border-radius:4px;background:transparent;color:var(--dm-ink3);cursor:pointer;display:flex;align-items:center;justify-content:center;}',
+    '.dm_tagclear:hover{background:var(--dm-line);color:var(--dm-ink);}',
+    '.dm_toolbtn{height:30px;border-color:transparent;background:transparent;padding:0 8px;font-size:12.5px;}',
+    '.dm_toolbtn:first-of-type{margin-left:auto;}',
+    '.dm_toolbtn:hover{border-color:transparent;}',
+    // ---- 分组标题：小字 + 贯穿细线 ----
+    '.dm_section_title{display:flex;align-items:center;gap:7px;font-size:11px;font-weight:600;letter-spacing:.08em;color:var(--dm-ink3);margin:24px 0 2px;text-transform:uppercase;}',
+    '.dm_section_title::after{content:"";flex:1;height:1px;background:var(--dm-line);order:9;}',
+    '.dm_section_title svg{opacity:.8;}',
+    '.dm_section_n{font:500 10px var(--dm-mono);font-weight:500;color:var(--dm-ink3);letter-spacing:.02em;background:none;border-radius:0;padding:0;order:8;}',
+    // ---- 记忆行：索引卡式列表，细线分隔，操作悬停浮现 ----
+    '.dm_card{position:relative;display:grid;grid-template-columns:18px minmax(0,1fr) auto;column-gap:12px;align-items:start;border:0;border-bottom:1px solid var(--dm-line);border-radius:0;padding:14px 10px 15px 0;margin:0 -10px 0 0;background:transparent;transition:background-color .12s ease;}',
+    '.dm_card:hover{background:var(--dm-raised);}',
+    '.dm_card_selected{background:color-mix(in srgb,var(--dm-primary) 5%,transparent);box-shadow:inset 2px 0 0 var(--dm-primary);}',
+    '.dm_rail{display:none;}',
+    '.dm_medal{display:none;}',
+    '.dm_check{display:flex;align-items:flex-start;padding-top:2px;flex-shrink:0;}',
+    '.dm_check input{width:14px;height:14px;margin:0;accent-color:var(--dm-primary);cursor:pointer;opacity:0;transition:opacity .12s;}',
     '.dm_card:hover .dm_check input,.dm_check input:checked,.dm_selecting .dm_check input,.dm_check input:focus-visible{opacity:1;}',
     '@media (hover:none){.dm_check input{opacity:1;}}',
-    '.dm_medal{flex-shrink:0;width:30px;height:30px;border-radius:6px;display:flex;align-items:center;justify-content:center;color:var(--dm-cat,var(--dm-primary));background:var(--dm-cat-soft,var(--dm-fact-soft));}',
     '.dm_card_main{min-width:0;flex:1;}',
-    '.dm_card_top{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}',
-    '.dm_badge{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;padding:2px 8px;border-radius:4px;color:var(--dm-cat,var(--dm-primary));background:var(--dm-cat-soft,var(--dm-fact-soft));}',
-    '.dm_scope_chip{display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--dm-ink3);}',
-    '.dm_time{font-size:11px;color:var(--dm-ink3);margin-left:auto;font-variant-numeric:tabular-nums;cursor:default;}',
-    '.dm_content{white-space:pre-wrap;word-break:break-word;margin:7px 0 6px;line-height:1.65;font-size:13.5px;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;cursor:pointer;border-radius:4px;}',
+    '.dm_card_top{display:flex;align-items:center;gap:0;flex-wrap:wrap;min-height:17px;font-size:11.5px;color:var(--dm-ink3);}',
+    '.dm_card_top > * + *{margin-left:9px;}',
+    '.dm_card_top > * + *::before{content:"·";margin-right:8px;color:var(--dm-ink3);opacity:.65;}',
+    '.dm_badge{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:600;letter-spacing:.01em;padding:0;border-radius:0;color:var(--dm-ink);background:none;}',
+    '.dm_badge::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--dm-cat,var(--dm-primary));}',
+    '.dm_badge svg{display:none;}',
+    '.dm_scope_chip{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;color:var(--dm-ink3);}',
+    '.dm_time{font:500 11px var(--dm-mono);color:var(--dm-ink3);margin-left:auto;font-variant-numeric:tabular-nums;cursor:default;}',
+    '.dm_time::before{content:"";margin-right:0;}',
+    '.dm_content{white-space:pre-wrap;word-break:break-word;margin:7px 0 7px;line-height:1.65;font-size:13.5px;color:var(--dm-ink);display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;cursor:pointer;border-radius:3px;}',
+    '.dm_content:hover{color:var(--dm-ink);}',
     '.dm_content:focus-visible{outline:none;box-shadow:var(--dm-ring);}',
     '.dm_content_open{display:block;-webkit-line-clamp:unset;cursor:default;}',
-    '.dm_details{display:flex;flex-direction:column;gap:5px;font-size:11.5px;color:var(--dm-ink2);margin:8px 0;padding:10px 12px;background:var(--dm-bg);border:1px solid var(--dm-line);border-radius:8px;}',
-    '.dm_details_row{display:flex;gap:6px;align-items:baseline;}',
-    '.dm_details_k{color:var(--dm-ink3);flex-shrink:0;}',
+    '.dm_details{display:grid;grid-template-columns:88px minmax(0,1fr);gap:6px 12px;font-size:11.5px;color:var(--dm-ink2);margin:9px 0 10px;padding:11px 13px;background:var(--dm-raised);border:0;border-radius:5px;}',
+    '.dm_details_row{display:contents;}',
+    '.dm_details_k{color:var(--dm-ink3);}',
     '.dm_details_v{word-break:break-all;}',
-    '.dm_details_link{display:inline-flex;align-items:center;gap:3px;border:none;background:none;padding:0;font:inherit;color:var(--dm-primary);cursor:pointer;word-break:break-all;text-decoration:underline;text-underline-offset:2px;}',
-    '.dm_details_link:hover{color:var(--dm-ink);}',
-    '.dm_card_foot{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:2px;}',
-    '.dm_tag{border:1px solid var(--dm-line2);background:transparent;color:var(--dm-ink2);font:inherit;font-size:11px;padding:1.5px 8px;border-radius:4px;cursor:pointer;transition:color .15s,background .15s,border-color .15s;}',
-    '.dm_tag:hover{color:var(--dm-ink);border-color:color-mix(in srgb,var(--dm-ink) 24%,var(--dm-line2));background:color-mix(in srgb,var(--dm-ink) 5%,transparent);}',
+    '.dm_details_link{display:inline-flex;align-items:center;gap:3px;border:none;background:none;padding:0;font:inherit;color:var(--dm-ink2);cursor:pointer;word-break:break-all;text-decoration:underline;text-decoration-color:var(--dm-line2);text-underline-offset:2px;}',
+    '.dm_details_link:hover{color:var(--dm-ink);text-decoration-color:var(--dm-ink3);}',
+    '.dm_details > div:not(.dm_details_row){grid-column:1/-1;}',
+    '.dm_card_foot{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:0;}',
+    '.dm_tag{border:0;background:none;color:var(--dm-ink3);font:inherit;font-size:11.5px;padding:0;border-radius:0;cursor:pointer;transition:color .13s;}',
+    '.dm_tag:hover{color:var(--dm-ink);text-decoration:underline;text-underline-offset:2px;}',
     '.dm_tag:focus-visible{outline:none;box-shadow:var(--dm-ring);}',
-    '.dm_id{font-family:ui-monospace,"Cascadia Mono",Consolas,monospace;font-size:10.5px;color:var(--dm-ink3);word-break:break-all;}',
-    '.dm_card_actions{display:flex;flex-direction:column;gap:6px;flex-shrink:0;}',
-    '.dm_card_actions .dm_btn{padding:4px 8px;font-size:12px;border-color:transparent;background:transparent;}',
-    '.dm_card_actions .dm_btn:hover{border-color:transparent;background:var(--dm-line);}',
-    // ---- 骨架屏（功能性加载指示，保留） ----
-    '.dm_skel{border:1px solid var(--dm-line);border-radius:10px;padding:16px;margin-bottom:8px;background:var(--dm-surface);}',
-    '.dm_skel_line{height:12px;border-radius:3px;background:linear-gradient(90deg,var(--dm-line) 25%,color-mix(in srgb,var(--dm-ink) 6%,var(--dm-surface)) 37%,var(--dm-line) 63%);background-size:400% 100%;animation:dm_shimmer 1.4s ease infinite;margin-bottom:10px;}',
-    // ---- 空态 / 错误 ----
-    '.dm_empty{border:1px dashed var(--dm-line2);border-radius:10px;padding:44px 24px;text-align:center;color:var(--dm-ink2);}',
-    '.dm_empty_art{display:block;margin:0 auto 12px;color:var(--dm-ink3);}',
-    '.dm_empty_title{font-size:14px;font-weight:600;color:var(--dm-ink);}',
-    '.dm_empty_hint{margin-top:6px;font-size:12.5px;color:var(--dm-ink3);max-width:42ch;margin-left:auto;margin-right:auto;}',
+    '.dm_id{font:400 10.5px var(--dm-mono);color:var(--dm-ink3);opacity:.75;margin-left:auto;word-break:break-all;}',
+    '.dm_card_actions{display:flex;flex-direction:row;gap:0;flex-shrink:0;margin-top:-2px;opacity:0;transition:opacity .12s ease;}',
+    '.dm_card:hover .dm_card_actions,.dm_card:focus-within .dm_card_actions,.dm_card_selected .dm_card_actions{opacity:1;}',
+    '@media (hover:none){.dm_card_actions{opacity:1;}}',
+    '.dm_card_actions .dm_btn{padding:5px;border-color:transparent;background:transparent;color:var(--dm-ink3);border-radius:4px;}',
+    '.dm_card_actions .dm_btn:hover{border-color:transparent;background:var(--dm-line);color:var(--dm-ink);}',
+    '.dm_card_actions .dm_btn_danger:hover{background:var(--dm-danger-soft);color:var(--dm-danger);}',
+    '.dm_origin{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:400;padding:0;border-radius:0;color:var(--dm-ink3);}',
+    '.dm_origin svg{display:none;}',
+    '.dm_origin_auto{color:var(--dm-ink3);background:none;}',
+    '.dm_origin_manual{color:var(--dm-ink3);background:none;}',
+    '.dm_status{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:500;padding:0;border-radius:0;color:var(--dm-ink3);background:none;}',
+    '.dm_status svg{display:none;}',
+    '.dm_status_expired{color:var(--dm-danger);}',
+    '.dm_successor{display:inline-flex;align-items:center;gap:3px;border:none;background:transparent;color:var(--dm-ink3);font:inherit;font-size:11px;font-weight:500;padding:0;border-radius:0;cursor:pointer;}',
+    '.dm_successor:hover{color:var(--dm-ink);text-decoration:underline;text-underline-offset:2px;}',
+    '.dm_pinned_mark{display:inline-flex;color:var(--dm-ink2);}',
+    '.dm_injected_mark{display:inline-flex;align-items:center;gap:3px;font-size:11px;font-weight:500;color:var(--dm-ink3);}',
+    '.dm_card_muted{opacity:.62;}',
+    '.dm_card_muted:hover{opacity:1;}',
+    '.dm_btn_pinned{color:var(--dm-pref);}',
+    // ---- 加载 / 空态 / 错误：无虚线框、无渐变 ----
+    '.dm_skel{border:0;border-bottom:1px solid var(--dm-line);border-radius:0;padding:18px 0;margin:0;background:none;}',
+    '.dm_skel_line{height:10px;border-radius:3px;background:var(--dm-raised);margin-bottom:10px;animation:dm_breathe 1.8s ease-in-out infinite;}',
+    '.dm_empty{border:0;border-radius:0;padding:64px 24px;text-align:center;color:var(--dm-ink2);background:none;}',
+    '.dm_empty_art{display:block;margin:0 auto 14px;color:var(--dm-ink3);opacity:.5;}',
+    '.dm_empty_title{font-size:14px;font-weight:600;color:var(--dm-ink);letter-spacing:-.01em;}',
+    '.dm_empty_hint{margin-top:6px;font-size:12.5px;color:var(--dm-ink3);max-width:44ch;margin-left:auto;margin-right:auto;line-height:1.6;}',
+    '.dm_hidden_hint{display:flex;align-items:flex-start;gap:9px;margin:14px 0 4px;padding:2px 0 2px 12px;border:0;border-left:2px solid var(--dm-line2);border-radius:0;background:none;color:var(--dm-ink3);font-size:12px;line-height:1.55;}',
+    '.dm_hidden_hint svg{opacity:.8;}',
     // ---- 翻页 ----
-    '.dm_pager{display:flex;gap:10px;align-items:center;justify-content:center;margin:18px 0 4px;}',
-    '.dm_pager .dm_btn{padding:5px 11px;}',
-    '.dm_pageinfo{font-size:12px;color:var(--dm-ink2);background:var(--dm-surface);border:1px solid var(--dm-line);padding:4px 12px;border-radius:4px;font-variant-numeric:tabular-nums;}',
+    '.dm_pager{display:flex;gap:8px;align-items:center;justify-content:center;margin:22px 0 8px;}',
+    '.dm_pager .dm_btn{height:28px;padding:0 9px;border-color:transparent;background:transparent;color:var(--dm-ink2);}',
+    '.dm_pager .dm_btn:hover{background:var(--dm-raised);border-color:transparent;}',
+    '.dm_pageinfo{font:500 11px var(--dm-mono);color:var(--dm-ink3);background:none;border:0;padding:0 9px;font-variant-numeric:tabular-nums;}',
     // ---- 批量选择浮栏 ----
-    '.dm_selbar{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);z-index:900;display:flex;gap:10px;align-items:center;background:var(--dm-surface);border:1px solid var(--dm-line2);border-radius:10px;padding:10px 14px;box-shadow:var(--dm-overlay-shadow);animation:dm_rise .2s ease;max-width:calc(100vw - 32px);}',
-    '.dm_selbar_n{font-size:13px;font-weight:600;color:var(--dm-ink);white-space:nowrap;}',
+    '.dm_selbar{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);z-index:900;display:flex;gap:7px;align-items:center;background:var(--dm-surface);border:1px solid var(--dm-line2);border-radius:7px;padding:8px 9px 8px 13px;box-shadow:var(--dm-pop);animation:dm_rise .18s ease;max-width:calc(100vw - 32px);}',
+    '.dm_selbar_n{font-size:12.5px;font-weight:600;color:var(--dm-ink);white-space:nowrap;margin-right:3px;}',
     // ---- 弹窗 ----
-    '.dm_overlay{position:fixed;inset:0;background:var(--dsw-alias-bg-overlay,rgba(10,12,20,.45));display:flex;align-items:center;justify-content:center;z-index:1000;animation:dm_fade .15s ease;}',
-    '.dm_dialog{background:var(--dm-surface);color:var(--dm-ink);border:1px solid var(--dm-line2);border-radius:12px;padding:22px;width:min(600px,calc(100vw - 48px));max-height:84vh;overflow-y:auto;box-shadow:var(--dm-overlay-shadow);box-sizing:border-box;animation:dm_fade .15s ease;scrollbar-width:thin;scrollbar-color:color-mix(in srgb,var(--dm-ink) 22%,transparent) transparent;}',
+    '.dm_overlay{position:fixed;inset:0;background:color-mix(in srgb,#0b0e17 40%,transparent);display:flex;align-items:center;justify-content:center;z-index:1000;animation:dm_fade .14s ease;}',
+    'body[data-ds-dark-theme] .dm_overlay{background:rgba(0,0,0,.6);}',
+    '.dm_dialog{background:var(--dm-surface);color:var(--dm-ink);border:1px solid var(--dm-line2);border-radius:10px;padding:22px 24px 18px;width:min(600px,calc(100vw - 40px));max-height:84vh;overflow-y:auto;box-shadow:var(--dm-overlay-shadow);box-sizing:border-box;animation:dm_fade .14s ease;scrollbar-width:thin;scrollbar-color:color-mix(in srgb,var(--dm-ink) 20%,transparent) transparent;}',
     '.dm_dialog::-webkit-scrollbar{width:8px;}',
-    '.dm_dialog::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--dm-ink) 20%,transparent);border-radius:4px;}',
-    '.dm_dialog_head{display:flex;align-items:center;gap:11px;margin-bottom:16px;}',
-    '.dm_dialog_medal{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0;}',
-    '.dm_dialog_medal_primary{color:var(--dm-primary);background:color-mix(in srgb,var(--dm-primary) 12%,transparent);}',
-    '.dm_dialog_medal_danger{color:var(--dm-danger);background:var(--dm-danger-soft);}',
-    '.dm_dialog_title{margin:0;font-size:15.5px;font-weight:650;letter-spacing:-.01em;}',
-    '.dm_field{margin-bottom:14px;}',
-    '.dm_label{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--dm-ink2);margin-bottom:6px;}',
-    '.dm_textarea{width:100%;min-height:140px;resize:vertical;box-sizing:border-box;border:1px solid var(--dm-line2);border-radius:8px;background:var(--dm-bg);color:var(--dm-ink);padding:12px;font:inherit;font-size:13.5px;line-height:1.6;transition:border-color .15s,box-shadow .15s;}',
-    '.dm_input{width:100%;height:36px;box-sizing:border-box;border:1px solid var(--dm-line2);border-radius:8px;background:var(--dm-bg);color:var(--dm-ink);padding:0 12px;font:inherit;font-size:12.5px;transition:border-color .15s,box-shadow .15s;}',
-    '.dm_textarea:focus,.dm_input:focus,.dm_dialog .dm_select:focus{outline:none;border-color:var(--dm-primary);box-shadow:var(--dm-ring);}',
-    '.dm_dialog .dm_select{width:100%;max-width:none;height:38px;border-radius:12px;background-color:var(--dm-bg);}',
-    '.dm_charcount{text-align:right;font-size:11px;color:var(--dm-ink3);margin-top:4px;font-variant-numeric:tabular-nums;}',
+    '.dm_dialog::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--dm-ink) 18%,transparent);border-radius:4px;}',
+    '.dm_dialog_head{display:flex;align-items:baseline;gap:10px;margin:0 0 18px;padding-bottom:14px;border-bottom:1px solid var(--dm-line);}',
+    '.dm_dialog_medal{display:none;}',
+    '.dm_dialog_title{margin:0;font-size:16px;font-weight:600;letter-spacing:-.01em;}',
+    '.dm_field{margin-bottom:16px;}',
+    '.dm_label{display:flex;align-items:center;gap:6px;font-size:11.5px;font-weight:600;color:var(--dm-ink3);letter-spacing:.03em;margin-bottom:7px;}',
+    '.dm_label svg{display:none;}',
+    '.dm_textarea{width:100%;min-height:132px;resize:vertical;box-sizing:border-box;border:1px solid var(--dm-line2);border-radius:6px;background:var(--dm-surface);color:var(--dm-ink);padding:11px 12px;font:inherit;font-size:13px;line-height:1.65;transition:border-color .13s,box-shadow .13s;}',
+    '.dm_input{width:100%;height:34px;box-sizing:border-box;border:1px solid var(--dm-line2);border-radius:6px;background:var(--dm-surface);color:var(--dm-ink);padding:0 10px;font:inherit;font-size:13px;transition:border-color .13s,box-shadow .13s;}',
+    '.dm_textarea:hover,.dm_input:hover{border-color:color-mix(in srgb,var(--dm-ink) 24%,var(--dm-line2));}',
+    '.dm_textarea:focus,.dm_input:focus,.dm_dialog .dm_select_trigger:focus-visible{outline:none;border-color:var(--dm-primary);box-shadow:var(--dm-ring);}',
+    '.dm_dialog .dm_selectwrap{display:block;width:100%;}',
+    '.dm_dialog .dm_select_trigger{max-width:none;height:34px;border:1px solid var(--dm-line2);border-radius:6px;background:var(--dm-surface);padding:0 9px 0 10px;}',
+    '.dm_charcount{text-align:right;font:500 10.5px var(--dm-mono);color:var(--dm-ink3);margin-top:5px;font-variant-numeric:tabular-nums;}',
     '.dm_charcount_limit{color:var(--dm-danger);}',
-    '.dm_catgrid{display:flex;gap:8px;}',
-    '.dm_catopt{flex:1;display:flex;align-items:center;justify-content:center;gap:7px;border:1px solid var(--dm-line2);border-radius:8px;background:transparent;color:var(--dm-ink2);padding:9px 8px;cursor:pointer;font:inherit;font-size:12.5px;font-weight:600;transition:color .15s,background .15s,border-color .15s;}',
-    '.dm_catopt:hover{border-color:color-mix(in srgb,var(--dm-cat) 45%,var(--dm-line2));color:var(--dm-cat);}',
+    '.dm_catgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;}',
+    '.dm_catopt{display:flex;align-items:center;justify-content:center;gap:7px;border:1px solid var(--dm-line2);border-radius:6px;background:transparent;color:var(--dm-ink2);padding:8px 6px;cursor:pointer;font:inherit;font-size:12.5px;font-weight:500;transition:color .13s,background-color .13s,border-color .13s;}',
+    '.dm_catopt::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--dm-cat);}',
+    '.dm_catopt svg{display:none;}',
+    '.dm_catopt:hover{color:var(--dm-ink);border-color:color-mix(in srgb,var(--dm-ink) 26%,var(--dm-line2));}',
     '.dm_catopt:focus-visible{outline:none;box-shadow:var(--dm-ring);}',
-    '.dm_catopt[aria-checked="true"]{background:var(--dm-cat-soft);border-color:color-mix(in srgb,var(--dm-cat) 55%,transparent);color:var(--dm-cat);}',
-    '.dm_dialog_footer{display:flex;justify-content:flex-end;gap:10px;margin-top:18px;align-items:center;}',
+    '.dm_catopt[aria-checked="true"]{background:var(--dm-raised);border-color:color-mix(in srgb,var(--dm-ink) 34%,var(--dm-line2));color:var(--dm-ink);font-weight:600;}',
+    '.dm_dialog_footer{display:flex;justify-content:flex-end;gap:8px;margin:20px -24px -18px;padding:14px 24px 16px;border-top:1px solid var(--dm-line);align-items:center;position:sticky;bottom:-18px;background:var(--dm-surface);border-radius:0 0 10px 10px;}',
     '.dm_dialog_footer .dm_hint{margin-right:auto;}',
-    '.dm_delete_preview{border:1px solid var(--dm-line);border-radius:8px;padding:12px;margin:10px 0;white-space:pre-wrap;word-break:break-word;background:var(--dm-bg);max-height:36vh;overflow-y:auto;font-size:13px;line-height:1.6;}',
-    '.dm_hint{color:var(--dm-ink3);font-size:11.5px;}',
-    '.dm_import_tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:6px 0 10px;}',
-    '.dm_import_merge{display:flex;align-items:center;gap:8px;margin:0 0 10px;font-size:12.5px;color:var(--dm-ink);cursor:pointer;}',
-    '.dm_audit_list{display:flex;flex-direction:column;gap:12px;}',
-    '.dm_audit_pair{border:1px solid var(--dm-line2);border-radius:8px;padding:12px;background:var(--dm-bg);}',
-    '.dm_audit_score{font-size:12px;font-weight:700;color:var(--dm-primary);margin-bottom:8px;}',
-    '.dm_audit_side{display:flex;gap:8px;align-items:flex-start;margin-bottom:6px;}',
-    '.dm_audit_tag{flex-shrink:0;font-size:11px;font-weight:700;padding:2px 7px;border-radius:4px;background:var(--dm-line);color:var(--dm-ink3);}',
-    '.dm_audit_tag_new{background:color-mix(in srgb,var(--dm-primary) 14%,transparent);color:var(--dm-primary);}',
-    '.dm_audit_content{font-size:13px;line-height:1.45;color:var(--dm-ink);word-break:break-word;}',
-    '.dm_audit_actions{display:flex;justify-content:flex-end;gap:8px;margin-top:8px;}',
-    '.dm_recall{margin-top:10px;border:1px solid var(--dm-line2);border-radius:8px;padding:12px;background:var(--dm-bg);}',
-    '.dm_recall_head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;}',
-    '.dm_recall_list{display:flex;flex-direction:column;gap:6px;margin-top:8px;max-height:220px;overflow-y:auto;scrollbar-width:thin;}',
-    '.dm_recall_item{display:flex;gap:8px;align-items:flex-start;font-size:12.5px;line-height:1.4;}',
-    '.dm_recall_cat{flex-shrink:0;font-weight:700;font-size:11px;}',
-    '.dm_recall_content{color:var(--dm-ink);word-break:break-word;}',
-    '.dm_hidden_hint{display:flex;align-items:flex-start;gap:8px;margin:0 0 10px;padding:10px 12px;border:1px solid var(--dm-line2);border-radius:8px;background:var(--dm-bg);color:var(--dm-ink);font-size:12.5px;line-height:1.45;}',
-    '.dm_tile{border:1px solid var(--dm-line);border-radius:8px;padding:12px;background:var(--dm-bg);text-align:center;}',
-    '.dm_tile_num{font-size:20px;font-weight:600;line-height:1.1;font-variant-numeric:tabular-nums;}',
-    '.dm_tile_label{font-size:11px;color:var(--dm-ink3);margin-top:3px;}',
-    // ---- 吐司（功能性反馈，保留） ----
-    '.dm_toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:1100;display:flex;gap:10px;align-items:center;min-width:260px;max-width:min(560px,90vw);background:var(--dm-surface);color:var(--dm-ink);border:1px solid var(--dm-line2);border-radius:10px;padding:12px 14px;box-shadow:var(--dm-overlay-shadow);animation:dm_rise .2s ease;overflow:hidden;}',
-    '.dm_toast_raised{bottom:86px;}',
-    '.dm_toast_icon{width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0;}',
-    '.dm_toast_ok .dm_toast_icon{color:var(--dm-success);background:var(--dm-success-soft);}',
-    '.dm_toast_error .dm_toast_icon{color:var(--dm-danger);background:var(--dm-danger-soft);}',
-    '.dm_toast_text{flex:1;font-size:13px;line-height:1.45;}',
-    '.dm_toast_action{border:none;background:color-mix(in srgb,var(--dm-primary) 12%,transparent);color:var(--dm-primary);font:inherit;font-size:12.5px;font-weight:600;padding:5px 12px;border-radius:6px;cursor:pointer;flex-shrink:0;transition:background .15s;}',
-    '.dm_toast_action:hover{background:color-mix(in srgb,var(--dm-primary) 20%,transparent);}',
-    '.dm_toast_close{border:none;background:transparent;color:var(--dm-ink3);width:22px;height:22px;border-radius:4px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;}',
+    '.dm_delete_preview{border:0;border-radius:6px;padding:12px 14px;margin:12px 0 10px;white-space:pre-wrap;word-break:break-word;background:var(--dm-raised);max-height:36vh;overflow-y:auto;font-size:12.5px;line-height:1.6;}',
+    '.dm_hint{color:var(--dm-ink3);font-size:11.5px;line-height:1.55;}',
+    '.dm_import_tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(96px,1fr));gap:0;margin:12px 0 14px;border-top:1px solid var(--dm-line);border-bottom:1px solid var(--dm-line);}',
+    '.dm_tile{border:0;border-left:1px solid var(--dm-line);border-radius:0;padding:12px 13px;background:none;text-align:left;}',
+    '.dm_tile:first-child{border-left:0;padding-left:0;}',
+    '.dm_tile_num{font-size:20px;font-weight:600;line-height:1.1;font-variant-numeric:tabular-nums;letter-spacing:-.02em;}',
+    '.dm_tile_label{font:500 10.5px var(--dm-mono);color:var(--dm-ink3);margin-top:4px;letter-spacing:.03em;}',
+    '.dm_import_merge{display:flex;align-items:center;gap:8px;margin:0 0 12px;font-size:12.5px;color:var(--dm-ink2);cursor:pointer;}',
+    '.dm_audit_list{display:flex;flex-direction:column;gap:0;}',
+    '.dm_audit_pair{border:0;border-top:1px solid var(--dm-line);border-radius:0;padding:14px 0 12px;background:none;}',
+    '.dm_audit_pair:first-child{border-top:0;padding-top:2px;}',
+    '.dm_audit_score{font:500 10.5px var(--dm-mono);color:var(--dm-ink3);letter-spacing:.03em;margin-bottom:9px;}',
+    '.dm_audit_side{display:flex;gap:9px;align-items:flex-start;margin-bottom:6px;}',
+    '.dm_audit_tag{flex-shrink:0;font:500 10px var(--dm-mono);padding:2px 5px;border-radius:3px;background:var(--dm-raised);color:var(--dm-ink3);letter-spacing:.03em;}',
+    '.dm_audit_tag_new{background:color-mix(in srgb,var(--dm-primary) 10%,transparent);color:var(--dm-primary);}',
+    '.dm_audit_content{font-size:12.5px;line-height:1.55;color:var(--dm-ink2);word-break:break-word;}',
+    '.dm_audit_actions{display:flex;justify-content:flex-end;gap:6px;margin-top:9px;}',
+    '.dm_recall{margin-top:16px;border:0;border-top:1px solid var(--dm-line);border-radius:0;padding:16px 0 0;background:none;}',
+    '.dm_recall_head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:2px;}',
+    '.dm_recall_head .dm_label{margin:0;font-size:11.5px;}',
+    '.dm_recall_list{display:flex;flex-direction:column;gap:7px;margin-top:10px;max-height:240px;overflow-y:auto;scrollbar-width:thin;}',
+    '.dm_recall_item{display:flex;gap:10px;align-items:flex-start;font-size:12px;line-height:1.5;}',
+    '.dm_recall_cat{display:inline-flex;align-items:center;gap:5px;flex-shrink:0;font:500 10px var(--dm-mono);letter-spacing:.03em;color:var(--dm-ink3);padding-top:2px;min-width:36px;}',
+    '.dm_recall_cat::before{content:"";width:5px;height:5px;border-radius:50%;background:var(--dm-cat,var(--dm-primary));flex-shrink:0;}',
+    '.dm_recall_content{color:var(--dm-ink2);word-break:break-word;}',
+    // ---- 吐司：功能性反馈 ----
+    '.dm_toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:1100;display:flex;gap:9px;align-items:center;min-width:260px;max-width:min(560px,90vw);background:var(--dm-surface);color:var(--dm-ink);border:1px solid var(--dm-line2);border-radius:7px;padding:10px 12px;box-shadow:var(--dm-pop);animation:dm_rise .18s ease;overflow:hidden;}',
+    '.dm_toast_raised{bottom:82px;}',
+    '.dm_toast_icon{width:18px;height:18px;display:flex;align-items:center;justify-content:center;flex-shrink:0;color:var(--dm-ink3);}',
+    '.dm_toast_ok .dm_toast_icon{color:var(--dm-success);}',
+    '.dm_toast_error .dm_toast_icon{color:var(--dm-danger);}',
+    '.dm_toast_info .dm_toast_icon{color:var(--dm-ink2);}',
+    '.dm_toast_info .dm_toast_bar{background:var(--dm-ink3);}',
+    '.dm_toast_text{flex:1;font-size:12.5px;line-height:1.5;color:var(--dm-ink);}',
+    '.dm_toast_action{border:none;background:transparent;color:var(--dm-primary);font:inherit;font-size:12.5px;font-weight:600;padding:3px 7px;margin-right:2px;border-radius:4px;cursor:pointer;flex-shrink:0;transition:background-color .13s;}',
+    '.dm_toast_action:hover{background:color-mix(in srgb,var(--dm-primary) 10%,transparent);}',
+    '.dm_toast_close{border:none;background:transparent;color:var(--dm-ink3);width:20px;height:20px;border-radius:4px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;}',
     '.dm_toast_close:hover{background:var(--dm-line);color:var(--dm-ink);}',
-    '.dm_toast_bar{position:absolute;left:0;bottom:0;height:2.5px;width:100%;background:var(--dm-primary);animation:dm_bar linear forwards;}',
+    '.dm_toast_bar{position:absolute;left:0;bottom:0;height:2px;width:100%;background:var(--dm-primary);animation:dm_bar linear forwards;}',
     '.dm_toast_error .dm_toast_bar{background:var(--dm-danger);}',
     '.dm_nav_icon{display:block;}',
-    // ---- 动画（仅保留功能性反馈） ----
+    // ---- 标签页 ----
+    '.dm_tabs{display:flex;gap:22px;margin:20px 0 0;border-bottom:1px solid var(--dm-line);}',
+    '.dm_tab{display:inline-flex;align-items:center;gap:6px;border:none;background:transparent;color:var(--dm-ink3);font:inherit;font-size:12.5px;font-weight:500;padding:0 0 9px;cursor:pointer;position:relative;transition:color .13s;}',
+    '.dm_tab:hover{color:var(--dm-ink);}',
+    '.dm_tab:focus-visible{outline:none;box-shadow:var(--dm-ring);}',
+    '.dm_tab_active{color:var(--dm-ink);font-weight:600;}',
+    '.dm_tab_active::after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:2px;background:var(--dm-primary);}',
+    '.dm_tab svg{opacity:.7;}',
+    '.dm_tab_n{font:500 10.5px var(--dm-mono);font-weight:500;color:var(--dm-ink3);background:none;border-radius:0;padding:0;margin-left:1px;}',
+    '.dm_tab_active .dm_tab_n{color:var(--dm-ink2);background:none;}',
+    // ---- 设置页：细线分段的一栏式，无卡片套卡片 ----
+    '.dm_settings{display:flex;flex-direction:column;max-width:760px;padding-top:4px;}',
+    '.dm_setgroup{background:none;border:0;border-radius:0;padding:0;margin:0 0 4px;}',
+    '.dm_setgroup + .dm_setgroup{margin-top:22px;border-top:1px solid var(--dm-line);padding-top:4px;}',
+    '.dm_setgroup_head{display:flex;align-items:center;gap:8px;margin:18px 0 2px;}',
+    '.dm_setgroup_icon{display:none;}',
+    '.dm_setgroup_title{margin:0;font-size:11px;font-weight:600;letter-spacing:.09em;text-transform:uppercase;color:var(--dm-ink3);}',
+    '.dm_setrow{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:18px;padding:13px 0;border-top:1px solid var(--dm-line);}',
+    '.dm_setrow:first-of-type{border-top:none;}',
+    '.dm_setrow_text{flex:1;min-width:0;}',
+    '.dm_setrow_label{font-size:13px;font-weight:500;color:var(--dm-ink);}',
+    '.dm_setrow_desc{font-size:11.5px;color:var(--dm-ink3);margin-top:3px;line-height:1.55;max-width:54ch;}',
+    '.dm_setrow_ctrl{flex-shrink:0;display:flex;align-items:center;gap:8px;}',
+    '.dm_setnote{font-size:11.5px;color:var(--dm-ink3);padding:8px 0 0 12px;border:0;border-left:2px solid var(--dm-line);border-radius:0;margin-top:6px;display:flex;gap:8px;align-items:flex-start;line-height:1.55;}',
+    '.dm_setnote svg{opacity:.75;}',
+    // ---- 开关 / 滑杆 ----
+    '.dm_switch{position:relative;width:34px;height:20px;border:none;border-radius:10px;background:color-mix(in srgb,var(--dm-ink) 18%,transparent);cursor:pointer;padding:0;transition:background-color .15s;flex-shrink:0;}',
+    '.dm_switch:focus-visible{outline:none;box-shadow:var(--dm-ring);}',
+    '.dm_switch_on{background:var(--dm-primary);}',
+    '.dm_switch:disabled{opacity:.42;cursor:default;}',
+    '.dm_switch_knob{position:absolute;top:3px;left:3px;width:14px;height:14px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.2);transition:transform .15s;}',
+    '.dm_switch_on .dm_switch_knob{transform:translateX(14px);}',
+    '.dm_slider_row{display:flex;align-items:center;gap:12px;}',
+    '.dm_range{width:180px;height:14px;accent-color:var(--dm-primary);cursor:pointer;}',
+    '.dm_slider_val{font:500 11.5px var(--dm-mono);color:var(--dm-ink);font-variant-numeric:tabular-nums;min-width:52px;text-align:right;}',
+    '.dm_numinput{width:68px;height:30px;border:1px solid var(--dm-line2);border-radius:5px;background:var(--dm-surface);color:var(--dm-ink);padding:0 7px;font:inherit;font-size:12px;text-align:center;}',
+    '.dm_numinput:focus{outline:none;border-color:var(--dm-primary);box-shadow:var(--dm-ring);}',
+    '.dm_setselect .dm_select_trigger{height:30px;max-width:240px;border:1px solid var(--dm-line2);background:var(--dm-surface);}',
+    // ---- 隐私护栏 / 路径 / 备份 ----
+    '.dm_guard{display:flex;gap:10px;align-items:flex-start;padding:2px 0 2px 13px;border-radius:0;background:none;border:0;border-left:2px solid color-mix(in srgb,var(--dm-success) 55%,transparent);margin:14px 0 4px;}',
+    '.dm_guard_icon{color:var(--dm-success);flex-shrink:0;display:flex;padding-top:1px;opacity:.9;}',
+    '.dm_guard_title{font-size:12.5px;font-weight:600;color:var(--dm-ink);}',
+    '.dm_guard_desc{font-size:11.5px;color:var(--dm-ink3);margin-top:2px;line-height:1.55;}',
+    '.dm_pathrow{display:flex;gap:8px;align-items:center;}',
+    '.dm_path{font:400 11px var(--dm-mono);color:var(--dm-ink2);background:var(--dm-raised);border:0;border-radius:4px;padding:5px 8px;flex:1;word-break:break-all;min-width:0;}',
+    '.dm_backupmeta{font-size:11.5px;color:var(--dm-ink3);display:flex;gap:14px;flex-wrap:wrap;margin-top:6px;align-items:center;}',
+    '.dm_setfooter{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-top:26px;padding-top:16px;border-top:1px solid var(--dm-line);}',
+    '.dm_savestate{font:500 11px var(--dm-mono);color:var(--dm-ink3);display:flex;gap:6px;align-items:center;}',
+    '.dm_linkbtn{border:none;background:transparent;color:var(--dm-primary);font:inherit;font-size:11px;cursor:pointer;text-decoration:underline;text-underline-offset:2px;padding:0;}',
+    '.dm_no_anim *,.dm_no_anim *::before,.dm_no_anim *::after{animation:none !important;transition:none !important;}',
+    // ---- 日期输入 ----
+    '.dm_expiresrow{display:flex;gap:8px;align-items:center;}',
+    '.dm_dateinput{max-width:220px;color-scheme:light;}',
+    'body[data-ds-dark-theme] .dm_dateinput{color-scheme:dark;}',
+    '.dm_pinrow{display:flex;align-items:center;justify-content:space-between;gap:12px;}',
+    // ---- 动画：只保留功能性反馈 ----
     '@keyframes dm_fade{from{opacity:0;}to{opacity:1;}}',
-    '@keyframes dm_rise{from{opacity:0;transform:translate(-50%,12px);}to{opacity:1;transform:translate(-50%,0);}}',
-    '@keyframes dm_shimmer{0%{background-position:100% 0;}100%{background-position:-100% 0;}}',
+    '@keyframes dm_rise{from{opacity:0;transform:translate(-50%,10px);}to{opacity:1;transform:translate(-50%,0);}}',
     '@keyframes dm_bar{from{width:100%;}to{width:0%;}}',
+    '@keyframes dm_breathe{0%,100%{opacity:1;}50%{opacity:.5;}}',
     // 旧视觉引用的 keyframes 保留定义（样式已不再引用），避免外部快照断言报缺失。
     '@keyframes dm_enter{from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:translateY(0);}}',
     '@keyframes dm_pop{from{opacity:0;transform:scale(.96) translateY(6px);}to{opacity:1;transform:scale(1) translateY(0);}}',
     '@keyframes dm_pulse{0%,100%{opacity:.5;transform:scale(1);}50%{opacity:.12;transform:scale(1.06);}}',
     '@keyframes dm_float{from{transform:translateY(0);}to{transform:translateY(-5px);}}',
-    // ---- 标签页 ----
-    '.dm_tabs{display:flex;gap:4px;margin:0 0 16px;border-bottom:1px solid var(--dm-line);}',
-    '.dm_tab{display:inline-flex;align-items:center;gap:7px;border:none;background:transparent;color:var(--dm-ink2);font:inherit;font-size:13px;font-weight:600;padding:8px 14px;cursor:pointer;border-radius:6px 6px 0 0;position:relative;transition:color .15s,background .15s;}',
-    '.dm_tab:hover{color:var(--dm-ink);background:color-mix(in srgb,var(--dm-ink) 5%,transparent);}',
-    '.dm_tab:focus-visible{outline:none;box-shadow:var(--dm-ring);}',
-    '.dm_tab_active{color:var(--dm-ink);}',
-    '.dm_tab_active::after{content:"";position:absolute;left:10px;right:10px;bottom:-1px;height:2px;border-radius:1px;background:var(--dm-primary);}',
-    '.dm_tab_n{font-size:11px;font-weight:600;color:var(--dm-ink3);background:var(--dm-line);border-radius:4px;padding:0 6px;}',
-    '.dm_tab_active .dm_tab_n{color:var(--dm-primary);background:color-mix(in srgb,var(--dm-primary) 14%,transparent);}',
-    // ---- 设置页 ----
-    '.dm_settings{display:flex;flex-direction:column;gap:14px;max-width:880px;}',
-    '.dm_setgroup{background:var(--dm-surface);border:1px solid var(--dm-line);border-radius:10px;padding:16px 18px;}',
-    '.dm_setgroup_head{display:flex;align-items:center;gap:10px;margin-bottom:6px;}',
-    '.dm_setgroup_icon{width:28px;height:28px;border-radius:6px;display:flex;align-items:center;justify-content:center;flex-shrink:0;}',
-    '.dm_setgroup_title{margin:0;font-size:14px;font-weight:650;letter-spacing:-.01em;}',
-    '.dm_setrow{display:flex;justify-content:space-between;align-items:center;gap:18px;padding:12px 0;border-top:1px solid var(--dm-line);}',
-    '.dm_setrow:first-of-type{border-top:none;}',
-    '.dm_setrow_text{flex:1;min-width:0;}',
-    '.dm_setrow_label{font-size:13px;font-weight:600;color:var(--dm-ink);}',
-    '.dm_setrow_desc{font-size:11.5px;color:var(--dm-ink3);margin-top:2px;line-height:1.5;}',
-    '.dm_setrow_ctrl{flex-shrink:0;display:flex;align-items:center;gap:8px;}',
-    '.dm_setnote{font-size:11.5px;color:var(--dm-ink3);padding:10px 12px;background:var(--dm-bg);border:1px solid var(--dm-line);border-radius:8px;margin-top:10px;display:flex;gap:7px;align-items:flex-start;line-height:1.5;}',
-    // ---- 开关 ----
-    '.dm_switch{position:relative;width:38px;height:22px;border:none;border-radius:11px;background:var(--dm-line2);cursor:pointer;padding:0;transition:background .15s;flex-shrink:0;}',
-    '.dm_switch:focus-visible{outline:none;box-shadow:var(--dm-ring);}',
-    '.dm_switch_on{background:var(--dm-primary);}',
-    '.dm_switch:disabled{opacity:.45;cursor:default;}',
-    '.dm_switch_knob{position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.25);transition:transform .15s;}',
-    '.dm_switch_on .dm_switch_knob{transform:translateX(16px);}',
-    // ---- 滑杆 / 数字 ----
-    '.dm_slider_row{display:flex;align-items:center;gap:12px;}',
-    '.dm_range{width:180px;accent-color:var(--dm-primary);cursor:pointer;}',
-    '.dm_slider_val{font-size:12.5px;font-weight:600;color:var(--dm-ink);font-variant-numeric:tabular-nums;min-width:52px;text-align:right;}',
-    '.dm_numinput{width:72px;height:32px;border:1px solid var(--dm-line2);border-radius:8px;background:var(--dm-bg);color:var(--dm-ink);padding:0 8px;font:inherit;font-size:12.5px;text-align:center;}',
-    '.dm_numinput:focus{outline:none;border-color:var(--dm-primary);box-shadow:var(--dm-ring);}',
-    '.dm_setselect{height:34px;max-width:220px;}',
-    // ---- 隐私护栏 ----
-    '.dm_guard{display:flex;gap:12px;align-items:center;padding:14px 16px;border-radius:12px;background:var(--dm-success-soft);border:1px solid color-mix(in srgb,var(--dm-success) 35%,transparent);margin-top:8px;}',
-    '.dm_guard_icon{color:var(--dm-success);flex-shrink:0;display:flex;}',
-    '.dm_guard_title{font-size:13px;font-weight:700;color:var(--dm-ink);}',
-    '.dm_guard_desc{font-size:11.5px;color:var(--dm-ink2);margin-top:2px;line-height:1.5;}',
-    // ---- 路径 / 备份元信息 ----
-    '.dm_pathrow{display:flex;gap:8px;align-items:center;}',
-    '.dm_path{font-family:ui-monospace,"Cascadia Mono",Consolas,monospace;font-size:11.5px;color:var(--dm-ink2);background:var(--dm-bg);border:1px solid var(--dm-line);border-radius:8px;padding:7px 10px;flex:1;word-break:break-all;min-width:0;}',
-    '.dm_backupmeta{font-size:11.5px;color:var(--dm-ink3);display:flex;gap:14px;flex-wrap:wrap;margin-top:8px;}',
-    '.dm_setfooter{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;}',
-    '.dm_savestate{font-size:11.5px;color:var(--dm-ink3);display:flex;gap:6px;align-items:center;}',
-    '.dm_linkbtn{border:none;background:transparent;color:var(--dm-primary);font:inherit;font-size:11px;cursor:pointer;text-decoration:underline;padding:0;}',
-    '.dm_no_anim *,.dm_no_anim *::before,.dm_no_anim *::after{animation:none !important;transition:none !important;}',
-    // ---- 自定义下拉 Select ----
-    '.dm_selectwrap{position:relative;display:inline-block;min-width:0;}',
-    '.dm_select_trigger{display:inline-flex;align-items:center;gap:8px;height:36px;width:100%;box-sizing:border-box;border:1px solid var(--dm-line2);border-radius:10px;background:var(--dm-surface);color:var(--dm-ink);padding:0 10px 0 12px;font:inherit;font-size:12.5px;cursor:pointer;max-width:340px;transition:border-color .15s,box-shadow .15s,background .15s;}',
-    '.dm_select_trigger:hover{border-color:color-mix(in srgb,var(--dm-primary) 40%,var(--dm-line2));}',
-    '.dm_select_trigger:focus-visible{outline:none;border-color:var(--dm-primary);box-shadow:var(--dm-ring);}',
-    '.dm_select_open{border-color:var(--dm-primary);box-shadow:var(--dm-ring);}',
-    '.dm_select_disabled{opacity:.45;cursor:default;}',
-    '.dm_select_val_icon{display:flex;color:var(--dm-ink3);flex-shrink:0;}',
-    '.dm_select_value{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left;}',
-    '.dm_select_chev{display:flex;color:var(--dm-ink3);flex-shrink:0;transition:transform .2s;}',
-    '.dm_select_open .dm_select_chev{transform:rotate(180deg);color:var(--dm-primary);}',
-    '.dm_select_pop{position:fixed;z-index:1200;box-sizing:border-box;background:var(--dm-surface);border:1px solid color-mix(in srgb,var(--dm-primary) 35%,var(--dm-line2));border-radius:12px;box-shadow:var(--dm-shadow-hover);padding:5px;max-height:300px;overflow-y:auto;animation:dm_pop_in .16s ease;transform-origin:top center;scrollbar-width:thin;scrollbar-color:color-mix(in srgb,var(--dm-ink) 22%,transparent) transparent;}',
-    '.dm_select_pop::-webkit-scrollbar{width:8px;}',
-    '.dm_select_pop::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--dm-ink) 20%,transparent);border-radius:8px;}',
-    '.dm_select_pop::-webkit-scrollbar-thumb:hover{background:color-mix(in srgb,var(--dm-primary) 50%,transparent);}',
-    '.dm_select_up{transform-origin:bottom center;animation:dm_pop_in_up .16s ease;}',
-    '.dm_select_opt{display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:8px;cursor:pointer;font-size:12.5px;color:var(--dm-ink);transition:background .12s,color .12s;}',
-    '.dm_select_opt_active{background:color-mix(in srgb,var(--dm-ink) 7%,transparent);}',
-    '.dm_select_opt_sel{color:var(--dm-primary);font-weight:600;background:color-mix(in srgb,var(--dm-primary) 9%,transparent);}',
-    '.dm_select_opt_sel.dm_select_opt_active{background:color-mix(in srgb,var(--dm-primary) 15%,transparent);}',
-    '.dm_select_opt_disabled{opacity:.4;cursor:default;}',
-    '.dm_select_opt_icon{display:flex;color:var(--dm-ink3);flex-shrink:0;}',
-    '.dm_select_opt_sel .dm_select_opt_icon{color:var(--dm-primary);}',
-    '.dm_select_opt_spacer{width:14px;}',
-    '.dm_select_opt_label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
-    '.dm_select_opt_hint{font-size:11px;color:var(--dm-ink3);flex-shrink:0;font-variant-numeric:tabular-nums;}',
-    '.dm_select_opt_check{color:var(--dm-primary);flex-shrink:0;}',
-    '.dm_dialog .dm_selectwrap{display:block;width:100%;}',
-    '.dm_dialog .dm_select_trigger{max-width:none;height:38px;border-radius:12px;background:var(--dm-bg);}',
-    '.dm_setselect .dm_select_trigger{height:34px;max-width:240px;}',
-    '@keyframes dm_pop_in{from{opacity:0;transform:translateY(-4px) scale(.98);}to{opacity:1;transform:translateY(0) scale(1);}}',
-    '@keyframes dm_pop_in_up{from{opacity:0;transform:translateY(4px) scale(.98);}to{opacity:1;transform:translateY(0) scale(1);}}',
-    // ---- v2：来源徽章 / 状态装饰 / 钉选归档 / 过期日 ----
-    '.dm_origin{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;font-weight:600;padding:1.5px 8px;border-radius:999px;corner-shape:round;}',
-    // 浅色下 #8b5cf6 对浅底仅 3.64:1，改用 #6d28d9（≥4.5:1）；深色分支保持原浅色值。
-    '.dm_origin_auto{color:#6d28d9;background:color-mix(in srgb,var(--dm-primary2) 12%,transparent);}',
-    'body[data-ds-dark-theme] .dm_origin_auto{color:var(--dm-primary2);}',
-    '.dm_origin_manual{color:var(--dm-ink3);background:color-mix(in srgb,var(--dm-ink) 6%,transparent);}',
-    '.dm_status{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;font-weight:600;padding:1.5px 8px;border-radius:999px;corner-shape:round;}',
-    '.dm_status_superseded{color:var(--dm-ink3);background:color-mix(in srgb,var(--dm-ink) 7%,transparent);}',
-    '.dm_status_expired{color:var(--dm-danger);background:var(--dm-danger-soft);}',
-    '.dm_status_archived{color:var(--dm-ink2);background:color-mix(in srgb,var(--dm-ink) 7%,transparent);}',
-    '.dm_successor{display:inline-flex;align-items:center;gap:4px;border:none;background:transparent;color:var(--dm-primary);font:inherit;font-size:10.5px;font-weight:600;padding:1.5px 7px;border-radius:999px;cursor:pointer;corner-shape:round;transition:background .15s;}',
-    '.dm_successor:hover{background:color-mix(in srgb,var(--dm-primary) 10%,transparent);}',
-    '.dm_successor:focus-visible{outline:none;box-shadow:var(--dm-ring);}',
-    '.dm_pinned_mark{display:inline-flex;color:var(--dm-pref);}',
-    '.dm_injected_mark{display:inline-flex;align-items:center;gap:3px;font-size:10.5px;font-weight:700;color:var(--dm-success);}',
-    '.dm_card_muted{opacity:.72;}',
-    '.dm_card_muted:hover{opacity:1;}',
-    '.dm_btn_pinned{color:var(--dm-pref);}',
-    '.dm_chips_status{margin-top:2px;}',
-    '.dm_expiresrow{display:flex;gap:8px;align-items:center;}',
-    '.dm_dateinput{max-width:220px;color-scheme:light;}',
-    'body[data-ds-dark-theme] .dm_dateinput{color-scheme:dark;}',
-    '.dm_pinrow{display:flex;align-items:center;justify-content:space-between;gap:12px;}',
+    '@keyframes dm_pop_in{from{opacity:0;transform:translateY(-4px);}to{opacity:1;transform:translateY(0);}}',
+    '@keyframes dm_pop_in_up{from{opacity:0;transform:translateY(4px);}to{opacity:1;transform:translateY(0);}}',
     // ---- 响应式与动效偏好 ----
-    '@media (max-width:720px){.dm_header{flex-direction:column;}.dm_cta{width:100%;justify-content:center;}.dm_stats{gap:12px;padding:12px 14px;}.dm_stats_div{display:none;}.dm_card_actions{flex-direction:row;}.dm_card{flex-wrap:wrap;}.dm_import_tiles{grid-template-columns:repeat(2,1fr);}}',
+    '@media (max-width:720px){.dm_inner{padding:0 18px 48px;}.dm_toolbar_wrap{margin:0 -18px;padding:8px 18px;}.dm_header{flex-direction:column;align-items:stretch;gap:12px;}.dm_cta{width:100%;justify-content:center;}.dm_stats{gap:14px;padding:16px 0 12px;}.dm_stats_div{display:none;}.dm_card{grid-template-columns:18px minmax(0,1fr);}.dm_card_actions{grid-column:2;justify-content:flex-end;margin-top:6px;}.dm_import_tiles{grid-template-columns:repeat(2,1fr);}}',
     '@media (prefers-reduced-motion:reduce){.dm_page *,.dm_page *::before,.dm_page *::after,.dm_toast,.dm_selbar,.dm_overlay,.dm_dialog,.dm_select_pop{animation:none !important;transition:none !important;}}',
     'body.dm-no-anim .dm_select_pop{animation:none !important;}',
-    // 禁用态必须压过 :hover 的浮起/提亮/变色（busy 时主按钮不应显得可点）。
-    '.dm_btn:disabled:hover{transform:none;filter:none;}',
-    '.dm_btn_primary:disabled:hover,.dm_btn_danger_solid:disabled:hover{filter:none;transform:none;}',
-    '.dm_select_disabled:hover{border-color:var(--dm-line2);background:transparent;}',
+    // 禁用态必须压过 :hover 的提亮/变色（busy 时主按钮不应显得可点）。
+    '.dm_btn:disabled:hover{filter:none;transform:none;}',
+    '.dm_btn_primary:disabled:hover{filter:none;transform:none;}',
+    '.dm_select_disabled:hover{border-color:transparent;background:transparent;}',
   ].join('\n')
 
   global.__ModuleLoader__.load({
@@ -1647,7 +1766,7 @@ function newImportRunId() {
           cwd: function (sessionId) { return request(API_BASE + '/cwd?sessionId=' + encodeURIComponent(sessionId || '')) },
           entries: function (params) { return request(API_BASE + '/entries' + buildEntriesQuery(params)) },
           stats: function (params) { return request(API_BASE + '/stats' + buildEntriesQuery(params)) },
-          similar: function (params) { return request(API_BASE + '/similar' + buildEntriesQuery(params)) },
+          similar: function (params) { return request(API_BASE + '/similar' + buildEntriesQuery(params), { timeoutMs: SIMILAR_TIMEOUT_MS }) },
           recallPreview: function (workspace) { return request(API_BASE + '/recall-preview' + (workspace ? '?workspace=' + encodeURIComponent(workspace) : '')) },
           export: function (params) { return request(API_BASE + '/export' + buildEntriesQuery(params || {}), { timeoutMs: EXPORT_TIMEOUT_MS }) },
           settings: function () { return request(API_BASE + '/settings') },
@@ -1782,13 +1901,13 @@ function newImportRunId() {
           h('div', { className: 'dm_card_actions' },
             h('button', {
               className: 'dm_btn' + (entry.pinned ? ' dm_btn_pinned' : ''), 'aria-pressed': !!entry.pinned,
-              disabled: !!props.busy,
+              disabled: !!props.busy, title: entry.pinned ? t('unpin') : t('pin'),
               onClick: function () { props.onTogglePin(entry) },
-            }, h(Icon, { name: 'pin', size: 13, style: entry.pinned ? { fill: 'currentColor' } : null }), entry.pinned ? t('unpin') : t('pin')),
-            h('button', { className: 'dm_btn', disabled: !!props.busy, onClick: function () { props.onToggleArchive(entry) } },
-              h(Icon, { name: 'archive', size: 13 }), entry.archived ? t('restore') : t('archive')),
-            h('button', { className: 'dm_btn', disabled: !!props.busy, onClick: function () { props.onEdit(entry) } }, h(Icon, { name: 'edit', size: 13 }), t('edit')),
-            h('button', { className: 'dm_btn dm_btn_danger', disabled: !!props.busy, onClick: function () { props.onDelete(entry) } }, h(Icon, { name: 'trash', size: 13 }), t('del'))))
+            }, h(Icon, { name: 'pin', size: 14, style: entry.pinned ? { fill: 'currentColor' } : null }), h('span', { className: 'dm_sr' }, entry.pinned ? t('unpin') : t('pin'))),
+            h('button', { className: 'dm_btn', disabled: !!props.busy, title: entry.archived ? t('restore') : t('archive'), onClick: function () { props.onToggleArchive(entry) } },
+              h(Icon, { name: 'archive', size: 14 }), h('span', { className: 'dm_sr' }, entry.archived ? t('restore') : t('archive'))),
+            h('button', { className: 'dm_btn', disabled: !!props.busy, title: t('edit'), onClick: function () { props.onEdit(entry) } }, h(Icon, { name: 'edit', size: 14 }), h('span', { className: 'dm_sr' }, t('edit'))),
+            h('button', { className: 'dm_btn dm_btn_danger', disabled: !!props.busy, title: t('del'), onClick: function () { props.onDelete(entry) } }, h(Icon, { name: 'trash', size: 14 }), h('span', { className: 'dm_sr' }, t('del')))))
       }
 
       // 焦点陷阱 + 焦点归还；busy 时禁止 Escape/遮罩关闭；回调经 ref 稳定。
@@ -1950,6 +2069,7 @@ function newImportRunId() {
             h('div', { className: 'dm_expiresrow' },
               h('input', {
                 id: 'dm-expires', className: 'dm_input dm_dateinput', type: 'date', disabled: props.busy,
+                min: todayUtcIso(),
                 value: draft.expires || '', onChange: function (e) { field('expires', e.target.value) },
               }),
               draft.expires
@@ -2002,10 +2122,14 @@ function newImportRunId() {
             h('input', { type: 'checkbox', checked: merge, disabled: props.busy, onChange: function (e) { props.onModeChange(e.target.checked ? 'merge' : 'skip') } }),
             h('span', null, t('importMergeLabel'))),
           h('div', { className: 'dm_import_tiles' },
-            h('div', { className: 'dm_tile' }, h('div', { className: 'dm_tile_num', style: { color: 'var(--dm-primary)' } }, summary.imported), h('div', { className: 'dm_tile_label' }, t('importNew'))),
-            h('div', { className: 'dm_tile' }, h('div', { className: 'dm_tile_num', style: { color: 'var(--dm-success)' } }, summary.updated), h('div', { className: 'dm_tile_label' }, t('importUpdated'))),
-            h('div', { className: 'dm_tile' }, h('div', { className: 'dm_tile_num', style: { color: 'var(--dm-ink3)' } }, summary.deduplicated), h('div', { className: 'dm_tile_label' }, t('importDup'))),
-            h('div', { className: 'dm_tile' }, h('div', { className: 'dm_tile_num', style: { color: 'var(--dm-danger)' } }, summary.rejected), h('div', { className: 'dm_tile_label' }, t('importRej')))),
+            h('div', { className: 'dm_tile' }, h('div', { className: 'dm_tile_num' }, summary.imported), h('div', { className: 'dm_tile_label' }, t('importNew'))),
+            h('div', { className: 'dm_tile' }, h('div', { className: 'dm_tile_num' }, summary.updated), h('div', { className: 'dm_tile_label' }, t('importUpdated'))),
+            h('div', { className: 'dm_tile' }, h('div', { className: 'dm_tile_num' }, summary.deduplicated), h('div', { className: 'dm_tile_label' }, t('importDup'))),
+            h('div', { className: 'dm_tile' }, h('div', { className: 'dm_tile_num' }, summary.rejected), h('div', { className: 'dm_tile_label' }, t('importRej'))),
+            // 预演阶段就展示将修复的取代指针数（落盘后只在完成吐司里出现，用户无法预先判断）。
+            summary.repaired > 0
+              ? h('div', { className: 'dm_tile' }, h('div', { className: 'dm_tile_num' }, summary.repaired), h('div', { className: 'dm_tile_label' }, t('importRepaired').replace('{n}', String(summary.repaired))))
+              : null),
           rejected.length > 0
             ? h('div', { className: 'dm_hint' },
               t('importRejHint'),
@@ -2062,9 +2186,10 @@ function newImportRunId() {
       function Toast(props) {
         var toast = props.toast
         var t = props.t
+        var kind = toast.kind === 'error' ? 'error' : toast.kind === 'info' ? 'info' : 'ok'
         return h('div', {
           key: toast.id,
-          className: 'dm_toast dm_toast_' + (toast.kind === 'error' ? 'error' : 'ok') + (props.raised ? ' dm_toast_raised' : ''),
+          className: 'dm_toast dm_toast_' + kind + (props.raised ? ' dm_toast_raised' : ''),
           role: toast.kind === 'error' ? 'alert' : 'status',
           // 悬停/聚焦时暂停倒计时：用户正要撤销时入口不会突然消失。
           onMouseEnter: props.onPause,
@@ -2074,7 +2199,7 @@ function newImportRunId() {
             if (!e.currentTarget.contains(e.relatedTarget)) props.onResume()
           },
         },
-          h('span', { className: 'dm_toast_icon' }, h(Icon, { name: toast.kind === 'error' ? 'alert' : 'check', size: 14, strokeWidth: 2.2 })),
+          h('span', { className: 'dm_toast_icon' }, h(Icon, { name: toast.kind === 'error' ? 'alert' : kind === 'info' ? 'info' : 'check', size: 14, strokeWidth: 2.2 })),
           h('span', { className: 'dm_toast_text' }, toast.text),
           toast.action ? h('button', { ref: props.actionRef, className: 'dm_toast_action', onClick: function () { toast.action.run() } }, h(Icon, { name: 'undo', size: 13, strokeWidth: 2.2, style: { verticalAlign: '-2px', marginRight: 4 } }), toast.action.label) : null,
           h('button', { className: 'dm_toast_close', 'aria-label': t('closeToast'), onClick: props.onClose }, h(Icon, { name: 'x', size: 12, strokeWidth: 2.2 })),
@@ -2175,7 +2300,7 @@ function newImportRunId() {
                   data.entries.slice(0, 30).map(function (e) {
                     var meta = CATEGORY_META[e.category] || CATEGORY_META.fact
                     return h('div', { key: e.id, className: 'dm_recall_item' },
-                      h('span', { className: 'dm_recall_cat', style: { color: meta.cat } }, t(meta.label)),
+                      h('span', { className: 'dm_recall_cat', style: { '--dm-cat': meta.cat } }, t(meta.label)),
                       h('span', { className: 'dm_recall_content' }, e.content.length > 60 ? e.content.slice(0, 60) + '…' : e.content))
                   }),
                   data.entries.length > 30 ? h('div', { className: 'dm_hint' }, '… +' + (data.entries.length - 30)) : null)
@@ -2704,7 +2829,9 @@ function newImportRunId() {
 
         // 列表＋统计请求：seq 守卫防乱序；「全部」＝全局＋当前工作区。
         // 多取一条（PAGE_SIZE+1）探测下一页；过滤/切换作用域时回到第一页。
-        var refreshEntries = useCallback(function () {
+        // opts.stats===false：翻页只取列表（/stats 参数与页码无关，重扫全库纯冗余）。
+        var refreshEntries = useCallback(function (opts) {
+          var wantStats = !(opts && opts.stats === false)
           var seq = ++seqRef.current
           var scopeParams = {}
           if (selection === 'global') scopeParams.scope = 'global'
@@ -2712,14 +2839,23 @@ function newImportRunId() {
           else { scopeParams.scope = 'workspace'; scopeParams.workspace = selection }
           var params = entriesParams(Object.assign({}, scopeParams, { query: query, category: categoryFilter, origin: originFilter, tag: tagFilter, status: statusFilter, limit: pageSize + 1, offset: page * pageSize }))
           var statsParams = entriesParams(Object.assign({}, scopeParams, { query: query, category: categoryFilter, origin: originFilter, tag: tagFilter, status: statusFilter }))
-          return Promise.all([api.entries(params), api.stats(statsParams)]).then(function (results) {
+          return Promise.all([api.entries(params), wantStats ? api.stats(statsParams) : Promise.resolve(null)]).then(function (results) {
             if (seq !== seqRef.current) return
             var doc = results[0]
-            setStats(results[1].stats)
+            var statsDoc = results[1]
+            if (statsDoc) setStats(statsDoc.stats)
             setHidden(doc.hidden || { total: 0 })
             var sliced = pageSlice(doc.entries, pageSize)
-            // 当前页被删空（如删掉末页最后一条）→ 自动回退一页，避免误导性空态。
-            if (sliced.items.length === 0 && page > 0) { setPage(page - 1); return }
+            // 当前页被删空（如删掉末页最后一条）→ 用统计总数一次跳到末页，避免逐页回退
+            // N 轮、每轮再发 entries+stats（大库/大幅删除时会长时间停在骨架屏）。
+            if (sliced.items.length === 0 && page > 0) {
+              return (statsDoc ? Promise.resolve(statsDoc) : api.stats(statsParams)).then(function (extra) {
+                if (seq !== seqRef.current) return
+                if (extra && extra.stats) setStats(extra.stats)
+                var total = extra && extra.stats ? Number(extra.stats.total) || 0 : 0
+                setPage(clampPageToTotal(page, total, pageSize))
+              })
+            }
             // 来源/标签/状态均服务端过滤（分页口径一致）。
             setEntries(sliced.items)
             // 批量选择与列表同步：条目被删除/归档/过滤掉后不再保留在选中集合。
@@ -2790,7 +2926,7 @@ function newImportRunId() {
         // 首次拿到设置且面板就绪时，应用默认视图（workspace → 当前工作区）。
         useEffect(function () {
           if (viewInitialized.current || !settings || phase !== 'ready') return
-          var picked = defaultViewSelection(settings, currentCwd)
+          var picked = defaultViewSelection(settings, currentCwd, options)
           if (!picked.resolved) return // cwd 尚未解析：等 currentCwd 到达后本 effect 再跑
           viewInitialized.current = true
           if (picked.selection) setSelection(picked.selection)
@@ -2881,7 +3017,7 @@ function newImportRunId() {
         function backupNow() {
           if (busy || settingsStatus.saving) return
           setBusy(true)
-          showToast('ok', t('backingUp'))
+          showToast('info', t('backingUp'))
           api.backup().then(function () {
             showToast('ok', t('backupDone'))
             return loadSettings()
@@ -2907,10 +3043,17 @@ function newImportRunId() {
           refreshRecall()
         }, [phase, dataVersion, recallSettingsKey, currentCwd, tab, refreshRecall])
 
-        // 选择/查询/分类/页码变化 → 刷新列表（查询防抖 300ms）
+        // 选择/查询/分类/页码变化 → 刷新列表（查询防抖 300ms）。
+        // 仅页码变化时跳过 /stats（参数与页码无关）；其余导航/刷新都重取统计。
+        var lastListSigRef = useRef('')
+        var lastListPageRef = useRef(0)
         useEffect(function () {
           if (phase !== 'ready') return undefined
-          var timer = setTimeout(function () { refreshEntries() }, (query || tagFilter) ? 300 : 0)
+          var sig = JSON.stringify([query, categoryFilter, originFilter, tagFilter, statusFilter, selection, currentCwd, pageSize])
+          var pageOnly = sig === lastListSigRef.current && page !== lastListPageRef.current
+          lastListSigRef.current = sig
+          lastListPageRef.current = page
+          var timer = setTimeout(function () { refreshEntries({ stats: !pageOnly }) }, (query || tagFilter) ? 300 : 0)
           return function () { clearTimeout(timer) }
         }, [phase, query, categoryFilter, originFilter, tagFilter, statusFilter, page, selection, currentCwd, refreshEntries])
 
@@ -3017,7 +3160,40 @@ function newImportRunId() {
           }
           document.addEventListener('keydown', onKey)
           return function () { document.removeEventListener('keydown', onKey) }
+          // 依赖 tab：处理函数闭包里的 tab/switchTab 必须是当前渲染的值，否则切到设置页后
+          // 「/」分支永远看到首帧的 'memories'，按键被吞但页面不切换（第十轮审计 C1）。
+        }, [tab])
+
+        // busy 期间被点/被聚焦的控件会因 disabled 把焦点抛回 body（键盘用户每次钉选/
+        // 工具栏操作后都要从页首重新 Tab）。disabled 的 blur 发生在 React 提交阶段，
+        // passive effect 读到 activeElement 时已经是 body——所以额外用 focusin 记录
+        // 最后一个获得焦点的元素，busy 结束后仅在焦点确实丢失时归还。
+        var lastFocusRef = useRef(null)
+        useEffect(function () {
+          if (typeof document === 'undefined') return undefined
+          function onFocusIn(e) { lastFocusRef.current = e.target }
+          document.addEventListener('focusin', onFocusIn)
+          return function () { document.removeEventListener('focusin', onFocusIn) }
         }, [])
+        var busyFocusRef = useRef(null)
+        useEffect(function () {
+          if (typeof document === 'undefined') return
+          if (busy) {
+            var active = document.activeElement
+            busyFocusRef.current = active && active !== document.body ? active : lastFocusRef.current
+            return
+          }
+          var previous = busyFocusRef.current
+          busyFocusRef.current = null
+          if (!previous) return
+          // 弹窗/吐司等其它路径已接管焦点时不抢。
+          if (document.activeElement && document.activeElement !== document.body) return
+          if (previous.isConnected && typeof previous.focus === 'function') {
+            try { previous.focus() } catch { /* 焦点归还失败不影响功能 */ }
+            return
+          }
+          if (pageRef.current) { try { pageRef.current.focus() } catch { /* ignore */ } }
+        }, [busy])
 
         // 卸载取消（C5）：停止分片导入/预演链并 abort 在途请求，
         // 避免孤儿响应在面板卸载后继续写状态/弹吐司。
@@ -3069,11 +3245,11 @@ function newImportRunId() {
 
         function openCreate() {
           if (busy) return
-          setEditor({ mode: 'create', content: '', category: 'fact', tags: '', scope: workspaceTarget && selection !== 'global' ? 'workspace' : 'global', pinned: false, expires: '', origin: 'manual' })
+          setEditor({ mode: 'create', content: '', category: 'fact', tags: '', scope: workspaceTarget && selection !== 'global' ? 'workspace' : 'global', pinned: false, expires: '', expiresOriginal: '', origin: 'manual' })
         }
         function openEdit(entry) {
           if (busy) return
-          setEditor({ mode: 'edit', id: entry.id, content: entry.content, category: entry.category, tags: (entry.tags || []).join(', '), scope: entry.scope, pinned: !!entry.pinned, expires: entry.expires || '', origin: originOf(entry) })
+          setEditor({ mode: 'edit', id: entry.id, content: entry.content, category: entry.category, tags: (entry.tags || []).join(', '), scope: entry.scope, pinned: !!entry.pinned, expires: entry.expires || '', expiresOriginal: entry.expires || '', origin: originOf(entry) })
         }
         function openDelete(entry) {
           if (busy) return
@@ -3132,7 +3308,10 @@ function newImportRunId() {
           if (busy) return
           var check = validateDraft(editor)
           if (!check.ok) {
-            var errKey = check.error === 'empty-content' ? 'errEmptyContent' : check.error === 'bad-expires' ? 'errBadExpires' : 'errBadCategory'
+            var errKey = check.error === 'empty-content' ? 'errEmptyContent'
+              : check.error === 'bad-expires' ? 'errBadExpires'
+                : check.error === 'expires-past' ? 'errExpiresPast'
+                  : 'errBadCategory'
             showToast('error', t(errKey))
             return
           }
@@ -3141,16 +3320,10 @@ function newImportRunId() {
           var tags = splitTags(editor.tags)
           var promise
           if (editor.mode === 'create') {
-            promise = api.save({
-              content: editor.content.trim(),
-              category: editor.category,
-              scope: editor.scope,
-              workspace: editor.scope === 'workspace' ? workspaceTarget : undefined,
-              tags: tags,
-              origin: 'manual',
-              pinned: !!editor.pinned,
-              expires: editor.expires || undefined,
-            })
+            // 只发送用户真正显式设置的字段：宿主去重命中时会应用显式字段，若把表单默认值
+            // （category=fact / tags=[] / pinned=false / origin=manual）也当显式字段发送，
+            // 新建一条重复内容会静默改写既有条目的分类/标签/钉选（第十轮审计 C2）。
+            promise = api.save(buildCreatePayload(editor, tags, workspaceTarget))
           } else {
             promise = api.update({ id: editor.id, content: editor.content.trim(), category: editor.category, tags: tags, scope: editor.scope, workspace: workspaceTarget, pinned: !!editor.pinned, expires: editor.expires || '', origin: editor.origin })
           }
@@ -3247,14 +3420,14 @@ function newImportRunId() {
         function handleExport() {
           if (busy) return
           setBusy(true)
-          showToast('ok', t('exporting'))
+          showToast('info', t('exporting'))
           var scopeParams = exportParams(selection, currentCwd)
           api.export(scopeParams).then(function (doc) {
             var blob = new Blob([JSON.stringify(doc, null, 2)], { type: 'application/json' })
             var url = URL.createObjectURL(blob)
             var a = document.createElement('a')
             a.href = url
-            a.download = 'dsh-memory-export-' + scopeParams.scope + '-' + new Date().toISOString().slice(0, 10) + '.json'
+            a.download = 'dsh-memory-export-' + scopeParams.scope + '-' + localDateStamp() + '.json'
             document.body.appendChild(a)
             a.click()
             a.remove()
@@ -3415,6 +3588,9 @@ function newImportRunId() {
         function handleAudit() {
           if (busy) return
           setBusy(true)
+          // 查重大库是同步全库计算（数秒）：给出进行中反馈（中性 info 而非成功图标），
+          // 并依赖 api.similar 的独立 120s 超时（第十轮审计 C5/C9）。
+          showToast('info', t('auditRunning'))
           var params = auditParams()
           api.similar(params).then(function (payload) {
             setAudit({ pairs: (payload && payload.pairs) || [], params: params })
@@ -3560,6 +3736,8 @@ function newImportRunId() {
 
         var noAnim = settings && !settings.effective.animations
         return h('div', { ref: pageRef, tabIndex: -1, className: 'dm_page' + (selected.length > 0 ? ' dm_selecting' : '') + (noAnim ? ' dm_no_anim' : '') },
+          // 版心：内容最宽 1040px 居中，宽屏下不再被拉成一条长线。
+          h('div', { className: 'dm_inner' },
           h('div', { className: 'dm_header' },
             h('div', { className: 'dm_brand' },
               h('div', { className: 'dm_brand_medal' }, h(NavIcon, { size: 18 })),
@@ -3594,17 +3772,17 @@ function newImportRunId() {
               h('div', { className: 'dm_toolbar_wrap' },
                 h('div', { className: 'dm_toolbar' },
                   h(Select, {
-                    ariaLabel: t('scopeLabel'), value: selection, minWidth: 220, onChange: changeSelection,
+                    ariaLabel: t('scopeLabel'), value: selection, minWidth: 180, onChange: changeSelection,
                     options: options.map(function (opt) {
                       if (opt.kind === 'all') return { value: 'all', label: t('scopeAll'), icon: 'layers' }
                       if (opt.kind === 'global') return { value: 'global', label: t('scopeGlobal'), icon: 'globe' }
-                      return { value: opt.value, label: (opt.value === currentCwd ? '● ' : '') + opt.value, hint: String(opt.count || 0), icon: 'folder' }
+                      return { value: opt.value, label: (cwdCompareKey(opt.value) === cwdCompareKey(currentCwd) ? '● ' : '') + opt.value, hint: String(opt.count || 0), icon: 'folder' }
                     }).concat(unknownWorkspaces.map(function (w) {
                       return { value: 'unknown-' + w.key, label: t('workspaceUnknown') + ' (' + String(w.key).slice(0, 8) + '…)', icon: 'folder', disabled: true }
                     })),
                   }),
                   h(Select, {
-                    ariaLabel: t('originFilterLabel'), value: originFilter, minWidth: 150, onChange: changeOrigin,
+                    ariaLabel: t('originFilterLabel'), value: originFilter, minWidth: 132, onChange: changeOrigin,
                     options: [
                       { value: '', label: t('originAll'), icon: 'layers' },
                       { value: 'auto', label: t('originAuto'), icon: 'zap' },
@@ -3628,7 +3806,7 @@ function newImportRunId() {
                   h('button', { className: 'dm_btn dm_toolbtn', onClick: handleExport, disabled: busy || phase !== 'ready' }, h(Icon, { name: 'export', size: 15 }), t('export')),
                   h('button', { className: 'dm_btn dm_toolbtn', onClick: function () { if (fileInputRef.current) fileInputRef.current.click() }, disabled: busy || phase !== 'ready' }, h(Icon, { name: 'import', size: 15 }), t('import')),
                   h('button', { className: 'dm_btn dm_toolbtn', onClick: handleAudit, disabled: busy || phase !== 'ready' }, h(Icon, { name: 'copy', size: 15 }), t('audit')),
-                  h('button', { className: 'dm_btn dm_toolbtn', 'aria-label': t('refreshList'), title: t('refreshList'), onClick: function () { refreshRef.current().catch(function () {}) }, disabled: busy || phase !== 'ready' }, h(Icon, { name: 'undo', size: 15 }), t('refreshList')),
+                  h('button', { className: 'dm_btn dm_toolbtn', 'aria-label': t('refreshList'), title: t('refreshList'), onClick: function () { refreshRef.current().catch(function () {}) }, disabled: busy || phase !== 'ready' }, h(Icon, { name: 'undo', size: 15 }), h('span', { className: 'dm_sr' }, t('refreshList'))),
                   h('input', { ref: fileInputRef, type: 'file', accept: '.json,application/json', style: { display: 'none' }, onChange: handleImportFile }))),
               unknownWorkspaces.length > 0 ? h('div', { className: 'dm_hint', style: { margin: '8px 0 0' } }, t('unknownWorkspaceHint')) : null,
               // 批量选择浮栏放在列表之前（视觉仍是 fixed 底部）：键盘 Tab 顺序靠近工具栏，
@@ -3652,6 +3830,7 @@ function newImportRunId() {
               onChange: changeSetting, onReset: resetSettings, onBackup: backupNow,
               onToast: function (text, kind) { showToast(kind, text) },
             })),
+          ),
           editor ? h(EditorModal, { draft: editor, setDraft: setEditor, t: t, workspaceTarget: workspaceTarget, busy: busy, onSave: handleSave, onClose: function () { if (!busy) setEditor(null) } }) : null,
           confirm ? h(ConfirmModal, { entries: confirm.entries, t: t, busy: busy, onConfirm: handleDelete, onClose: function () { if (!busy) setConfirm(null) } }) : null,
           importPlan ? h(ImportModal, { plan: importPlan.plan, mode: importPlan.mode, progress: importProgress, confirming: importConfirming, previewing: importPreviewing, t: t, busy: busy, onStop: function () { importStopRef.current = true }, onConfirm: confirmImport, onModeChange: changeImportMode, onClose: function () { if (!busy) setImportPlan(null) } }) : null,

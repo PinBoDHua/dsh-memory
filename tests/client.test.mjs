@@ -8,7 +8,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import helpers from '../client/client.js'
 
-const { validateDraft, groupEntries, nextToken, entriesParams, buildEntriesQuery, workspaceOptions, errorKeyFor, shouldQueueToast, partitionSettled, parseTags, unwrapResult, settingsStatusNext, savedToastKey, exportParams, defaultViewSelection, sectionCountsExact, chunkEntries, chunkEntriesPreservingLinks, aggregateImportPlans, shouldFocusToastAction, categoryChipCount, importRejectText, importWriteCount, rebaseRejectedIndexes, parseImportText, validateImportDoc, importSummary, pageSlice, entryDetailRows, relativeTime, formatBytes, isExpired, statusOf, originOf, statusQueryFlags, settleBulkDelete, idSetOf, toastRemainingMs, shouldResumeToast, settingsSignature, shouldAutoRefresh } = helpers
+const { validateDraft, buildCreatePayload, clampPageToTotal, todayUtcIso, localDateStamp, cwdCompareKey, canonicalWorkspaceValue, groupEntries, nextToken, entriesParams, buildEntriesQuery, workspaceOptions, errorKeyFor, shouldQueueToast, partitionSettled, parseTags, unwrapResult, settingsStatusNext, savedToastKey, exportParams, defaultViewSelection, sectionCountsExact, chunkEntries, chunkEntriesPreservingLinks, aggregateImportPlans, shouldFocusToastAction, categoryChipCount, importRejectText, importWriteCount, rebaseRejectedIndexes, parseImportText, validateImportDoc, importSummary, pageSlice, entryDetailRows, relativeTime, formatBytes, isExpired, statusOf, originOf, statusQueryFlags, settleBulkDelete, idSetOf, toastRemainingMs, shouldResumeToast, settingsSignature, shouldAutoRefresh } = helpers
 
 test('validateDraft accepts a complete draft and rejects bad ones', () => {
   assert.deepEqual(validateDraft({ content: '一条事实', category: 'fact' }), { ok: true })
@@ -16,10 +16,45 @@ test('validateDraft accepts a complete draft and rejects bad ones', () => {
   assert.deepEqual(validateDraft({ content: '   ', category: 'fact' }), { ok: false, error: 'empty-content' })
   assert.deepEqual(validateDraft({ content: 'x', category: 'bogus' }), { ok: false, error: 'bad-category' })
   assert.deepEqual(validateDraft({ content: 'x', expires: '' }), { ok: true })
-  assert.deepEqual(validateDraft({ content: 'x', expires: '2026-12-01' }), { ok: true })
+  assert.deepEqual(validateDraft({ content: 'x', expires: '2099-12-01' }), { ok: true })
   assert.deepEqual(validateDraft({ content: 'x', expires: '2026-12-1' }), { ok: false, error: 'bad-expires' })
   assert.deepEqual(validateDraft({ content: 'x', expires: '2026-02-30' }), { ok: false, error: 'bad-expires' })
   assert.deepEqual(validateDraft({ content: 'x', expires: 'garbage' }), { ok: false, error: 'bad-expires' })
+  // C4：过去日期会让条目保存后立刻隐藏（「已保存」但列表看不到）。
+  assert.deepEqual(validateDraft({ content: 'x', expires: '2020-01-01' }), { ok: false, error: 'expires-past' })
+  // 编辑既有已过期条目：日期未被改动时允许继续编辑（否则无法修复内容）。
+  assert.deepEqual(validateDraft({ mode: 'edit', content: 'x', expires: '2020-01-01', expiresOriginal: '2020-01-01' }), { ok: true })
+  assert.deepEqual(validateDraft({ mode: 'edit', content: 'x', expires: '2020-01-01', expiresOriginal: '2099-01-01' }), { ok: false, error: 'expires-past' })
+  // 今天（UTC）仍有效（当日含），不算过去。
+  assert.deepEqual(validateDraft({ content: 'x', expires: todayUtcIso() }), { ok: true })
+})
+
+test('C2: create payload only carries explicit fields (defaults must not rewrite dedupe target)', () => {
+  const draft = { mode: 'create', content: '  同内容  ', category: 'fact', tags: '', scope: 'global', pinned: false, expires: '' }
+  const payload = buildCreatePayload(draft, [], 'D:\\proj')
+  assert.deepEqual(payload, { content: '同内容', scope: 'global' })
+  assert.equal('category' in payload, false, 'default fact must not be sent as explicit')
+  assert.equal('tags' in payload, false, 'empty tags must not be sent as explicit')
+  assert.equal('pinned' in payload, false, 'default unpinned must not be sent as explicit')
+  assert.equal('origin' in payload, false, 'origin must fall back to server default')
+  const explicit = buildCreatePayload({ mode: 'create', content: '偏好', category: 'preference', scope: 'workspace', pinned: true, expires: '2099-01-01' }, ['tag1'], 'D:\\proj')
+  assert.deepEqual(explicit, { content: '偏好', scope: 'workspace', workspace: 'D:\\proj', category: 'preference', tags: ['tag1'], pinned: true, expires: '2099-01-01' })
+})
+
+test('C4: local dates (filename) vs UTC dates (expiry semantics)', () => {
+  const ts = Date.UTC(2026, 0, 2, 3, 4, 5) // UTC 2026-01-02
+  assert.equal(todayUtcIso(ts), '2026-01-02')
+  const local = localDateStamp(ts)
+  assert.match(local, /^2026-01-0[12]$/, `local date stamp must use local timezone, got ${local}`)
+  assert.equal(todayUtcIso(NaN), '')
+})
+
+test('C8: clampPageToTotal jumps straight to the last valid page', () => {
+  assert.equal(clampPageToTotal(50, 0, 20), 0)
+  assert.equal(clampPageToTotal(50, 41, 20), 2)
+  assert.equal(clampPageToTotal(3, 100, 20), 3)
+  assert.equal(clampPageToTotal(9, 1, 20), 0)
+  assert.equal(clampPageToTotal(2, 100, 0), 2, 'page size falls back to 1 without NaN')
 })
 
 test('groupEntries splits by scope preserving order', () => {
@@ -171,6 +206,7 @@ test('workspaceOptions builds global plus known workspaces and current cwd', () 
       { key: 'k3', cwd: 'D:\\proj\\alpha', count: 2 },
     ],
     currentCwd: 'D:\\proj\\beta',
+    caseInsensitive: true,
   })
   assert.deepEqual(opts, [
     { value: 'global', kind: 'global' },
@@ -178,6 +214,31 @@ test('workspaceOptions builds global plus known workspaces and current cwd', () 
     { value: 'D:\\proj\\beta', kind: 'workspace', count: 0 },
   ])
   assert.deepEqual(workspaceOptions({ workspaces: [], currentCwd: undefined }), [{ value: 'global', kind: 'global' }])
+})
+
+test('C3: cwd comparison is platform-aware (Windows case-insensitive, POSIX case-sensitive)', () => {
+  const input = {
+    workspaces: [
+      { key: 'k1', cwd: 'd:\\proj\\alpha', count: 1 },
+      { key: 'k2', cwd: 'D:\\proj\\alpha', count: 1 },
+    ],
+    currentCwd: 'D:\\proj\\Alpha',
+  }
+  // Windows：同一目录不同大小写 → 合并 + 当前工作区可被识别。
+  const win = workspaceOptions(Object.assign({ caseInsensitive: true }, input))
+  assert.equal(win.filter((o) => o.kind === 'workspace').length, 1, 'duplicate-cased cwd collapses to one (current cwd matches it)')
+  assert.equal(cwdCompareKey('D:\\proj\\Alpha', true), cwdCompareKey('d:\\proj\\alpha', true))
+  // POSIX：大小写是不同目录，不得合并。
+  const posix = workspaceOptions({
+    workspaces: [{ key: 'k1', cwd: '/home/A', count: 1 }, { key: 'k2', cwd: '/home/a', count: 1 }],
+    currentCwd: '/home/a',
+    caseInsensitive: false,
+  })
+  assert.equal(posix.filter((o) => o.kind === 'workspace').length, 2)
+  // 默认视图「当前工作区」映射到选项规范 value（Windows 大小写不同时不再空白）。
+  const mapped = defaultViewSelection({ effective: { defaultView: 'workspace' } }, 'D:\\proj\\ALPHA', win, true)
+  assert.equal(mapped.selection, 'd:\\proj\\alpha')
+  assert.equal(canonicalWorkspaceValue('D:\\proj\\ALPHA', win, true), 'd:\\proj\\alpha')
 })
 
 test('parseTags trims, splits zh/en commas, dedupes, caps length and count', () => {

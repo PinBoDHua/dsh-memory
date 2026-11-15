@@ -630,3 +630,27 @@ test('export -> import roundtrip into a fresh root restores everything', () => {
   const after = fresh.export().entries.slice().sort((a, b) => a.id.localeCompare(b.id))
   assert.deepEqual(after.map((e) => ({ ...e, workspace: e.workspace && e.workspace.toLowerCase() })), before.map((e) => ({ ...e, workspace: e.workspace && e.workspace.toLowerCase() })))
 })
+
+test('M2: import only honors boolean true for pinned/archived (string "false" must not hide entries)', () => {
+  const { root, service } = tmpService()
+  const result = service.import({
+    entries: [{ id: 'm-bool-strict', content: '字符串布尔导入', scope: 'global', pinned: 'false', archived: 'false' }],
+  })
+  assert.equal(result.imported, 1)
+  const hit = store.findEntry(root, 'm-bool-strict')
+  assert.ok(hit, 'entry must exist')
+  assert.ok(!hit.archived, 'string "false" must not archive/hide the entry')
+  assert.ok(!hit.pinned, 'string "false" must not pin the entry')
+  assert.equal(service.list({ scope: 'global' }).length, 1, 'entry stays visible in default view')
+})
+
+test('M4: settings() exposes corrupt meta instead of pretending a healthy schema version', () => {
+  const { root, service } = tmpService()
+  store.ensureMeta(root)
+  fs.writeFileSync(path.join(root, 'meta.json'), '{ not json', 'utf8')
+  const settings = service.settings()
+  assert.equal(settings.meta.schemaVersion, null, 'corrupt meta must not fall back to a healthy version')
+  assert.match(String(settings.meta.metaError), /损坏|corrupt/)
+  const status = service.status()
+  assert.equal(status.metaError, settings.meta.metaError, 'settings and status must agree on meta health')
+})
