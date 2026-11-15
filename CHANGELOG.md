@@ -3,6 +3,17 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.27.0] - 2026-11-15
+
+### 新增 Added — 列表密度切换（舒适 / 紧凑）
+- **工具栏密度切换**：记忆页工具栏新增分段控件（列表/紧凑两个图标按钮，`role=group`＋`aria-pressed`），点击即时切换视图；值写入设置覆盖层 `viewMode`（`comfortable` 默认 / `compact`），刷新/重开面板与其它窗口持久生效。
+- **紧凑视图**：单行高密度表格行——分类 pill＋单行截断正文＋相对时间＋常驻操作，隐藏来源/注入/作用域/标签行（展开后恢复标签与详情），行高由约 100px 降到约 52px，一屏可看约两倍条目；分组表头、统计面板、工具栏同步收紧。
+- **设置页**：「面板偏好」新增「列表密度」下拉（舒适/紧凑），与工具栏切换同源；服务端 `sanitizeSettings` 校验枚举、`bounds.viewModes` 下发合法值，非法/未知值丢弃。
+- **兼容**：旧 `settings.json` 无 `viewMode` 时回落 `comfortable`；`/settings` 响应新增 `defaults.viewMode` 与 `bounds.viewModes`，旧客户端忽略新增字段。
+
+### 验证证据
+- 单元 **418/418**（新增 1：settings viewMode 合法/非法/默认与持久化）；live **203/203**（新增 viewMode 枚举下发、POST 生效与还原）；真实 GUI **101/101**（新增工具栏切换→`.dm_compact` 生效并持久化、行高降低门限）；吸顶回归 **2/2**；数据根快照前后一致、零残留。
+
 ## [0.26.1] - 2026-11-15
 
 面板视觉二次迭代：0.26.0 的「索引式」方向被用户反馈为过素、信息不易区分；本轮在**保留无渐变/无毛玻璃/无装饰徽章纪律**的前提下，补回可辨识度与层级，功能与安全修复不变。

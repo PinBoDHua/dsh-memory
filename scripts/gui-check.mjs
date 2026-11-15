@@ -1658,6 +1658,29 @@ async function main() {
         return { footer, value: (document.querySelectorAll('.dm_numinput')[0] || {}).value || null }
       })()`)
       check('慢网络下「恢复默认」不被在途防抖保存回滚', Number(afterRace?.effective?.backupRetention) === defaultsRetention && String(raceState.value) === String(defaultsRetention) && /已保存|Saved/.test(raceState.footer), JSON.stringify({ ...raceState, effective: afterRace?.effective?.backupRetention }))
+
+      // 0.27.0：列表密度切换——工具栏分段控件切紧凑 → .dm_compact + 行高显著降低，写入设置覆盖层。
+      await evaluate(`(() => { const tab = document.querySelector('#dm-tab-memories'); if (tab) tab.click(); return Boolean(tab) })()`)
+      await sleep(700)
+      const comfortableHeight = await evaluate(`(() => { const card = document.querySelector('.dm_card'); return card ? Math.round(card.getBoundingClientRect().height) : null })()`)
+      const densityToggled = await evaluate(`(() => {
+        const btns = [...document.querySelectorAll('.dm_viewtoggle .dm_viewbtn')]
+        if (btns.length < 2) return null
+        btns[1].click()
+        return btns.length
+      })()`)
+      await sleep(1000)
+      const compactState = await evaluate(`(() => {
+        const page = document.querySelector('.dm_page')
+        const card = document.querySelector('.dm_card')
+        return { compact: !!(page && page.classList.contains('dm_compact')), cardHeight: card ? Math.round(card.getBoundingClientRect().height) : null }
+      })()`)
+      const settingsAfterDensity = await apiJson('/settings')
+      check('工具栏密度切换为紧凑视图（.dm_compact 且持久化）', densityToggled === 2 && compactState.compact === true && settingsAfterDensity?.effective?.viewMode === 'compact', JSON.stringify({ compactState, viewMode: settingsAfterDensity?.effective?.viewMode }))
+      check('紧凑视图行高显著降低（一屏更多条目）', comfortableHeight !== null && compactState.cardHeight !== null && compactState.cardHeight < comfortableHeight * 0.75, `${comfortableHeight} -> ${compactState.cardHeight}`)
+      // 还原舒适视图（finally 还会按基线恢复 overlay）。
+      await evaluate(`(() => { const btns = [...document.querySelectorAll('.dm_viewtoggle .dm_viewbtn')]; if (btns[0]) btns[0].click(); return Boolean(btns[0]) })()`)
+      await sleep(1000)
     } finally {
       // 真实数据根恢复：overlay 原值 + 删除本次新增备份；随后回到记忆页。
       try {

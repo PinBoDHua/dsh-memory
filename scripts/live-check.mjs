@@ -693,6 +693,21 @@ async function main() {
     ok('settings 还原原值', restored.json?.effective?.decayEnabled === origDecay && restored.json?.effective?.autoExtractHint === origHint)
   })
 
+  // 4b. viewMode 枚举下发与持久化（0.27.0 列表密度）
+  await check('settings viewMode 枚举与持久化（0.27.0）', async () => {
+    const before = await req('GET', '/settings')
+    const modes = before.json?.bounds?.viewModes
+    const orig = before.json?.effective?.viewMode
+    ok('bounds.viewModes 含 comfortable/compact', Array.isArray(modes) && modes.includes('comfortable') && modes.includes('compact'), JSON.stringify(modes))
+    ok('effective.viewMode 合法', orig === 'comfortable' || orig === 'compact', String(orig))
+    const target = orig === 'compact' ? 'comfortable' : 'compact'
+    const post = await req('POST', '/settings', { token, body: { viewMode: target } })
+    ok('settings POST viewMode 生效', post.json?.result?.effective?.viewMode === target, JSON.stringify(post.json?.result?.effective?.viewMode))
+    await req('POST', '/settings', { token, body: { viewMode: orig } })
+    const restored = await req('GET', '/settings')
+    ok('viewMode 还原原值', restored.json?.effective?.viewMode === orig, String(restored.json?.effective?.viewMode))
+  })
+
   // 5. backup / export / import dry-run / workspaces
   await check('backup / export / import dry-run / workspaces（不裁剪历史备份，0.24.15）', async () => {
     // 先抬高保留份数再备份：确保轮转不会删除用户已有备份（清理阶段会恢复原设置）。

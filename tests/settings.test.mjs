@@ -23,6 +23,7 @@ test('sanitize clamps numbers, keeps valid enums/booleans, drops unknown/invalid
     backupRetention: 0,
     defaultView: 'workspace',
     pageSize: 100,
+    viewMode: 'compact',
     animations: false,
     relativeTime: false,
     bogusKey: 1,
@@ -34,11 +35,14 @@ test('sanitize clamps numbers, keeps valid enums/booleans, drops unknown/invalid
   assert.equal(out.backupRetention, settings.RETENTION_MIN)
   assert.equal(out.defaultView, 'workspace')
   assert.equal(out.pageSize, 100)
+  assert.equal(out.viewMode, 'compact')
   assert.equal(out.animations, false)
   assert.equal(out.relativeTime, false)
   assert.ok(!('bogusKey' in out))
-  const dropped = settings.sanitizeSettings({ autoInject: 'yes', injectionBudgetChars: 'abc', defaultView: 'nope', pageSize: 999 })
+  const dropped = settings.sanitizeSettings({ autoInject: 'yes', injectionBudgetChars: 'abc', defaultView: 'nope', pageSize: 999, viewMode: 'spacious' })
   assert.deepEqual(dropped, {})
+  assert.equal(settings.SETTINGS_DEFAULTS.viewMode, 'comfortable')
+  assert.deepEqual(settings.VIEW_MODES, ['comfortable', 'compact'])
   assert.equal(settings.sanitizeSettings({ injectionBudgetChars: -5 }).injectionBudgetChars, 0)
   assert.equal(settings.sanitizeSettings({ injectionBudgetChars: 1234.6 }).injectionBudgetChars, 1235)
 })
@@ -70,6 +74,18 @@ test('effective precedence: defaults < profile base < overlay', () => {
   assert.equal(eff.autoInject, true, 'overlay overrides base')
   assert.equal(eff.injectionBudgetChars, 1234, 'base still applies where overlay silent')
   assert.equal(eff.pageSize, 20)
+})
+
+test('viewMode defaults to comfortable and persists through the settings overlay', () => {
+  const root = tmpRoot()
+  assert.equal(settings.effectiveSettings({}, root).viewMode, 'comfortable', 'legacy settings fall back to comfortable')
+  assert.equal(settings.writeOverlay(root, { viewMode: 'compact' }).viewMode, 'compact')
+  assert.equal(settings.effectiveSettings({}, root).viewMode, 'compact')
+  // 非法值被 sanitize 丢弃，不覆盖既有合法值。
+  settings.writeOverlay(root, { viewMode: 'spacious' })
+  assert.equal(settings.effectiveSettings({}, root).viewMode, 'compact')
+  settings.resetOverlay(root)
+  assert.equal(settings.effectiveSettings({}, root).viewMode, 'comfortable')
 })
 
 test('overlay lock contention surfaces as code=busy for write and reset', () => {

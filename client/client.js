@@ -988,6 +988,10 @@ function newImportRunId() {
     animationsDesc: '卡片入场、悬停浮起等动画',
     relativeTimeLabel: '相对时间',
     relativeTimeDesc: '显示「N 小时前」而非绝对时间',
+    viewModeLabel: '列表密度',
+    viewModeDesc: '舒适＝索引行（分类/标签/元信息全量）；紧凑＝单行高密度表格，一屏看更多',
+    viewComfortable: '舒适',
+    viewCompact: '紧凑',
     viewAll: '全局＋当前工作区',
     viewGlobal: '仅全局',
     viewWorkspace: '当前工作区',
@@ -1224,6 +1228,10 @@ function newImportRunId() {
     animationsDesc: 'Card entrance, hover lift and other motion',
     relativeTimeLabel: 'Relative time',
     relativeTimeDesc: 'Show “N hours ago” instead of absolute timestamps',
+    viewModeLabel: 'List density',
+    viewModeDesc: 'Comfortable = index rows (category/tags/metadata); Compact = one-line dense table for more rows per screen',
+    viewComfortable: 'Comfortable',
+    viewCompact: 'Compact',
     viewAll: 'Global + current workspace',
     viewGlobal: 'Global only',
     viewWorkspace: 'Current workspace',
@@ -1300,8 +1308,8 @@ function newImportRunId() {
     // ---- 工具栏（吸顶）：独立面板，搜索优先，操作分组 ----
     // top 必须为 0：Chromium 会把滚动容器 padding-top 叠加进 sticky 停驻位。
     '.dm_toolbar_wrap{position:sticky;top:0;z-index:30;margin:0 -32px 6px;padding:10px 32px;background:var(--dm-bg);background-image:none;border-bottom:1px solid var(--dm-line);backdrop-filter:none;}',
-    '.dm_toolbar{display:flex;gap:5px;flex-wrap:wrap;align-items:center;background:var(--dm-surface);border:1px solid var(--dm-line);border-radius:10px;padding:6px 7px;}',
-    '.dm_searchwrap{position:relative;flex:1 1 170px;min-width:130px;max-width:300px;order:-1;}',
+    '.dm_toolbar{display:flex;gap:4px;flex-wrap:wrap;align-items:center;background:var(--dm-surface);border:1px solid var(--dm-line);border-radius:10px;padding:6px 6px;}',
+    '.dm_searchwrap{position:relative;flex:1 1 140px;min-width:120px;max-width:300px;order:-1;}',
     '.dm_search_icon{position:absolute;left:11px;top:50%;transform:translateY(-50%);color:var(--dm-ink3);pointer-events:none;display:flex;}',
     '.dm_search{width:100%;height:32px;box-sizing:border-box;border:1px solid var(--dm-line);border-radius:6px;background:var(--dm-bg);color:var(--dm-ink);padding:0 30px 0 31px;font:inherit;font-size:12.5px;transition:border-color .13s,background-color .13s,box-shadow .13s;}',
     '.dm_search::placeholder{color:var(--dm-ink3);}',
@@ -1334,7 +1342,7 @@ function newImportRunId() {
     '.dm_select_opt_hint{font:500 10.5px var(--dm-mono);color:var(--dm-ink3);flex-shrink:0;}',
     '.dm_select_opt_check{color:var(--dm-primary);flex-shrink:0;}',
     '.dm_tagwrap{position:relative;display:inline-flex;align-items:center;}',
-    '.dm_taginput{height:32px;width:88px;padding:0 26px 0 9px;border:1px solid var(--dm-line);border-radius:6px;background:transparent;color:var(--dm-ink);font:inherit;font-size:12.5px;}',
+    '.dm_taginput{height:32px;width:84px;padding:0 26px 0 9px;border:1px solid var(--dm-line);border-radius:6px;background:transparent;color:var(--dm-ink);font:inherit;font-size:12.5px;}',
     '.dm_taginput::placeholder{color:var(--dm-ink3);}',
     '.dm_taginput:hover{background:var(--dm-raised);}',
     '.dm_taginput:focus{outline:none;border-color:var(--dm-primary);background:var(--dm-surface);box-shadow:var(--dm-ring);}',
@@ -1342,6 +1350,12 @@ function newImportRunId() {
     '.dm_tagclear:hover{background:var(--dm-line);color:var(--dm-ink);}',
     '.dm_toolbtn{height:32px;border-color:transparent;background:transparent;padding:0 6px;font-size:12.5px;}',
     '.dm_toolbtn:hover{border-color:var(--dm-line);background:var(--dm-raised);}',
+    '.dm_viewtoggle{display:inline-flex;gap:2px;border:1px solid var(--dm-line);border-radius:6px;padding:2px;background:var(--dm-raised);margin-left:auto;flex-shrink:0;}',
+    '.dm_viewbtn{width:28px;height:24px;display:inline-flex;align-items:center;justify-content:center;border:1px solid transparent;border-radius:4px;background:transparent;color:var(--dm-ink3);cursor:pointer;padding:0;}',
+    '.dm_viewbtn:hover{color:var(--dm-ink);background:var(--dm-surface);}',
+    '.dm_viewbtn:focus-visible{outline:none;box-shadow:var(--dm-ring);}',
+    '.dm_viewbtn_on{background:var(--dm-surface);border-color:var(--dm-line2);color:var(--dm-primary);box-shadow:var(--dm-shadow);}',
+    '.dm_viewbtn:disabled{opacity:.45;cursor:default;fill:none;}',
     // ---- 通用按钮 ----
     '.dm_btn{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--dm-line2);background:var(--dm-surface);color:var(--dm-ink2);border-radius:6px;padding:5px 10px;cursor:pointer;font:inherit;font-size:12.5px;line-height:1.2;transition:color .13s,background-color .13s,border-color .13s;}',
     '.dm_btn:hover{color:var(--dm-ink);border-color:color-mix(in srgb,var(--dm-ink) 26%,var(--dm-line2));background:color-mix(in srgb,var(--dm-ink) 4%,var(--dm-surface));}',
@@ -1419,6 +1433,30 @@ function newImportRunId() {
     '.dm_card_muted{opacity:.68;}',
     '.dm_card_muted:hover{opacity:1;}',
     '.dm_btn_pinned{color:var(--dm-pref);}',
+    // ---- 紧凑视图（列表密度=compact）：单行高密度表格，一屏看更多 ----
+    '.dm_compact .dm_header{margin-top:18px;}',
+    '.dm_compact .dm_title{font-size:21px;}',
+    '.dm_compact .dm_subtitle{font-size:12px;}',
+    '.dm_compact .dm_stats{padding:12px 16px 10px;gap:9px;margin:12px 0 10px;}',
+    '.dm_compact .dm_stats_head{gap:12px;}',
+    '.dm_compact .dm_stats_num{font-size:24px;}',
+    '.dm_compact .dm_dist_bar{height:7px;}',
+    '.dm_compact .dm_toolbar_wrap{padding:8px 32px;}',
+    '.dm_compact .dm_section_title{padding:8px 14px;}',
+    '.dm_compact .dm_card{padding:8px 14px 8px 13px;grid-template-columns:16px minmax(0,1fr) auto;column-gap:10px;align-items:center;}',
+    '.dm_compact .dm_card::before{top:7px;bottom:7px;}',
+    '.dm_compact .dm_check{padding-top:0;}',
+    '.dm_compact .dm_card_top{min-height:16px;}',
+    '.dm_compact .dm_origin,.dm_compact .dm_injected_mark,.dm_compact .dm_scope_chip{display:none;}',
+    '.dm_compact .dm_time{font-size:10.5px;}',
+    '.dm_compact .dm_content{display:block;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;-webkit-line-clamp:unset;margin:3px 0 0;font-size:13px;line-height:1.45;}',
+    '.dm_compact .dm_card_foot{display:none;}',
+    '.dm_compact .dm_card_actions{margin-top:0;gap:0;}',
+    '.dm_compact .dm_card_actions .dm_btn{padding:4px;}',
+    '.dm_compact .dm_card_expanded .dm_content{white-space:pre-wrap;display:-webkit-box;-webkit-line-clamp:unset;-webkit-box-orient:vertical;}',
+    '.dm_compact .dm_card_expanded .dm_card_foot{display:flex;margin-top:5px;}',
+    '.dm_compact .dm_card_expanded .dm_details{margin:7px 0 8px;}',
+    '.dm_compact .dm_empty{padding:40px 20px;}',
     // ---- 加载 / 空态 / 错误 ----
     '.dm_skel{background:var(--dm-surface);border:1px solid var(--dm-line);border-radius:10px;padding:18px 16px;margin-bottom:16px;}',
     '.dm_skel_line{height:10px;border-radius:3px;background:var(--dm-raised);margin-bottom:10px;animation:dm_breathe 1.8s ease-in-out infinite;}',
@@ -1615,6 +1653,8 @@ function newImportRunId() {
         lock: ['M6 10V8a6 6 0 0 1 12 0v2', 'M5 10h14v10H5z', 'M12 14v3'],
         database: ['M12 8c4.4 0 8-1.3 8-3s-3.6-3-8-3-8 1.3-8 3 3.6 3 8 3z', 'M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5', 'M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3'],
         sliders: ['M4 21v-7', 'M4 10V3', 'M12 21v-9', 'M12 8V3', 'M20 21v-5', 'M20 12V3', 'M1 14h6', 'M9 8h6', 'M17 16h6'],
+        viewList: ['M9 6h12', 'M9 12h12', 'M9 18h12', 'M3.5 6h.01', 'M3.5 12h.01', 'M3.5 18h.01'],
+        viewCompact: ['M3 5h18', 'M3 9h18', 'M3 13h18', 'M3 17h18', 'M3 21h18'],
         pin: ['M12 17v5', 'M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z'],
         archive: ['M21 8v13H3V8', 'M1 3h22v5H1z', 'M10 12h4'],
         zap: ['M13 2L3 14h9l-1 8 10-12h-9l1-8z'],
@@ -1843,7 +1883,7 @@ function newImportRunId() {
         }
         var checked = props.selected
         return h('div', {
-          className: 'dm_card' + (checked ? ' dm_card_selected' : '') + (status !== 'active' ? ' dm_card_muted' : ''),
+          className: 'dm_card' + (checked ? ' dm_card_selected' : '') + (status !== 'active' ? ' dm_card_muted' : '') + (expanded ? ' dm_card_expanded' : ''),
           style: Object.assign({}, catVars(entry.category), { animationDelay: (props.index % 10) * 35 + 'ms' }),
         },
           h('div', { className: 'dm_rail' }),
@@ -2401,7 +2441,16 @@ function newImportRunId() {
             h(SettingRow, { label: t('animationsLabel'), desc: t('animationsDesc') },
               h(Toggle, { checked: draft.animations, onChange: set('animations'), label: t('animationsLabel'), disabled: props.busy })),
             h(SettingRow, { label: t('relativeTimeLabel'), desc: t('relativeTimeDesc') },
-              h(Toggle, { checked: draft.relativeTime, onChange: set('relativeTime'), label: t('relativeTimeLabel'), disabled: props.busy }))),
+              h(Toggle, { checked: draft.relativeTime, onChange: set('relativeTime'), label: t('relativeTimeLabel'), disabled: props.busy })),
+            h(SettingRow, { label: t('viewModeLabel'), desc: t('viewModeDesc') },
+              h(Select, {
+                className: 'dm_setselect', value: draft.viewMode || 'comfortable', ariaLabel: t('viewModeLabel'), disabled: props.busy, minWidth: 160,
+                onChange: function (v) { props.onChange('viewMode', v) },
+                options: [
+                  { value: 'comfortable', label: t('viewComfortable'), icon: 'viewList' },
+                  { value: 'compact', label: t('viewCompact'), icon: 'viewCompact' },
+                ],
+              }))),
           h('div', { className: 'dm_setfooter' },
             h('button', { className: 'dm_btn dm_btn_danger', onClick: props.onReset, disabled: props.busy || (props.status && props.status.saving) }, h(Icon, { name: 'undo', size: 14 }), t('resetDefaults')),
             h('span', { className: 'dm_savestate', role: 'status' },
@@ -2767,6 +2816,8 @@ function newImportRunId() {
         var viewInitialized = useRef(false)
         var settingsSeq = useRef(0)
         var pageSize = (settings && settings.effective && settings.effective.pageSize) || PAGE_SIZE
+        // 列表密度：草稿优先（切换即时生效），其次已保存设置；默认舒适索引行。
+        var viewMode = (draft && draft.viewMode) || (settings && settings.effective && settings.effective.viewMode) || 'comfortable'
         // 每页条数变化（设置页保存）时页码口径失效：render 阶段归零，避免先按旧
         // page×新 pageSize 发一次错位请求（超界时还会逐页串行回退，每轮都带全量
         // stats 扫描）。React 官方支持的「前次渲染值调整状态」模式，不额外提交。
@@ -2958,6 +3009,25 @@ function newImportRunId() {
             var next = Object.assign({}, prev)
             next[key] = value
             return next
+          })
+        }
+
+        // 工具栏列表密度切换：乐观更新草稿（视图即时切换），保存时只写 viewMode 这一个键，
+        // 不把默认值展开成 settings.json 显式字段；失败回滚并提示。设置页有未保存改动时
+        // 并入既有草稿走统一防抖保存，避免两套写路径互相覆盖。
+        function setViewMode(mode) {
+          if (mode !== 'comfortable' && mode !== 'compact') return
+          var current = (draft && draft.viewMode) || (settings && settings.effective && settings.effective.viewMode) || 'comfortable'
+          if (mode === current) return
+          if (dirtyRef.current) { changeSetting('viewMode', mode); return }
+          setDraft(function (prev) { return Object.assign({}, prev, { viewMode: mode }) })
+          api.saveSettings({ viewMode: mode }).then(function (view) {
+            setSettings(view)
+            if (!dirtyRef.current) setDraft(view.effective)
+            setSettingsError('')
+          }).catch(function (err) {
+            setDraft(function (prev) { return Object.assign({}, prev, { viewMode: current }) })
+            showToast('error', errorText(err, t))
           })
         }
 
@@ -3754,7 +3824,7 @@ function newImportRunId() {
         var fileInputRef = useRef(null)
 
         var noAnim = settings && !settings.effective.animations
-        return h('div', { ref: pageRef, tabIndex: -1, className: 'dm_page' + (selected.length > 0 ? ' dm_selecting' : '') + (noAnim ? ' dm_no_anim' : '') },
+        return h('div', { ref: pageRef, tabIndex: -1, className: 'dm_page' + (selected.length > 0 ? ' dm_selecting' : '') + (noAnim ? ' dm_no_anim' : '') + (viewMode === 'compact' ? ' dm_compact' : '') },
           // 版心：内容最宽 1040px 居中，宽屏下不再被拉成一条长线。
           h('div', { className: 'dm_inner' },
           h('div', { className: 'dm_header' },
@@ -3822,6 +3892,18 @@ function newImportRunId() {
                       value: query, onChange: function (e) { changeQuery(e.target.value) },
                     }),
                     query ? h('button', { className: 'dm_search_clear', 'aria-label': t('clearSearch'), title: t('clearSearch'), onClick: function () { changeQuery('') } }, h(Icon, { name: 'x', size: 12, strokeWidth: 2.2 })) : null),
+                  // 列表密度切换：紧凑/舒适（写入设置覆盖层，持久生效；草稿即时切换视图）。
+                  h('div', { className: 'dm_viewtoggle', role: 'group', 'aria-label': t('viewModeLabel') },
+                    h('button', {
+                      type: 'button', className: 'dm_viewbtn' + (viewMode === 'comfortable' ? ' dm_viewbtn_on' : ''),
+                      'aria-pressed': viewMode === 'comfortable', 'aria-label': t('viewComfortable'), title: t('viewComfortable'),
+                      disabled: busy, onClick: function () { setViewMode('comfortable') },
+                    }, h(Icon, { name: 'viewList', size: 15 })),
+                    h('button', {
+                      type: 'button', className: 'dm_viewbtn' + (viewMode === 'compact' ? ' dm_viewbtn_on' : ''),
+                      'aria-pressed': viewMode === 'compact', 'aria-label': t('viewCompact'), title: t('viewCompact'),
+                      disabled: busy, onClick: function () { setViewMode('compact') },
+                    }, h(Icon, { name: 'viewCompact', size: 15 }))),
                   h('button', { className: 'dm_btn dm_toolbtn', onClick: handleExport, disabled: busy || phase !== 'ready' }, h(Icon, { name: 'export', size: 15 }), t('export')),
                   h('button', { className: 'dm_btn dm_toolbtn', onClick: function () { if (fileInputRef.current) fileInputRef.current.click() }, disabled: busy || phase !== 'ready' }, h(Icon, { name: 'import', size: 15 }), t('import')),
                   h('button', { className: 'dm_btn dm_toolbtn', onClick: handleAudit, disabled: busy || phase !== 'ready' }, h(Icon, { name: 'copy', size: 15 }), t('audit')),
