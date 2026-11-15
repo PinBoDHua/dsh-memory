@@ -736,6 +736,18 @@ async function main() {
     ok('skills/approve 缺 token 403', noToken.status === 403, `got ${noToken.status}`)
   })
 
+  // 3e. I4（v0.31.0）：确定性周报存档 + 批量审批错误语义。
+  await check('GET /digest 与批量审批错误语义（v0.31.0）', async () => {
+    const d = await req('GET', '/digest')
+    ok('digest HTTP 200', d.status === 200, `got ${d.status}`)
+    ok('digest 字段', typeof d.json?.enabled === 'boolean' && Array.isArray(d.json?.archive) && Number.isInteger(d.json?.weekday), JSON.stringify({ e: d.json?.enabled, n: d.json?.archive?.length, w: d.json?.weekday }))
+    ok('digest 存档只含计数文本', (d.json?.archive ?? []).every((item) => typeof item.text === 'string' && typeof item.weekKey === 'string' && typeof item.counts === 'object'))
+    const bad = await req('POST', '/learning/approve-many', { token, body: { pendingIds: [] } })
+    ok('approve-many 空数组 400', bad.status === 400 && bad.json?.code === 'invalid', JSON.stringify(bad.json))
+    const noToken = await req('POST', '/learning/reject-many', { body: { pendingIds: ['p-x'] } })
+    ok('reject-many 缺 token 403', noToken.status === 403, `got ${noToken.status}`)
+  })
+
   // 4. settings：toggle 到反值验证后还原原值（GET 无 {result} 包裹；绝不 reset）
   await check('settings 新键 toggle 后还原', async () => {
     const before = await req('GET', '/settings')
@@ -1034,6 +1046,8 @@ async function main() {
     ok('bundle 含 0.29.0 分层召回与存量治理', code.includes('duplicatesTitle') && code.includes('duplicates/merge') && code.includes('recallLayers') && code.includes('bulkArchive') && code.includes('dm-recall-layers'))
     // 0.30.0：程序性知识（skill 候选批准/拒绝/回滚）。
     ok('bundle 含 0.30.0 程序性知识', code.includes('learningSkillBadge') && code.includes('skills/approve') && code.includes('rollbackSkillItem') && code.includes('learningSkillRollback'))
+    // 0.31.0：批量审批、审计摘要与周报存档。
+    ok('bundle 含 0.31.0 批量审批与周报', code.includes('learningApproveAll') && code.includes('learningBatchHint') && code.includes('learningDigestBadge') && code.includes('learning/approve-many') && code.includes('auditCounts'))
   })
 
   // 7. 清理测试条目 + 恢复设置/备份快照（正常结束与异常中断共用同一幂等清理）

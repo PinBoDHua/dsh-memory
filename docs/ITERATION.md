@@ -33,6 +33,15 @@ This file is the self-iteration ledger for dsh-memory: per-round increments, ver
 
 环境注意：GUI 端口每次启动不同，以运行时上下文为准；PowerShell 5.1 输出中文需 `[Console]::OutputEncoding=[Text.Encoding]::UTF8`；`git push` 的 stderr 进度可能被 PS 报 NonZeroExit，需看内容判断。
 
+## 0.31.0 主动学习 I4（2026-11-15，设计稿 `docs/learning-design.md` §4 I4）
+
+- 疑似冲突：R2 pending 记录 `conflictWith`（确定性包含/相似判定、最多 3 条），保留双方来源，绝不自动覆盖/取代。
+- 待确认提醒：仅数量变化时注入一行计数（不含候选正文）；归零静默。
+- 确定性周报：审计事件纯聚合，本地周一次、无事件不注入、游标防重复、设置可关、零 LLM；存档 `learning/digests.json`（备份/快照纳入）。
+- 面板：批量审批（逐项结算）、审计摘要（只计数）、周报存档展示；`GET /digest`、`POST /learning/approve-many|reject-many`。
+- 评测：eval-replay 扩到 FI-19…FI-20（20/20）。
+- 验证：单元 **499/499**、live **246/246**、真实 GUI **109/109**、吸顶 **2/2**、快照零残留。
+
 ## 0.30.0 主动学习 I3（2026-11-15，设计稿 `docs/learning-design.md` §4 I3）
 
 - spike：desktop profile 未启用 `tool-skill`/`skill-filesystem`，插件不得 import @deepseek-ai/* → 采用 fallback（自有 `memory_skill_load` 读取 `skills/*.md`），provider 集成留待有 skill 工具的 profile。

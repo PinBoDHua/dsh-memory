@@ -3,6 +3,21 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.31.0] - 2026-11-15
+
+### 新增 Added — 主动学习 I4：冲突提醒、确定性周报与面板完善
+- **疑似冲突候选**：R2 待确认项记录 `conflictWith`（与哪些旧条目疑似冲突——确定性「包含或相似度≥0.55」判定，最多 3 条），保留双方来源；**绝不自动覆盖或取代**旧条目；面板按候选计数展示「疑似冲突」数量。
+- **待确认提醒**：仅在候选数量变化时向系统侧上下文注入一行（只含数量 / 冲突数 / 面板入口，**不含候选正文**）；数量归零时静默并重置计数。
+- **确定性周报**：对审计事件做纯聚合（自动写入 / 新候选与批准拒绝 / 重复合并 / 归档恢复 / 技能操作），本地周一为界每周首次装配最多注入一次；无审计事件不注入、游标防重复、`digest.enabled` 可关、零 LLM 调用；每周报存档 `learning/digests.json`（随备份/快照）。
+- **面板完善**：学习分区支持**批量审批**（全部批准/全部拒绝，逐项结算并汇报失败数）、**最近审计**聚合摘要（只显示类型计数，不渲染候选正文）、**周报存档**展示；新增 `GET /digest`、`POST /learning/approve-many`、`POST /learning/reject-many`。
+
+### 变更 Changed
+- 学习分区的提前隐藏条件扩展到技能候选/周报存档（有任一数据才渲染分区，不产生空壳）。
+- 备份/导出 `learning` 载荷新增 `digests`（导入仍只恢复 entries）。
+
+### 验证证据
+- 单元 **499/499**；live **246/246**；真实 GUI **109/109**（新增批量审批/周报存档/审计摘要 与 `/learning` 数据一致性断言）；吸顶 **2/2**；`eval-replay` **20/20**（新增 FI-19…FI-20）；数据根快照前后一致、零残留。
+
 ## [0.30.0] - 2026-11-15
 
 ### 新增 Added — 主动学习 I3：程序性知识（skill 载体）

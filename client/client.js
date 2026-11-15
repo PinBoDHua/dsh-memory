@@ -684,6 +684,21 @@ function duplicatePlanSummary(groups) {
   return { groups: list.length, mergeable: mergeable, reportOnly: reportOnly, wouldArchive: wouldArchive }
 }
 
+  /**
+ * 审计事件聚合计（纯函数，I4 面板学习分区用）：按类型计数、去掉未知形状事件。
+ * 只做确定性计数，不读取/渲染任何候选正文。
+ */
+function auditCounts(events) {
+  var list = Array.isArray(events) ? events : []
+  var counts = {}
+  for (var i = 0; i < list.length; i++) {
+    var type = list[i] && typeof list[i].type === 'string' ? list[i].type : 'unknown'
+    if (type === 'digest_emitted') continue
+    counts[type] = (counts[type] || 0) + 1
+  }
+  return Object.keys(counts).sort(function (a, b) { return counts[b] - counts[a] || a.localeCompare(b) }).map(function (type) { return { type: type, count: counts[type] } })
+}
+
   /** 真实写入条数（imported+updated）；被判重复/拒绝的条目不算「已写入」。 */
   function importWriteCount(totals) {
     var t = totals || {}
@@ -753,7 +768,7 @@ function duplicatePlanSummary(groups) {
     return (mb < 10 ? mb.toFixed(1) : Math.round(mb)) + ' MB'
   }
 
-  var helpers = { validateDraft: validateDraft, buildCreatePayload: buildCreatePayload, clampPageToTotal: clampPageToTotal, todayUtcIso: todayUtcIso, localDateStamp: localDateStamp, cwdCompareKey: cwdCompareKey, canonicalWorkspaceValue: canonicalWorkspaceValue, platformIsWindows: platformIsWindows, groupEntries: groupEntries, nextToken: nextToken, entriesParams: entriesParams, buildEntriesQuery: buildEntriesQuery, workspaceOptions: workspaceOptions, errorKeyFor: errorKeyFor, shouldQueueToast: shouldQueueToast, toastRemainingMs: toastRemainingMs, shouldResumeToast: shouldResumeToast, settingsSignature: settingsSignature, shouldAutoRefresh: shouldAutoRefresh, partitionSettled: partitionSettled, idSetOf: idSetOf, settleBulkDelete: settleBulkDelete, parseTags: parseTags, unwrapResult: unwrapResult, settingsStatusNext: settingsStatusNext, savedToastKey: savedToastKey, exportParams: exportParams, defaultViewSelection: defaultViewSelection, sectionCountsExact: sectionCountsExact, chunkEntries: chunkEntries, chunkEntriesPreservingLinks: chunkEntriesPreservingLinks, parseImportText: parseImportText, validateImportDoc: validateImportDoc, importSummary: importSummary, importWriteCount: importWriteCount, rebaseRejectedIndexes: rebaseRejectedIndexes, aggregateImportPlans: aggregateImportPlans, shouldFocusToastAction: shouldFocusToastAction, categoryChipCount: categoryChipCount, importRejectText: importRejectText, pageSlice: pageSlice, duplicatePlanSummary: duplicatePlanSummary, entryDetailRows: entryDetailRows, relativeTime: relativeTime, formatBytes: formatBytes, isExpired: isExpired, statusOf: statusOf, originOf: originOf, statusQueryFlags: statusQueryFlags }
+  var helpers = { validateDraft: validateDraft, buildCreatePayload: buildCreatePayload, clampPageToTotal: clampPageToTotal, todayUtcIso: todayUtcIso, localDateStamp: localDateStamp, cwdCompareKey: cwdCompareKey, canonicalWorkspaceValue: canonicalWorkspaceValue, platformIsWindows: platformIsWindows, groupEntries: groupEntries, nextToken: nextToken, entriesParams: entriesParams, buildEntriesQuery: buildEntriesQuery, workspaceOptions: workspaceOptions, errorKeyFor: errorKeyFor, shouldQueueToast: shouldQueueToast, toastRemainingMs: toastRemainingMs, shouldResumeToast: shouldResumeToast, settingsSignature: settingsSignature, shouldAutoRefresh: shouldAutoRefresh, partitionSettled: partitionSettled, idSetOf: idSetOf, settleBulkDelete: settleBulkDelete, parseTags: parseTags, unwrapResult: unwrapResult, settingsStatusNext: settingsStatusNext, savedToastKey: savedToastKey, exportParams: exportParams, defaultViewSelection: defaultViewSelection, sectionCountsExact: sectionCountsExact, chunkEntries: chunkEntries, chunkEntriesPreservingLinks: chunkEntriesPreservingLinks, parseImportText: parseImportText, validateImportDoc: validateImportDoc, importSummary: importSummary, importWriteCount: importWriteCount, rebaseRejectedIndexes: rebaseRejectedIndexes, aggregateImportPlans: aggregateImportPlans, shouldFocusToastAction: shouldFocusToastAction, categoryChipCount: categoryChipCount, importRejectText: importRejectText, pageSlice: pageSlice, duplicatePlanSummary: duplicatePlanSummary, auditCounts: auditCounts, entryDetailRows: entryDetailRows, relativeTime: relativeTime, formatBytes: formatBytes, isExpired: isExpired, statusOf: statusOf, originOf: originOf, statusQueryFlags: statusQueryFlags }
 
   // ===== node 测试导出（CJS） =====
   if (typeof module !== 'undefined' && module.exports) {
@@ -993,6 +1008,22 @@ function newImportRunId() {
     learningSkillApprovedMsg: '技能已批准并进入索引：{name}',
     learningSkillRejectedMsg: '已拒绝技能候选：{name}',
     learningSkillRolledBackMsg: '已回滚技能：{name}',
+    learningBatchHint: '共 {n} 条待确认候选',
+    learningApproveAll: '全部批准',
+    learningRejectAll: '全部拒绝',
+    learningBatchApproved: '已批量批准 {n} 条（失败 {m} 条）',
+    learningBatchRejected: '已批量拒绝 {n} 条（失败 {m} 条）',
+    learningDigestBadge: '周报',
+    learningAuditTitle: '最近审计',
+    auditAutoSaved: '自动写入',
+    auditPendingCreated: '新候选',
+    auditPendingApproved: '批准',
+    auditPendingRejected: '拒绝',
+    auditDuplicatesMerged: '合并重复',
+    auditArchived: '归档',
+    auditRestored: '恢复',
+    auditSkill: '技能',
+    auditDigest: '周报生成',
     duplicates: '合并重复',
     duplicatesTitle: '合并重复记忆',
     duplicatesHint: '仅合并「同作用域 + 规范化正文 + 关键元数据完全一致」的精确重复：保留最早一条，其余归档（可恢复）并写审计。相似/冲突或元数据不同只报告，不自动合并。',
@@ -1274,6 +1305,22 @@ function newImportRunId() {
     learningSkillApprovedMsg: 'Skill approved and indexed: {name}',
     learningSkillRejectedMsg: 'Skill candidate rejected: {name}',
     learningSkillRolledBackMsg: 'Skill rolled back: {name}',
+    learningBatchHint: '{n} candidates pending',
+    learningApproveAll: 'Approve all',
+    learningRejectAll: 'Reject all',
+    learningBatchApproved: 'Approved {n} candidates ({m} failed)',
+    learningBatchRejected: 'Rejected {n} candidates ({m} failed)',
+    learningDigestBadge: 'Digest',
+    learningAuditTitle: 'Recent audit',
+    auditAutoSaved: 'auto-saved',
+    auditPendingCreated: 'new candidates',
+    auditPendingApproved: 'approved',
+    auditPendingRejected: 'rejected',
+    auditDuplicatesMerged: 'duplicates merged',
+    auditArchived: 'archived',
+    auditRestored: 'restored',
+    auditSkill: 'skill',
+    auditDigest: 'digest emitted',
     duplicates: 'Duplicates',
     duplicatesTitle: 'Merge duplicate memories',
     duplicatesHint: 'Only exact duplicates with identical scope, normalized content and key metadata are merged: the earliest entry is kept, the rest are archived (reversible) with an audit record. Similar/conflicting or metadata-different entries are reported only.',
@@ -1944,6 +1991,9 @@ function newImportRunId() {
           learning: function (workspace) { return request(API_BASE + '/learning' + (workspace ? '?workspace=' + encodeURIComponent(workspace) : '')) },
           approveLearning: function (input) { return post(API_BASE + '/learning/approve', input).then(unwrapResult) },
           rejectLearning: function (input) { return post(API_BASE + '/learning/reject', input).then(unwrapResult) },
+          approveLearningMany: function (input) { return post(API_BASE + '/learning/approve-many', input).then(unwrapResult) },
+          rejectLearningMany: function (input) { return post(API_BASE + '/learning/reject-many', input).then(unwrapResult) },
+          digest: function () { return request(API_BASE + '/digest') },
           export: function (params) { return request(API_BASE + '/export' + buildEntriesQuery(params || {}), { timeoutMs: EXPORT_TIMEOUT_MS }) },
           settings: function () { return request(API_BASE + '/settings') },
           saveSettings: function (input) { return post(API_BASE + '/settings', input).then(unwrapResult) },
@@ -3642,6 +3692,31 @@ function newImportRunId() {
             return loadLearning()
           }).catch(writeFailure).then(function () { setBusy(false) })
         }
+        // v0.31.0：批量审批（逐项结算，失败数如实展示）。
+        function approveAllPending() {
+          if (busy) return
+          var pendingIds = (Array.isArray(learning && learning.pending) ? learning.pending : []).map(function (item) { return item.id })
+          if (pendingIds.length === 0) return
+          setBusy(true)
+          api.approveLearningMany({ pendingIds: pendingIds }).then(function (payload) {
+            var result = (payload && payload.result) || {}
+            bumpDataVersion()
+            showToast('ok', t('learningBatchApproved').replace('{n}', String((result.approved || []).length)).replace('{m}', String((result.failed || []).length)))
+            return loadLearning()
+          }).catch(writeFailure).then(function () { setBusy(false) })
+        }
+        function rejectAllPending() {
+          if (busy) return
+          var pendingIds = (Array.isArray(learning && learning.pending) ? learning.pending : []).map(function (item) { return item.id })
+          if (pendingIds.length === 0) return
+          setBusy(true)
+          api.rejectLearningMany({ pendingIds: pendingIds }).then(function (payload) {
+            var result = (payload && payload.result) || {}
+            bumpDataVersion()
+            showToast('ok', t('learningBatchRejected').replace('{n}', String((result.rejected || []).length)).replace('{m}', String((result.failed || []).length)))
+            return loadLearning()
+          }).catch(writeFailure).then(function () { setBusy(false) })
+        }
 
         function writeFailure(err) {
           if (err.status === 403) {
@@ -4079,8 +4154,19 @@ function newImportRunId() {
           var data = learning || {}
           var pending = Array.isArray(data.pending) ? data.pending : []
           var recent = Array.isArray(data.recentAuto) ? data.recentAuto : []
-          if (pending.length === 0 && recent.length === 0) return null
+          var pendingSkillsEarly = Array.isArray(data.pendingSkills) ? data.pendingSkills : []
+          var approvedSkillsEarly = Array.isArray(data.approvedSkills) ? data.approvedSkills : []
+          var digestsEarly = Array.isArray(data.digests) ? data.digests : []
+          if (pending.length === 0 && recent.length === 0 && pendingSkillsEarly.length === 0 && approvedSkillsEarly.length === 0 && digestsEarly.length === 0) return null
           var rows = []
+          // v0.31.0：批量审批（仅记忆候选；逐条仍在下方，可单独处理）。
+          if (pending.length > 1) {
+            rows.push(h('div', { key: 'batch-pending', className: 'dm_learn_row', 'data-testid': 'dm-learning-batch' },
+              h('div', { className: 'dm_learn_main' }, h('span', { className: 'dm_learn_text' }, t('learningBatchHint').replace('{n}', String(pending.length)))),
+              h('div', { className: 'dm_learn_actions' },
+                h('button', { className: 'dm_btn dm_btn_mini dm_btn_primary', disabled: busy, onClick: approveAllPending }, t('learningApproveAll')),
+                h('button', { className: 'dm_btn dm_btn_mini', disabled: busy, onClick: rejectAllPending }, t('learningRejectAll')))))
+          }
           pending.slice(0, 5).forEach(function (item) {
             rows.push(h('div', { key: 'pending-' + item.id, className: 'dm_learn_row', 'data-testid': 'dm-learning-pending' },
               h('div', { className: 'dm_learn_main' },
@@ -4124,6 +4210,31 @@ function newImportRunId() {
                   ? h('button', { className: 'dm_btn dm_btn_mini', disabled: busy, onClick: function () { rollbackSkillItem(skill) } }, t('learningSkillRollback'))
                   : null)))
           })
+          var digests = Array.isArray(data.digests) ? data.digests : []
+          if (digests.length > 0) {
+            var latestDigest = digests[digests.length - 1]
+            rows.push(h('div', { key: 'digest', className: 'dm_learn_row', 'data-testid': 'dm-learning-digest' },
+              h('div', { className: 'dm_learn_main' },
+                h('span', { className: 'dm_learn_badge' }, t('learningDigestBadge')),
+                h('span', { className: 'dm_learn_text', title: String(latestDigest.text || '') }, String(latestDigest.text || '')))))
+          }
+          var auditRows = auditCounts(Array.isArray(data.audit) ? data.audit : [])
+          if (auditRows.length > 0) {
+            var auditLabels = {
+              auto_saved: t('auditAutoSaved'), pending_created: t('auditPendingCreated'), pending_approved: t('auditPendingApproved'),
+              pending_rejected: t('auditPendingRejected'), pending_approved_batch: t('auditPendingApproved'), pending_rejected_batch: t('auditPendingRejected'),
+              duplicates_merged: t('auditDuplicatesMerged'), entries_archived: t('auditArchived'), entries_restored: t('auditRestored'),
+              skill_pending: t('auditSkill'), skill_approved: t('auditSkill'), skill_rejected: t('auditSkill'),
+              skill_revised: t('auditSkill'), skill_rolled_back: t('auditSkill'), skill_created: t('auditSkill'),
+              skill_archived: t('auditSkill'), skill_restored: t('auditSkill'), skill_candidate_created: t('auditSkill'),
+              digest_emitted: t('auditDigest'),
+            }
+            var auditText = auditRows.slice(0, 8).map(function (row) { return (auditLabels[row.type] || row.type) + ' ' + row.count }).join(' · ')
+            rows.push(h('div', { key: 'audit', className: 'dm_learn_row', 'data-testid': 'dm-learning-audit' },
+              h('div', { className: 'dm_learn_main' },
+                h('span', { className: 'dm_learn_badge' }, t('learningAuditTitle')),
+                h('span', { className: 'dm_learn_text' }, auditText))))
+          }
           return h('section', { className: 'dm_group dm_learn', 'data-testid': 'dm-learning' },
             h('div', { className: 'dm_section_title' }, h(Icon, { name: 'zap', size: 13 }), t('learningTitle'),
               pending.length > 0 ? h('span', { className: 'dm_section_n' }, t('learningPendingCount').replace('{n}', String(pending.length))) : null),

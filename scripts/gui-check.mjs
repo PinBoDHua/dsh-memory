@@ -510,6 +510,20 @@ async function main() {
     await sleep(400)
     check('合并重复弹窗 Esc 关闭（不残留遮罩）', await evaluate(`document.querySelector('.dm_dialog') === null`))
 
+    // v0.31.0（I4）：批量审批 / 审计摘要 / 周报存档与真实数据一致（有数据必渲染、无数据不渲染空壳）。
+    const learningDocI4 = await apiJson('/learning')
+    const digestDocI4 = await apiJson('/digest')
+    const i4Ui = await evaluate(`(() => ({
+      batch: document.querySelector('[data-testid="dm-learning-batch"]') !== null,
+      digest: document.querySelector('[data-testid="dm-learning-digest"]') !== null,
+      audit: document.querySelector('[data-testid="dm-learning-audit"]') !== null,
+    }))()`)
+    const expectBatch = Number(learningDocI4?.pendingCount || 0) > 1
+    const expectDigest = (digestDocI4?.archive || []).length > 0
+    const expectAudit = (learningDocI4?.audit || []).filter((e) => e && e.type && e.type !== 'digest_emitted').length > 0
+    check('批量审批/周报存档/审计摘要 与 /learning 数据一致', i4Ui.batch === expectBatch && i4Ui.digest === expectDigest && i4Ui.audit === expectAudit,
+      JSON.stringify({ ui: i4Ui, expectBatch, expectDigest, expectAudit, pending: learningDocI4?.pendingCount, archive: (digestDocI4?.archive || []).length }))
+
     // 0.25.0 去 AI 化：主容器不得再有径向氛围光/渐变背景，主按钮与卡片不得用渐变/重投影。
     const visualState = await evaluate(`(() => {
       const cs = (sel) => { const el = document.querySelector(sel); return el ? getComputedStyle(el) : null }

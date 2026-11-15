@@ -8,7 +8,21 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import helpers from '../client/client.js'
 
-const { validateDraft, buildCreatePayload, clampPageToTotal, todayUtcIso, localDateStamp, cwdCompareKey, canonicalWorkspaceValue, groupEntries, nextToken, entriesParams, buildEntriesQuery, workspaceOptions, errorKeyFor, shouldQueueToast, partitionSettled, parseTags, unwrapResult, settingsStatusNext, savedToastKey, exportParams, defaultViewSelection, sectionCountsExact, chunkEntries, chunkEntriesPreservingLinks, aggregateImportPlans, shouldFocusToastAction, categoryChipCount, importRejectText, importWriteCount, rebaseRejectedIndexes, parseImportText, validateImportDoc, importSummary, pageSlice, duplicatePlanSummary, entryDetailRows, relativeTime, formatBytes, isExpired, statusOf, originOf, statusQueryFlags, settleBulkDelete, idSetOf, toastRemainingMs, shouldResumeToast, settingsSignature, shouldAutoRefresh } = helpers
+const { validateDraft, buildCreatePayload, clampPageToTotal, todayUtcIso, localDateStamp, cwdCompareKey, canonicalWorkspaceValue, groupEntries, nextToken, entriesParams, buildEntriesQuery, workspaceOptions, errorKeyFor, shouldQueueToast, partitionSettled, parseTags, unwrapResult, settingsStatusNext, savedToastKey, exportParams, defaultViewSelection, sectionCountsExact, chunkEntries, chunkEntriesPreservingLinks, aggregateImportPlans, shouldFocusToastAction, categoryChipCount, importRejectText, importWriteCount, rebaseRejectedIndexes, parseImportText, validateImportDoc, importSummary, pageSlice, duplicatePlanSummary, auditCounts, entryDetailRows, relativeTime, formatBytes, isExpired, statusOf, originOf, statusQueryFlags, settleBulkDelete, idSetOf, toastRemainingMs, shouldResumeToast, settingsSignature, shouldAutoRefresh } = helpers
+
+test('auditCounts aggregates audit event types deterministically without content', () => {
+  const events = [
+    { type: 'auto_saved' }, { type: 'auto_saved' }, { type: 'pending_created' },
+    { type: 'digest_emitted' }, { type: 'entries_archived' }, { bad: true }, { type: 'auto_saved' },
+  ]
+  assert.deepEqual(auditCounts(events), [
+    { type: 'auto_saved', count: 3 },
+    { type: 'entries_archived', count: 1 },
+    { type: 'pending_created', count: 1 },
+    { type: 'unknown', count: 1 },
+  ])
+  assert.deepEqual(auditCounts(null), [])
+})
 
 test('duplicatePlanSummary counts mergeable/report-only groups and archive targets', () => {
   const groups = [

@@ -549,6 +549,53 @@ scenario('FI-18', 'skill 修订与回滚：版本可追溯、回滚后索引与�
   ok(audit.includes('skill_revised') && audit.includes('skill_rolled_back'), 'revision and rollback are audited')
 })
 
+// ---------- FI-19 疑似冲突提醒 ----------
+scenario('FI-19', '疑似冲突：只进 pending、保留双方来源、提醒只报数量且仅变化时出现', ({ root }) => {
+  const svc = createMemoryService({ root })
+  const original = store.saveEntry(root, { content: '构建工具统一使用 pnpm，不要用 npm', category: 'preference', scope: 'global', origin: 'manual' }).entry
+  const signal = detect('s19', [A('用 npm 安装'), U('不对，构建工具统一使用 pnpm 不要用 npm')], [{ id: original.id, content: original.content }])[0]
+  assert.equal(signal.type, 'correction')
+  const result = svc.save({
+    content: '构建工具统一使用 pnpm 不要用 npm',
+    category: 'preference',
+    scope: 'global',
+    origin: 'auto',
+    learning: { sessionId: 's19', signalId: signal.id, detectedSignals: [signal] },
+  })
+  assert.equal(result.status, 'pending', 'conflict candidate goes to pending')
+  ok(result.conflictWith.includes(original.id), 'pending records the conflicting entry ids')
+  const before = store.findEntry(root, original.id, undefined)
+  assert.equal(before.content, '构建工具统一使用 pnpm，不要用 npm', 'old entry untouched')
+  assert.equal(before.superseded_by, undefined, 'never auto-supersedes')
+  const notice = svc.pendingNotice({ sessionId: 's19' })
+  ok(notice && /1 条待确认/.test(notice.text) && !notice.text.includes('pnpm'), 'notice carries counts only, no candidate text')
+  assert.equal(svc.pendingNotice({ sessionId: 's19' }), null, 'same count does not repeat')
+  const pending = learning.listPending({ root })[0]
+  ok(Array.isArray(pending.conflictWith) && pending.conflictWith.includes(original.id), 'pending item keeps source pointers')
+})
+
+// ---------- FI-20 确定性周报 ----------
+scenario('FI-20', '确定性周报：每周首次会话一次、无事件不注入、只含计数、可关、存档', ({ root }) => {
+  const svc = createMemoryService({ root })
+  const realNow = Date.now()
+  assert.equal(svc.maybeWeeklyDigest({ now: realNow }), null, 'empty audit -> no injection')
+  const signal = detect('s20', [A('x'), U('不对，应该用 pnpm')])[0]
+  svc.save({ content: '周报统计用偏好', category: 'preference', scope: 'global', origin: 'auto', learning: { sessionId: 's20', signalId: signal.id, detectedSignals: [signal] } })
+  const digest = svc.maybeWeeklyDigest({ now: realNow })
+  ok(digest && digest.record && /周报/.test(digest.text), 'digest generated after events exist')
+  ok(/自动写入 1/.test(digest.text), digest.text)
+  ok(!digest.text.includes('周报统计用偏好'), 'digest contains counts only, no entry content')
+  assert.equal(svc.maybeWeeklyDigest({ now: realNow }), null, 'at most once per week (cursor)')
+  const view = svc.digestView()
+  ok(view.archive.length >= 1 && view.archive.every((item) => typeof item.text === 'string'), 'digest archive stored for the panel')
+  const signal2 = detect('s20b', [A('x'), U('不对，应该用 yarn')])[0]
+  svc.save({ content: '跨周统计用偏好', category: 'preference', scope: 'global', origin: 'auto', learning: { sessionId: 's20b', signalId: signal2.id, detectedSignals: [signal2] } })
+  const next = svc.maybeWeeklyDigest({ now: realNow + 8 * 86400000 })
+  ok(next && next.record.weekKey !== digest.record.weekKey, 'next week emits once more')
+  svc.updateSettings({ digest: { enabled: false } })
+  assert.equal(svc.maybeWeeklyDigest({ now: realNow + 16 * 86400000 }), null, 'digest respects the settings switch')
+})
+
 // ---------- 汇总 ----------
 const failed = results.filter((record) => !record.ok)
 if (JSON_OUT) {

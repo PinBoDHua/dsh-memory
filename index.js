@@ -618,11 +618,26 @@ export function apply(ctx, rawConfig) {
       if (!sid) return ''
       const recall = service.recallConfig()
       if (!recall.autoExtractHint) return ''
+      const parts = []
       const messages = signalMessagesOf(session)
-      if (messages.length === 0) return ''
-      const signals = detectSignals({ sessionId: sid, messages, memories: memoriesOf(cwdOf(session)) })
-      if (signals.length === 0) return ''
-      return service.learningReminder({ sessionId: sid, signals, limit: recall.autoLearn.maxWritesPerSession })
+      if (messages.length > 0) {
+        const signals = detectSignals({ sessionId: sid, messages, memories: memoriesOf(cwdOf(session)) })
+        if (signals.length > 0) {
+          const text = service.learningReminder({ sessionId: sid, signals, limit: recall.autoLearn.maxWritesPerSession })
+          if (text) parts.push(text)
+        }
+      }
+      // I4：待确认候选提醒只在「数量变化」时出现（只含数量，不含候选正文）。
+      try {
+        const pending = service.pendingNotice({ sessionId: sid })
+        if (pending?.text) parts.push(pending.text)
+      } catch { /* best-effort */ }
+      // I4：确定性周报——每个本地周首次装配最多一次，无审计事件不注入。
+      try {
+        const digest = service.maybeWeeklyDigest()
+        if (digest?.text) parts.push(digest.text)
+      } catch { /* best-effort */ }
+      return parts.join('\n')
     } catch {
       return ''
     }
