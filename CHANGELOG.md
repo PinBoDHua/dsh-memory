@@ -3,6 +3,17 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.27.1] - 2026-11-15
+
+### 修复 Fixed — 工具栏/行内操作可读性（用户反馈：图标不能靠猜）
+- **刷新按钮加可见文字**：工具栏刷新按钮由纯图标改为「刷新 / Refresh」文字（`aria-label` 仍为完整「刷新列表」，可见文字是其子串，符合 label-in-name）；不再需要猜回旋箭头含义。
+- **视图密度控件加文字**：`视图` 标签 + `舒适 / 紧凑` 两个文字按钮（保留 `aria-pressed` 与 title），替代此前的纯图标分段控件。
+- **行内操作加可见文字**：记忆行的钉选/归档/编辑/删除由纯图标改为「图标＋文字」（紧凑视图仍保持图标以维持单行密度，`aria-label` 保证可访问名称）；工具栏导出/导入/查重改为纯文字按钮，工具栏在 1264px 宽度保持单行。
+- **回归守护**：GUI 新增「工具栏操作带可见文字标签」断言；live 新增 bundle 文字标签标记断言；紧凑视图行高与密度断言继续通过。
+
+### 验证证据
+- 单元 **418/418**；live **204/204**；真实 GUI **102/102**；吸顶回归 **2/2**；数据根快照前后一致、零残留。
+
 ## [0.27.0] - 2026-11-15
 
 ### 新增 Added — 列表密度切换（舒适 / 紧凑）

@@ -961,6 +961,8 @@ async function main() {
     ok('bundle 含 0.24.16 原子导入错误文案', code.includes('errIo') && code.includes('errBusy'))
     ok('bundle 含 0.24.15 大备份导入', code.includes('IMPORT_MAX_BYTES') && code.includes('IMPORT_TIMEOUT_MS'))
     ok('bundle 含 0.24.14 刷新解耦', code.includes('defaultViewSelection') && code.includes('refreshRecall'))
+    // 0.27.x：工具栏操作与视图密度均带可见文字标签（用户反馈：图标按钮不许靠猜）。
+    ok('bundle 含 0.27.1 工具栏文字标签', code.includes('viewLabel') && code.includes("refresh: '刷新'") && code.includes('dm_viewtoggle_label'))
     ok('bundle 含 0.24.12 可访问性与导入', code.includes('parseImportText') && code.includes('closeToast') && code.includes('onCategoryKey'))
     ok('bundle 含 0.24.11 面板正确性', code.includes('savedToastKey') && code.includes('exportParams') && code.includes('filterByTag') && code.includes('emptyScopeTitle'))
     ok('bundle 含 0.24.10 设置状态机', code.includes('settingsStatusNext') && code.includes('dm_linkbtn'))

@@ -473,6 +473,21 @@ async function main() {
     check('主按钮为纯色（无渐变）', String(visualState.ctaImage) === 'none', String(visualState.ctaImage))
     check('吸顶工具栏非毛玻璃', !/blur/.test(String(visualState.toolbarBlur)), String(visualState.toolbarBlur))
 
+    // 0.27.1（用户反馈）：工具栏图标按钮必须带可见文字（刷新/视图/舒适/紧凑），不能只靠图标猜含义。
+    const toolbarLabels = await evaluate(`(() => {
+      const refresh = [...document.querySelectorAll('.dm_toolbtn')].find((b) => /刷新|Refresh/.test((b.textContent || '').trim()))
+      const toggle = document.querySelector('.dm_viewtoggle')
+      return {
+        refreshText: refresh ? (refresh.textContent || '').trim() : null,
+        refreshAria: refresh ? (refresh.getAttribute('aria-label') || '') : null,
+        viewText: toggle ? (toggle.innerText || '').replace(/\\s+/g, ' ') : null,
+      }
+    })()`)
+    check('工具栏操作带可见文字标签（刷新/视图/舒适/紧凑）',
+      /刷新|Refresh/.test(String(toolbarLabels.refreshText)) && /刷新列表|Refresh list/.test(String(toolbarLabels.refreshAria)) &&
+      /视图|View/.test(String(toolbarLabels.viewText)) && /舒适/.test(String(toolbarLabels.viewText)) && /紧凑/.test(String(toolbarLabels.viewText)),
+      JSON.stringify(toolbarLabels))
+
     // 记录真实数据根与 token（设置/备份快照恢复用）。
     const statusDoc = await apiJson('/status')
     ROOT = statusDoc?.root ?? ''
