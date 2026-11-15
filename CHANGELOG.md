@@ -3,6 +3,28 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.28.0] - 2026-11-15
+
+### 新增 Added — 主动学习 I1：信号驱动写入闭环（设计稿 `docs/learning-design.md`）
+- **学习信号层（`lib/signals.js`）**：从会话可见消息检测**直接用户**信号（显式记忆指令 / 直接纠正 / 工具失败后的纠正 / 新环境事实 / 重复交代），纯规则、零 LLM、零后台任务；只输出 sha256 派生的 signal id 与类型，不夹带消息正文。
+- **R0–R3 风险分级**：机密 / 短期任务 / 内嵌指令 / 敏感推断 → 拒绝（R3，候选正文不落条目、pending、审计、state）；程序性知识 / 宽泛约束 / 来源不符 / 弱信号 / 疑似新旧冲突 → 待确认（R2，批准前不注入）；显式低风险 → 直接生效（R1）。直接用户纠正写成的 preference 自动带 `constraint` 保留标记（注入优先级仅次于 pinned、免软衰减）。
+- **工具边界闸门**：`memory_save` 的自动/模型手写保存必须携带本会话有效且未消费的 `signal_id`（`no-signal` / `signal-consumed`）；每会话自动候选默认上限 5（`autoLearn.maxWritesPerSession` 0–5，活跃＋pending 共享，`autolimit`）；`origin=manual` 必须绑定用户显式「记住」信号；信号驱动写入不接受 pinned/expires/supersedes。
+- **v3 学习存储（`learning/`）**：`pending.json`（R2 候选、风险原因/来源/状态）、`audit.jsonl`（只追加、不含候选正文）、`state.json`（会话额度、信号提醒/消费状态，TTL 惰性回收）；v2→v3 迁移先强制备份、只加目录/元数据、**零改写存量条目**。
+- **自省提醒**：修复 `recallConfig()` 未暴露 `autoExtractHint` 导致的死链（旧自动提取提示恒不触发）；系统提示装配时**仅在检测到新信号**时注入一行 reminder（只含类型与 signal_id，不含正文），同一信号只提醒一次。
+- **面板「学习」分区**：待确认候选批准/拒绝、最近自动写入（归档＝可逆撤销）、审计尾部；新增只读/写入端点 `/plugins/dsh-memory/learning`、`/learning/approve`、`/learning/reject`（回环 + token，错误码 400/404/409/429）。
+- **评测基建**：新增 `scripts/eval-replay.mjs`（FI-1…FI-10 隔离数据根确定性回放，10/10）与 `tests/{signals,learning,learning-service,learning-routes}.test.mjs`；`data-snapshot` 纳入 `learning/`（pending/audit 计入、state 为 operational 排除）。
+- **设置**：新增 `autoLearn.maxWritesPerSession`（默认 5）、`conflictAlert`、`digest.enabled`/`digest.weekday`；注入预算默认 6000 → **8000**（已有用户覆盖值保持不变）。
+
+### 变更 Changed
+- 归档/钉选属 operational 状态：纯 `archived`/`pinned` 更新不再刷新 `updated`，撤销自动写入 → 恢复后条目文件**逐字节相同**（FI-9）。
+- 归档/导出 payload 附加 `learning` 状态（导入端仍只恢复 entries，不恢复 pending；已在 DETAIL/限制中标注）。
+- 召回注入顺序扩展为 pinned → 非钉选 constraint → 分类优先级 → 衰减 → 更新时间 → id 稳定排序；被注入的 constraint 条目在行内标记 `constraint`。
+- 客户端「学习」分区首载失败会退避重试（至多 3 次），避免面板打开早于回环路由就绪时分区永久缺席（用户反馈「看不到学习」的直接排查项）；gui-check 新增 2 条学习分区断言（可见性随 `/learning` 数据 + 归档撤销按钮），GUI 总数 102 → 104。
+
+### 验证证据
+- 单元 **470/470**（新增 52：signals 18 / learning 16 / learning-service 12 / learning-routes 6；另修 settings、tool-output、preview、service、routes、store、v2、access-ledger、hardening 等既有断言）；live **216/216**（新增学习分区端点/状态/额度/错误码断言）；真实 GUI **104/104**（新增学习分区可见性与归档按钮断言）；吸顶回归 **2/2**（改为按工具栏静止位置派生滚动距离，断言 gap≤1px 不变）；`eval-replay` **10/10**；数据根快照前后一致、零残留。
+- 迁移：真实数据根 v2→v3 首次加载前自动备份（`backups/dsh-memory-2026-11-15T13-16-08-923Z.json`）、`learning/` 创建、条目零改写（status `migrationPending=false`）；在用户当前 GUI（127.0.0.1:62438）实机复验学习分区可见（截图 `C:\Temp\dsh-memory-gui-check.png`）。
+
 ## [0.27.1] - 2026-11-15
 
 ### 修复 Fixed — 工具栏/行内操作可读性（用户反馈：图标不能靠猜）

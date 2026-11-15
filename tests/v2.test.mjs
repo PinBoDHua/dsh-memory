@@ -152,7 +152,7 @@ test('CJK bigram fuzzy matching improves recall beyond exact substring', () => {
 
 // ---------- store：迁移与命中簿记 ----------
 
-test('migrateSchema bumps v1 meta to v2 without rewriting entry files (idempotent)', () => {
+test('migrateSchema bumps legacy meta to v3 without rewriting entry files (idempotent)', () => {
   const root = tmpRoot()
   store.saveEntry(root, { content: '旧记忆', scope: 'global' })
   const id = store.listScope(root, 'global', undefined)[0].id
@@ -163,7 +163,7 @@ test('migrateSchema bumps v1 meta to v2 without rewriting entry files (idempoten
   meta.schemaVersion = 1
   fs.writeFileSync(metaFile, JSON.stringify(meta), 'utf8')
   assert.equal(store.migrateSchema(root), true)
-  assert.equal(store.readMeta(root).schemaVersion, 2)
+  assert.equal(store.readMeta(root).schemaVersion, 3)
   assert.equal(fs.readFileSync(file, 'utf8'), before, 'entry file untouched (lazy defaults)')
   assert.equal(store.migrateSchema(root), false)
 })
@@ -251,7 +251,7 @@ test('service migration forces a backup even when autoBackup is off, zero loss',
   meta.schemaVersion = 1
   fs.writeFileSync(metaFile, JSON.stringify(meta), 'utf8')
   const svc2 = createMemoryService({ root })
-  assert.equal(svc2.status().schemaVersion, 2)
+  assert.equal(svc2.status().schemaVersion, 3)
   assert.ok(fs.readdirSync(path.join(root, 'backups')).filter((n) => n.endsWith('.json')).length >= 1)
   assert.equal(svc2.list({ scope: 'global' })[0].content, '迁移前记忆')
 })

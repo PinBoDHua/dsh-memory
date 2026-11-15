@@ -118,6 +118,25 @@ test('writeOverlay merges and persists; resetOverlay removes the file', () => {
   assert.deepEqual(settings.readOverlay(root), {})
 })
 
+test('writeOverlay never materializes untouched nested defaults', () => {
+  const root = tmpRoot()
+  settings.writeOverlay(root, { pageSize: 20 })
+  const file = path.join(root, 'settings.json')
+  const raw = JSON.parse(fs.readFileSync(file, 'utf8'))
+  assert.ok(!('autoLearn' in raw), 'nested autoLearn defaults must not be written by an unrelated save')
+  assert.ok(!('digest' in raw), 'nested digest defaults must not be written by an unrelated save')
+  assert.equal(settings.effectiveSettings({}, root).autoLearn.maxWritesPerSession, 5, 'defaults still apply effectively')
+  // 显式写嵌套键只落该键，其它嵌套默认仍不物化。
+  settings.writeOverlay(root, { autoLearn: { maxWritesPerSession: 2 } })
+  const raw2 = JSON.parse(fs.readFileSync(file, 'utf8'))
+  assert.deepEqual(raw2.autoLearn, { maxWritesPerSession: 2 })
+  assert.ok(!('digest' in raw2))
+  assert.equal(settings.effectiveSettings({}, root).digest.enabled, true)
+  // 再次写普通键不丢失既有嵌套覆盖。
+  settings.writeOverlay(root, { autoInject: false })
+  assert.deepEqual(settings.readOverlay(root).autoLearn, { maxWritesPerSession: 2 })
+})
+
 test('concurrent process writes to different keys do not lose each other (overlay lock)', async () => {
   const root = tmpRoot()
   const fixture = fileURLToPath(new URL('./fixtures/settings-worker.mjs', import.meta.url))

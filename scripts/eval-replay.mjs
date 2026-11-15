@@ -1,0 +1,308 @@
+#!/usr/bin/env node
+/**
+ * dsh-memory v0.28.0 确定性评测回放（I1 机制门禁）。
+ *
+ * 覆盖 learning-design.md §5 的 FI-1…FI-10：用隔离数据根 + 纯函数/服务层回放，
+ * 断言「信号检测 → 工具边界闸门 → R1/R2/R3 分流 → 召回排序 → 撤销/恢复 → 迁移」。
+ * 不调用真实 LLM、不触碰真实数据根（每个场景独立 mkdtemp，结束即删）。
+ *
+ * 运行 Run: node scripts/eval-replay.mjs [--json] [--keep]
+ * 退出码：0 全绿 / 1 有失败。
+ */
+import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { buildSignalMessages } from '../index.js'
+import { createMemoryService } from '../lib/service.js'
+import { detectSignals } from '../lib/signals.js'
+import * as learning from '../lib/learning.js'
+import { selectInjection } from '../lib/render.js'
+import * as store from '../lib/store.js'
+
+const ARGS = new Set(process.argv.slice(2))
+const JSON_OUT = ARGS.has('--json')
+const KEEP = ARGS.has('--keep')
+
+const U = (text) => ({ role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text }] })
+const CTX = (text) => ({ role: 'user', source: { kind: 'runtime-context' }, content: [{ type: 'text', text }] })
+const A = (text) => ({ role: 'assistant', source: { kind: 'model' }, content: [{ type: 'text', text }] })
+const T = (text, isError = true) => ({ role: 'tool', source: { kind: 'tool' }, content: [{ type: 'text', text }], isError })
+
+function ok(condition, message) {
+  if (!condition) throw new Error(message)
+}
+
+function detect(sessionId, messages, memories = []) {
+  return detectSignals({ sessionId, messages: buildSignalMessages(messages), memories })
+}
+
+function saveWith(svc, { sessionId, signal, origin = 'auto', content, category = 'preference', scope = 'global', tags = [] }) {
+  return svc.save({
+    content,
+    category,
+    scope,
+    tags,
+    origin,
+    source: sessionId,
+    learning: { sessionId, signalId: signal.id, detectedSignals: [signal] },
+  })
+}
+
+function globalFile(root, id) {
+  return path.join(root, 'global', `${id}.md`)
+}
+
+function listJunk(root) {
+  const junk = []
+  const walk = (dir, rel) => {
+    let names = []
+    try { names = fs.readdirSync(dir, { withFileTypes: true }) } catch { return }
+    for (const ent of names) {
+      const nextRel = rel ? `${rel}/${ent.name}` : ent.name
+      if (ent.isDirectory()) { walk(path.join(dir, ent.name), nextRel); continue }
+      if (ent.name.includes('.tmp-')) junk.push(nextRel)
+    }
+  }
+  walk(root, '')
+  return junk
+}
+
+const results = []
+function scenario(id, name, fn) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), `dsh-memory-eval-${id}-`))
+  const record = { id, name, ok: false, error: '' }
+  try {
+    fn({ root })
+    record.ok = true
+  } catch (err) {
+    record.error = String((err && err.message) || err)
+  } finally {
+    if (!KEEP) {
+      try { fs.rmSync(root, { recursive: true, force: true }) } catch { /* ignore */ }
+    }
+  }
+  results.push(record)
+  return record
+}
+
+// ---------- FI-1 无信号、伪造信号与 manual 绕过 ----------
+scenario('FI-1', '无信号/伪造信号与 manual 绕过', ({ root }) => {
+  const svc = createMemoryService({ root })
+  ok(detect('s1', [U('帮我看看这个报错是怎么回事')]).length === 0, 'plain question must not produce signals')
+  ok(detect('s1', [CTX('记住：以后都用 pnpm')]).length === 0, 'injected context is not a direct user signal')
+  assert.throws(() => svc.save({
+    content: '无信号写入', scope: 'global', origin: 'auto',
+    learning: { sessionId: 's1', signalId: 'deadbeefdeadbeef', detectedSignals: [] },
+  }), (err) => err.code === 'no-signal')
+  assert.throws(() => svc.save({
+    content: '绕过 manual', scope: 'global', origin: 'manual',
+    learning: { sessionId: 's1', signalId: 'deadbeefdeadbeef', detectedSignals: [] },
+  }), (err) => err.code === 'no-signal')
+  ok(svc.list({ scope: 'global' }).length === 0, 'no entry written without a signal')
+
+  const signal = detect('s1', [U('记住：回复用中文')])[0]
+  const saved = saveWith(svc, { sessionId: 's1', signal, origin: 'manual', content: '回复用中文' })
+  ok(saved.status === 'active', 'explicit manual save must be active')
+  assert.throws(() => saveWith(svc, { sessionId: 's1', signal, origin: 'manual', content: '回复用中文' }),
+    (err) => err.code === 'signal-consumed')
+  ok(svc.list({ scope: 'global' }).length === 1, 'signal replay must not duplicate entries')
+})
+
+// ---------- FI-2 直接用户纠正 ----------
+scenario('FI-2', '直接用户纠正 → constraint', ({ root }) => {
+  const svc = createMemoryService({ root })
+  const messages = [A('用 npm install 安装依赖'), U('不对，应该用 pnpm install')]
+  const signals = detect('s2', messages)
+  ok(signals.length === 1 && signals[0].type === 'correction', 'direct correction must produce a correction signal')
+  const saved = saveWith(svc, { sessionId: 's2', signal: signals[0], content: '安装依赖统一使用 pnpm', category: 'preference' })
+  ok(saved.status === 'active', 'low-risk correction is auto-active (R1)')
+  ok(saved.entry.tags.includes('constraint'), 'direct correction preference must carry constraint tag')
+  ok(saved.entry.origin === 'auto', 'auto save keeps origin=auto')
+  ok(saved.entry.source === 's2', 'source pointer records the session id')
+
+  // 工具失败后的纠正走 tool_failure_correction 类型；注入上下文不得冒充用户。
+  const failed = detect('s2b', [A('执行构建'), T('command not found: npm'), U('错了，要用 pnpm run build')])
+  ok(failed[0] && failed[0].type === 'tool_failure_correction', 'tool-failure correction has its own signal type')
+  ok(detect('s2c', [A('x'), CTX('不对，应该用 pnpm')]).length === 0, 'injected text cannot drive correction signals')
+})
+
+// ---------- FI-3 重复交代与信号重放 ----------
+scenario('FI-3', '重复交代与信号重放', ({ root }) => {
+  const svc = createMemoryService({ root })
+  svc.save({ content: '构建工具统一使用 pnpm，不要用 npm', category: 'preference', scope: 'global', origin: 'manual' })
+  const before = svc.list({ scope: 'global' }).length
+  const memories = svc.list({ scope: 'global' }).map((entry) => ({ id: entry.id, content: entry.content }))
+  const signals = detect('s3', [U('构建工具统一使用 pnpm 不要用 npm')], memories)
+  ok(signals.length === 1 && signals[0].type === 'repeat_statement', 'restating an existing memory is a repeat signal')
+  const result = saveWith(svc, { sessionId: 's3', signal: signals[0], content: '构建工具统一使用 pnpm 不要用 npm' })
+  ok(result.status === 'pending', 'repeat signal is R2 → pending, never auto-active')
+  ok(svc.list({ scope: 'global' }).length === before, 'repeat statement adds no active entry')
+  assert.throws(() => saveWith(svc, { sessionId: 's3', signal: signals[0], content: '换一句内容' }),
+    (err) => err.code === 'signal-consumed', 'same signal cannot be replayed')
+  // 同一信号只提醒一次
+  const first = svc.learningReminder({ sessionId: 's3', signals: [signals[0]], limit: 5 })
+  ok(first === '', 'consumed signals are not reminded again')
+})
+
+// ---------- FI-4 写入上限 ----------
+scenario('FI-4', '会话写入上限（活跃＋pending 共享额度）', ({ root }) => {
+  const svc = createMemoryService({ root })
+  const contents = ['回复用中文', '提交信息用中文', '安装依赖用 pnpm', '日志级别设为 debug', '默认目录放在 D 盘']
+  for (let i = 1; i <= 5; i += 1) {
+    const signal = detect('s4', [A('上一步'), U(`不对，应该用 tool-${i}`)])[0]
+    const saved = saveWith(svc, { sessionId: 's4', signal, content: contents[i - 1], category: 'preference' })
+    ok(saved.status === 'active', `write ${i} should be active`)
+  }
+  const sixth = detect('s4', [A('上一步'), U('不对，应该用 tool-6')])[0]
+  assert.throws(() => saveWith(svc, { sessionId: 's4', signal: sixth, content: '偏好条目 6', category: 'preference' }),
+    (err) => err.code === 'autolimit')
+  ok(svc.list({ scope: 'global' }).length === 5, 'quota caps active auto entries at 5')
+  // 第 6/7 个候选正文不得出现在任何学习/条目文件里
+  const pendingText = fs.readFileSync(learning.learningPaths(root).pending, 'utf8')
+  ok(!pendingText.includes('偏好条目 6'), 'overflow candidate text must not be persisted')
+  ok(!pendingText.includes('偏好条目 7'), 'overflow candidate text must not be persisted')
+})
+
+// ---------- FI-5 重复偏好召回（第 2–5 次会话） ----------
+scenario('FI-5', '零重复：第 2–5 次会话仍注入同一偏好', ({ root }) => {
+  const svc = createMemoryService({ root })
+  const signal = detect('s5-1', [U('记住：回复用中文')])[0]
+  const saved = saveWith(svc, { sessionId: 's5-1', signal, origin: 'manual', content: '回复用中文', category: 'preference' })
+  for (let round = 2; round <= 5; round += 1) {
+    const { selected } = selectInjection(svc.list({ scope: 'global' }), { budgetChars: 8000 })
+    ok(selected.some((entry) => entry.id === saved.entry.id), `session ${round} must recall the preference`)
+  }
+})
+
+// ---------- FI-6 首次新会话召回 ----------
+scenario('FI-6', '默认生效：首次新会话装配即选中偏好', ({ root }) => {
+  const svc = createMemoryService({ root })
+  const signal = detect('s6', [U('记住：提交信息用中文')])[0]
+  const saved = saveWith(svc, { sessionId: 's6', signal, origin: 'manual', content: '提交信息用中文', category: 'preference' })
+  const { selected, omitted } = selectInjection(svc.list({ scope: 'global' }), { budgetChars: 8000 })
+  ok(omitted === 0, 'fixture must fit the budget')
+  ok(selected[0] && selected[0].id === saved.entry.id, 'fresh assembly prefers the preference entry')
+})
+
+// ---------- FI-7 纠错召回顺序 ----------
+scenario('FI-7', '召回顺序：pinned → constraint → 分类 → 衰减/更新时间/id', ({ root }) => {
+  const svc = createMemoryService({ root })
+  const iso = (daysAgo) => new Date(Date.now() - daysAgo * 86400000).toISOString()
+  const base = { category: 'preference', scope: 'global', tags: [], source: '', created: iso(9) }
+  store.writeEntry(root, { ...base, id: 'm-fact', category: 'fact', updated: iso(4), content: '普通事实' })
+  store.writeEntry(root, { ...base, id: 'm-dec', category: 'decision', updated: iso(0), content: '决策条目' })
+  store.writeEntry(root, { ...base, id: 'm-pref', updated: iso(1), content: '普通偏好' })
+  store.writeEntry(root, { ...base, id: 'm-con', tags: ['constraint'], updated: iso(2), content: '约束偏好' })
+  store.writeEntry(root, { ...base, id: 'm-pin', category: 'fact', pinned: true, updated: iso(3), content: '钉选事实' })
+  const order = selectInjection(svc.list({ scope: 'global' }), { budgetChars: 8000 }).selected.map((entry) => entry.id)
+  assert.deepEqual(order, ['m-pin', 'm-con', 'm-pref', 'm-dec', 'm-fact'], 'injection order must be deterministic')
+  const again = selectInjection(svc.list({ scope: 'global' }), { budgetChars: 8000 }).selected.map((entry) => entry.id)
+  assert.deepEqual(again, order, 'same input yields the same order')
+})
+
+// ---------- FI-8 风险分级 ----------
+scenario('FI-8', '风险分级：R2 只进 pending，R3 拒绝且不落正文', ({ root }) => {
+  const svc = createMemoryService({ root })
+  const explicit = detect('s8', [U('以后都用 pnpm')])[0]
+  const pending = saveWith(svc, { sessionId: 's8', signal: explicit, content: '以后都用 pnpm' })
+  ok(pending.status === 'pending', 'auto save bound to an explicit-memory signal is R2 (origin mismatch)')
+  ok(svc.list({ scope: 'global' }).length === 0, 'pending candidates are never active entries')
+  ok(svc.list({ scope: 'global' }).every((entry) => !entry.content.includes('以后都用 pnpm')), 'pending not injected')
+
+  const correction = detect('s8b', [A('x'), U('不对，应该用 pnpm')])[0]
+  assert.throws(() => saveWith(svc, { sessionId: 's8b', signal: correction, content: '用户有焦虑症', category: 'fact' }),
+    (err) => err.code === 'rejected-risk')
+  const secretSignal = detect('s8c', [A('x'), U('不对，应该用 pnpm')])[0]
+  assert.throws(() => saveWith(svc, { sessionId: 's8c', signal: secretSignal, content: 'api_key: abcd1234efgh' }),
+    (err) => err.code === 'secret')
+  const paths = learning.learningPaths(root)
+  for (const file of [paths.pending, paths.audit, paths.state, path.join(root, 'global')]) {
+    const stat = fs.existsSync(file) ? fs.statSync(file) : null
+    if (stat && stat.isDirectory()) continue
+    const text = stat ? fs.readFileSync(file, 'utf8') : ''
+    ok(!text.includes('焦虑') && !text.includes('abcd1234efgh'), `${path.basename(file)} must not contain refused candidate text`)
+  }
+})
+
+// ---------- FI-9 撤销、恢复与审计 ----------
+scenario('FI-9', '撤销自动写入：归档→恢复后逐字节相同，审计只追加', ({ root }) => {
+  const svc = createMemoryService({ root })
+  const signal = detect('s9', [A('x'), U('不对，应该用 pnpm')])[0]
+  const saved = saveWith(svc, { sessionId: 's9', signal, content: '安装依赖统一使用 pnpm' })
+  ok(saved.status === 'active', 'baseline auto save')
+  const file = globalFile(root, saved.entry.id)
+  const before = fs.readFileSync(file, 'utf8')
+  const auditBefore = learning.auditTail(root, 200).length
+  svc.update({ id: saved.entry.id, archived: true })
+  ok(!selectInjection(svc.list({ scope: 'global' }), { budgetChars: 8000 }).selected.some((entry) => entry.id === saved.entry.id), 'archived entry is not injected')
+  svc.update({ id: saved.entry.id, archived: false })
+  ok(fs.readFileSync(file, 'utf8') === before, 'archive→restore must reproduce a byte-identical entry file')
+  ok(learning.auditTail(root, 200).length >= auditBefore, 'audit is append-only')
+  ok(svc.learningView({}).recentAuto.some((entry) => entry.id === saved.entry.id), 'learning view lists the auto save')
+})
+
+// ---------- FI-10 迁移与回滚 ----------
+scenario('FI-10', 'v2→v3 迁移：先备份、条目零改写、失败可恢复', ({ root }) => {
+  const svc = createMemoryService({ root })
+  svc.save({ content: '迁移前记忆', scope: 'global', origin: 'manual' })
+  const id = svc.list({ scope: 'global' })[0].id
+  const file = globalFile(root, id)
+  const before = fs.readFileSync(file, 'utf8')
+  const metaFile = path.join(root, 'meta.json')
+  const meta = JSON.parse(fs.readFileSync(metaFile, 'utf8'))
+  fs.writeFileSync(metaFile, JSON.stringify({ ...meta, schemaVersion: 2 }), 'utf8')
+
+  const migrated = createMemoryService({ root })
+  ok(migrated.status().schemaVersion === 3, 'migration bumps schema to v3')
+  const backups = fs.readdirSync(path.join(root, 'backups')).filter((name) => name.endsWith('.json'))
+  ok(backups.length >= 1, 'migration forces a backup first')
+  for (const name of ['state.json', 'pending.json', 'audit.jsonl']) {
+    ok(fs.existsSync(path.join(root, 'learning', name)), `learning/${name} created by migration`)
+  }
+  ok(fs.readFileSync(file, 'utf8') === before, 'entry files are never rewritten by migration')
+  ok(migrated.list({ scope: 'global' })[0].content === '迁移前记忆', 'entries readable after migration')
+  ok(listJunk(root).length === 0, 'no temp files left behind')
+
+  // 失败注入：meta 写入失败时保持 pending 并在重试后恢复。
+  const root2 = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-memory-eval-FI-10b-'))
+  try {
+    const first = createMemoryService({ root: root2 })
+    first.save({ content: '失败注入条目', scope: 'global' })
+    const metaFile2 = path.join(root2, 'meta.json')
+    const meta2 = JSON.parse(fs.readFileSync(metaFile2, 'utf8'))
+    fs.writeFileSync(metaFile2, JSON.stringify({ ...meta2, schemaVersion: 2 }), 'utf8')
+    const originalRename = fs.renameSync
+    fs.renameSync = function (from, to, ...rest) {
+      if (String(to).endsWith('meta.json')) throw Object.assign(new Error('EPERM: injected'), { code: 'EPERM' })
+      return originalRename.call(this, from, to, ...rest)
+    }
+    let broken
+    try {
+      broken = createMemoryService({ root: root2 })
+    } finally {
+      fs.renameSync = originalRename
+    }
+    ok(broken.status().migrationPending === true, 'failed migration is observable')
+    ok(broken.status().schemaVersion === 2, 'schema stays at the old version after failure')
+    const recovered = createMemoryService({ root: root2 })
+    ok(recovered.status().schemaVersion === 3, 'retry completes the migration')
+    ok(recovered.status().migrationPending === false, 'retry clears the pending flag')
+    ok(listJunk(root2).length === 0, 'failed migration leaves no temp files')
+  } finally {
+    fs.rmSync(root2, { recursive: true, force: true })
+  }
+})
+
+// ---------- 汇总 ----------
+const failed = results.filter((record) => !record.ok)
+if (JSON_OUT) {
+  console.log(JSON.stringify({ ok: failed.length === 0, total: results.length, failed: failed.length, results }, null, 2))
+} else {
+  for (const record of results) {
+    if (record.ok) console.log(`✔ ${record.id} ${record.name}`)
+    else console.log(`✖ ${record.id} ${record.name}\n    ${record.error}`)
+  }
+  console.log(`\n${results.length - failed.length}/${results.length} deterministic replay scenarios passed`)
+}
+process.exitCode = failed.length === 0 ? 0 : 1

@@ -11,9 +11,10 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { apply, resolveSessionCwd } from '../index.js'
+import { apply, buildSignalMessages, resolveSessionCwd } from '../index.js'
 import { createMemoryService } from '../lib/service.js'
 import { createHandlers } from '../lib/routes.js'
+import { detectSignals } from '../lib/signals.js'
 import * as store from '../lib/store.js'
 
 function tmpService() {
@@ -114,13 +115,19 @@ test('apply re-reads workingDirectory each call (service ready after apply / aft
       logger: { warn() {} },
     }
     apply(ctx, {})
-    const session = { id: 'sess-late', header: { cwd: 'D:\\initial-cwd' } }
+    const messages = []
+    const session = { id: 'sess-late', header: { cwd: 'D:\\initial-cwd' }, deriveMessages: () => messages }
     const exec = { agent: { session } }
+    const saveWithSignal = (content) => {
+      messages.push({ role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: `记住：${content}` }] })
+      const signal = detectSignals({ sessionId: session.id, messages: buildSignalMessages(messages) })[0]
+      tools.memory_save.execute({ content, origin: 'manual', scope: 'workspace', signal_id: signal.id }, exec)
+    }
     // apply 时 workingDirectory 尚未就绪：回退 header。
-    tools.memory_save.execute({ content: '晚就绪前的记忆', origin: 'auto', scope: 'workspace' }, exec)
+    saveWithSignal('晚就绪前的记忆')
     // 服务晚就绪并 cd 到新目录：下一次调用应立即使用新目录（不依赖 apply 时快照）。
     workingDirectory = { get: (s) => (s === session ? 'D:\\late-cwd' : undefined) }
-    tools.memory_save.execute({ content: '晚就绪后的记忆', origin: 'auto', scope: 'workspace' }, exec)
+    saveWithSignal('晚就绪后的记忆')
     const root = path.join(home, '.dsh-memory')
     assert.ok(fs.existsSync(path.join(root, 'workspaces', store.workspaceKey('D:\\initial-cwd'))), 'entry written under header cwd')
     assert.ok(fs.existsSync(path.join(root, 'workspaces', store.workspaceKey('D:\\late-cwd'))), 'entry written under live cwd')

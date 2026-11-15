@@ -25,6 +25,7 @@ import { fileURLToPath } from 'node:url'
 import { GUIDANCE, renderSection, selectInjection } from './lib/render.js'
 import { attachRoutes } from './lib/routes.js'
 import { createMemoryService } from './lib/service.js'
+import { detectSignals } from './lib/signals.js'
 
 const pkg = JSON.parse(readFileSync(fileURLToPath(new URL('./package.json', import.meta.url)), 'utf8'))
 
@@ -36,7 +37,7 @@ export const inject = ['tools', 'systemPrompt']
 export const CONFIG_DEFAULTS = Object.freeze({
   enabled: true,
   autoInject: true,
-  injectionBudgetChars: 6000,
+  injectionBudgetChars: 8000,
 })
 
 function resolveConfig(raw) {
@@ -54,9 +55,39 @@ function dataRoot() {
   return path.join(home, '.dsh-memory')
 }
 
-/** 自动提取提示阈值：距上次记忆写入的装配评估次数（活动代理量）。 */
-const HINT_THRESHOLD = 3
-const HINT_TEXT = '本会话已有一段时间未写入记忆。若出现了值得长期保留的新稳定偏好/项目事实/决策（且非代码可推导、非短期任务指令），请用 memory_save 沉淀（origin 必填：主动沉淀=auto）；信息变化可用 supersedes 取代旧条目。若无则忽略此提示。'
+/**
+ * 消息正文提取（纯函数，可单测）：兼容字符串与 ContentBlock[]（只取文本块）。
+ * 工具结果/注入上下文的非文本块不参与信号检测。
+ */
+export function extractMessageText(message) {
+  const content = message?.content
+  if (typeof content === 'string') return content.trim()
+  if (!Array.isArray(content)) return ''
+  const parts = []
+  for (const block of content) {
+    if (typeof block === 'string') parts.push(block)
+    else if (block && typeof block.text === 'string') parts.push(block.text)
+  }
+  return parts.join('\n').trim()
+}
+
+/**
+ * 会话可见消息 → 信号检测输入（纯函数，可单测）。
+ * 只保留 user/assistant/tool 的角色与正文；`directUser` 依据 user/message 的
+ * `source.kind === 'user'` 判定——runtime-context / schedule / goal / skill 注入
+ * 都不算直接用户（核心不变量：记忆正文、召回内容与工具输出不得冒充用户授权）。
+ */
+export function buildSignalMessages(messages) {
+  const out = []
+  for (const message of Array.isArray(messages) ? messages : []) {
+    const role = message?.role
+    const text = extractMessageText(message)
+    if (role === 'user') out.push({ role, text, directUser: message?.source?.kind === 'user' })
+    else if (role === 'assistant') out.push({ role, text })
+    else if (role === 'tool') out.push({ role, text, isError: message?.isError === true })
+  }
+  return out
+}
 
 /** 检索输出条目：稀疏字段仅在存在时附加，避免 undefined 被 JSON.stringify 丢弃而破坏工具输出的 lossless JSON 校验。 */
 export function searchResultEntry(e) {
@@ -71,12 +102,25 @@ export function searchResultEntry(e) {
 
 /** memory_save 工具返回值（纯函数）：旧 v1/手写条目可能没有 origin，统一兜底
  * manual——否则 undefined 会成为自有属性，宿主 lossless JSON 校验会拒绝整个
- * 工具输出（写盘已生效却报失败）。 */
+ * 工具输出（写盘已生效却报失败）。v3 起附带 status=active（R1 生效）。 */
 export function saveResultValue(entry, deduplicated, similar, revived, applied) {
-  const value = { id: entry.id, scope: entry.scope, category: entry.category, origin: entry.origin ?? 'manual', deduplicated: Boolean(deduplicated), similar: similar ?? [] }
+  const value = { status: 'active', id: entry.id, scope: entry.scope, category: entry.category, origin: entry.origin ?? 'manual', deduplicated: Boolean(deduplicated), similar: similar ?? [] }
   if (revived) value.revived = true
   if (applied) value.applied = true
   return value
+}
+
+/** memory_save 待确认返回值（R2）：候选只进 pending，用户面板批准前不注入、不生效。 */
+export function savePendingResultValue(result) {
+  return {
+    status: 'pending',
+    pendingId: result.pendingId,
+    scope: result.scope ?? 'workspace',
+    category: result.category ?? 'fact',
+    origin: result.origin ?? 'auto',
+    risk: result.risk ?? 'R2',
+    reason: result.reason ?? '',
+  }
 }
 
 /** memory_update 工具返回值（纯函数）：origin 兜底同 save（lossless JSON）。 */
@@ -117,6 +161,10 @@ export function withSanitizedToolErrors(tool) {
 
 /** memory_save 输出渲染（纯函数，可单测）。 */
 export function renderSaveResult(value) {
+  if (value?.status === 'pending') {
+    const reason = value.reason ? `（原因：${value.reason}）` : ''
+    return [{ type: 'text', text: `已记录为待确认候选${reason}：${value.pendingId}。候选不会注入、也不生效，需用户在面板「学习」分区批准 (pending review; approved from the panel before it takes effect)` }]
+  }
   let base
   if (value.revived) base = `已有相同记忆，已从归档/过期状态恢复为活跃：${value.id} (duplicate; revived to active)`
   else if (value.deduplicated && value.applied) base = `已有相同记忆，已应用显式字段更新（不重复写入）：${value.id} (duplicate; explicit fields applied)`
@@ -197,19 +245,38 @@ export function apply(ctx, rawConfig) {
   }
   const sessionOf = (exec) => exec?.agent?.session
 
-  // 自动提取提示的每会话簿记：evals=装配评估累计，lastWriteEval=上次记忆写入时的 evals。
-  const hintState = new Map()
-  const noteWrite = (session) => {
+  // 学习信号：从会话可见消息实时派生（deriveMessages 是同步缓存投影；只有
+  // source.kind==='user' 算直接用户输入，runtime-context/定时提醒/技能内容都不算）。
+  // 检测本身是纯函数（lib/signals.js），装配期提醒与工具期闸门使用同一套判定。
+  const signalMessagesOf = (session) => {
+    try {
+      return buildSignalMessages(typeof session?.deriveMessages === 'function' ? session.deriveMessages() : [])
+    } catch {
+      return []
+    }
+  }
+  const memoriesOf = (cwd) => {
+    try {
+      return service.list({ scope: 'all', workspace: cwd }).map((entry) => ({ id: entry.id, content: entry.content }))
+    } catch {
+      return []
+    }
+  }
+  const detectedSignalsOf = (session) => {
     const sid = session?.id
-    if (!sid) return
-    const st = hintState.get(sid) ?? { evals: 0, lastWriteEval: 0 }
-    st.lastWriteEval = st.evals
-    hintState.set(sid, st)
+    if (!sid) return []
+    const messages = signalMessagesOf(session)
+    if (messages.length === 0) return []
+    try {
+      return detectSignals({ sessionId: sid, messages, memories: memoriesOf(cwdOf(session)) })
+    } catch {
+      return []
+    }
   }
 
   const saveTool = {
     name: 'memory_save',
-    description: '把一条值得长期记住的事实写入跨会话记忆（一事一条）。用户偏好→scope=global，项目事实/决策→scope=workspace。origin 必填：manual=用户显式要求，auto=你主动沉淀（便于用户审阅撤销）；信息变化可 supersedes=旧id 取代（保留历史；目标必须未被其他条目取代且不会形成取代环，否则拒绝）。写入时若检测到相似记忆会一并提示，便于取代/更新旧条目、避免并存矛盾。密码/密钥/token 会被拒绝。Save one durable fact to cross-session memory; origin is required (manual=user-requested, auto=agent-initiated); similar memories are reported on save (prefer supersede/update); supersede targets must not already have a successor or form a cycle.',
+    description: '把一条值得长期记住的事实写入跨会话记忆（一事一条）。用户偏好→scope=global，项目事实/决策→scope=workspace。origin 必填：manual=用户显式要求，auto=你主动沉淀（便于用户审阅撤销）。写入必须携带本会话提醒中给出的 signal_id：自动沉淀一律 origin=auto，用户显式「记住」用 origin=manual；没有 signal_id 或信号已消费会被工具拒绝。风险分级（R1 直接生效 / R2 进待确认 / R3 拒绝）与每会话额度由工具边界强制。写入时若检测到相似记忆会一并提示；密码/密钥/token 会被拒绝。Save one durable fact to cross-session memory; origin is required and a live session signal_id is mandatory; risk levels (auto / pending / refused) and per-session quota are enforced at the tool boundary.',
     parameters: {
       type: 'object',
       properties: {
@@ -217,10 +284,11 @@ export function apply(ctx, rawConfig) {
         category: { type: 'string', enum: ['preference', 'fact', 'decision'], description: '分类：preference=用户偏好 fact=事实 decision=决策（默认 fact）' },
         scope: { type: 'string', enum: ['global', 'workspace'], description: 'global=用户级，跨项目共享；workspace=仅当前工作区（默认 workspace）' },
         tags: { type: 'array', items: { type: 'string' }, description: '可选检索关键词 Optional search keywords' },
-        origin: { type: 'string', enum: ['manual', 'auto'], description: '来源（必填）：manual=用户显式要求；auto=你主动沉淀（便于用户审阅撤销）Origin (required): manual=user explicitly requested; auto=agent-initiated for review' },
-        supersedes: { type: 'string', description: '可选：要取代的旧记忆 id；旧记忆标记被取代、默认隐藏，历史保留 Optional id of the memory this supersedes' },
-        expires: { type: 'string', description: '可选过期日 YYYY-MM-DD（UTC、当日含；到期隐藏不删除、可恢复）Optional expiry date' },
-        pinned: { type: 'boolean', description: '可选：钉选常驻（预算内优先注入、免衰减）Optional pin for always-inject' },
+        origin: { type: 'string', enum: ['manual', 'auto'], description: '来源（必填）：manual=用户显式要求（须绑定用户显式「记住」信号）；auto=你主动沉淀（须绑定检测到的学习信号）Origin (required): manual=user explicitly asked; auto=agent-initiated from a detected learning signal' },
+        signal_id: { type: 'string', description: '必填：本会话学习提醒里给出的信号 id（形如 correction:abc123）。工具边界校验其有效性、未消费与额度 Signal id from the learning reminder; required and enforced' },
+        supersedes: { type: 'string', description: '可选：要取代的旧记忆 id（仅 memory_update 修正流支持；信号驱动写入不接受此字段）Optional supersede target' },
+        expires: { type: 'string', description: '可选过期日 YYYY-MM-DD（信号驱动写入不接受）Optional expiry date' },
+        pinned: { type: 'boolean', description: '可选：钉选常驻（信号驱动写入不接受）Optional pin for always-inject' },
       },
       required: ['content', 'origin'],
       additionalProperties: false,
@@ -229,10 +297,14 @@ export function apply(ctx, rawConfig) {
       schema: {
         type: 'object',
         properties: {
+          status: { type: 'string', enum: ['active', 'pending'] },
           id: { type: 'string' },
+          pendingId: { type: 'string' },
           scope: { type: 'string' },
           category: { type: 'string' },
           origin: { type: 'string' },
+          risk: { type: 'string' },
+          reason: { type: 'string' },
           deduplicated: { type: 'boolean' },
           revived: { type: 'boolean' },
           applied: { type: 'boolean' },
@@ -245,14 +317,14 @@ export function apply(ctx, rawConfig) {
             },
           },
         },
-        required: ['id', 'scope', 'category', 'deduplicated'],
+        required: ['status', 'scope', 'category'],
       },
       render: (_args, value) => renderSaveResult(value),
     },
     isConcurrencySafe: () => false,
     execute(args, exec) {
       const session = sessionOf(exec)
-      const { entry, deduplicated, similar, revived, applied } = service.save({
+      const result = service.save({
         content: args.content,
         category: args.category ?? 'fact',
         scope: args.scope ?? 'workspace',
@@ -264,9 +336,14 @@ export function apply(ctx, rawConfig) {
         explicitFields: Object.keys(args),
         workspace: cwdOf(session),
         source: session?.id,
+        learning: {
+          sessionId: session?.id,
+          signalId: args.signal_id,
+          detectedSignals: detectedSignalsOf(session),
+        },
       })
-      if (!deduplicated || revived) noteWrite(session)
-      return saveResultValue(entry, deduplicated, similar, revived, applied)
+      if (result.status === 'pending') return savePendingResultValue(result)
+      return saveResultValue(result.entry, result.deduplicated, result.similar, result.revived, result.applied)
     },
   }
 
@@ -398,7 +475,6 @@ export function apply(ctx, rawConfig) {
         origin: args.origin,
         workspace: cwdOf(session),
       })
-      noteWrite(session)
       return updateResultValue(entry)
     },
   }
@@ -455,22 +531,21 @@ export function apply(ctx, rawConfig) {
     }
   }
 
-  // 自动提取动态提示：context provider 每次装配/准入重读，按会话累计活动量，
-  // 距上次记忆写入达阈值则给出静态提示（写入后清零）。特性检测：宿主无此 API
-  // 则静默跳过（GUIDANCE 仍生效）。零额外模型调用。
-  const hintProvider = (assembly) => {
+  // 学习提醒（context provider，每次装配/准入重读）：只在「本会话检测到尚未提醒过的
+  // 直接用户信号」时出现一行；同一信号只提醒一次（持久化在 learning/state.json）。
+  // 宿主按上下文快照去重落盘（仅变化时写入模型历史），零额外模型调用。
+  const learningProvider = (assembly) => {
     try {
-      const sid = assembly?.agent?.session?.id
+      const session = assembly?.agent?.session
+      const sid = session?.id
       if (!sid) return ''
-      if (!service.recallConfig().autoExtractHint) return ''
-      const st = hintState.get(sid) ?? { evals: 0, lastWriteEval: 0 }
-      st.evals += 1
-      hintState.set(sid, st)
-      if (hintState.size > 500) {
-        const oldest = hintState.keys().next().value
-        hintState.delete(oldest)
-      }
-      return st.evals - st.lastWriteEval >= HINT_THRESHOLD ? HINT_TEXT : ''
+      const recall = service.recallConfig()
+      if (!recall.autoExtractHint) return ''
+      const messages = signalMessagesOf(session)
+      if (messages.length === 0) return ''
+      const signals = detectSignals({ sessionId: sid, messages, memories: memoriesOf(cwdOf(session)) })
+      if (signals.length === 0) return ''
+      return service.learningReminder({ sessionId: sid, signals, limit: recall.autoLearn.maxWritesPerSession })
     } catch {
       return ''
     }
@@ -486,7 +561,7 @@ export function apply(ctx, rawConfig) {
     ]
     if (typeof ctx.systemPrompt?.context === 'function') {
       try {
-        disposers.push(ctx.systemPrompt.context({ name: 'dsh-memory-extract', order: 9600, interpolate: false, text: hintProvider }))
+        disposers.push(ctx.systemPrompt.context({ name: 'dsh-memory-learning', order: 9600, interpolate: false, text: learningProvider }))
       } catch { /* 特性缺失或注册失败：静默跳过，GUIDANCE 仍生效 */ }
     }
     // 自动备份：启动 5 秒后首检，此后每小时检查一次（开启且超 24h 才落盘）。
@@ -499,7 +574,6 @@ export function apply(ctx, rawConfig) {
     return () => {
       clearTimeout(startupTimer)
       clearInterval(backupTimer)
-      hintState.clear()
       // 关闭 store 的 fs.watch/索引定时器（第七轮审计 H11），重载不泄漏 watcher。
       try { service.dispose() } catch { /* 卸载期容错 */ }
       for (const dispose of disposers.reverse()) {

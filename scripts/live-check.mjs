@@ -158,13 +158,16 @@ async function main() {
 
   // 1. status：版本与 schema
   let token = ''
-  await check(`status 报告 version=${EXPECTED_VERSION} / schemaVersion=2 并下发 token`, async () => {
+  await check(`status 报告 version=${EXPECTED_VERSION} / schemaVersion=3 并下发 token`, async () => {
     const { status, json } = await req('GET', '/status')
     ok('status HTTP 200', status === 200, `got ${status}`)
     ok('status.ok', json?.ok === true)
     ok(`version === ${EXPECTED_VERSION}`, json?.version === EXPECTED_VERSION, `got ${json?.version}`)
-    ok('schemaVersion === 2', json?.schemaVersion === 2, `got ${json?.schemaVersion}`)
+    ok('schemaVersion === 3', json?.schemaVersion === 3, `got ${json?.schemaVersion}`)
     ok('token 非空', typeof json?.key === 'string' && json.key.length > 0)
+    // v0.28.0：学习分区计数（pending 候选）随 status 下发。
+    ok('learning.pendingCount 为整数', Number.isInteger(json?.learning?.pendingCount), JSON.stringify(json?.learning))
+    ok('learning.schemaVersion === 1', json?.learning?.schemaVersion === 1, `got ${json?.learning?.schemaVersion}`)
     // 0.24.18：迁移/备份失败可观测字段（健康时应为 false/null）。
     ok('migrationPending=false', json?.migrationPending === false, `got ${JSON.stringify(json?.migrationPending)}`)
     ok('backupError=null', json?.backupError === null, `got ${JSON.stringify(json?.backupError)}`)
@@ -678,6 +681,21 @@ async function main() {
     ok('recall-preview injected===entries.length', d?.injected === d?.entries?.length)
   })
 
+  // 3b. 学习分区（v0.28.0）：只读端点 + 写路由错误语义；不在真实数据根制造写入。
+  await check('GET /learning 学习分区（v0.28.0）', async () => {
+    const lp = await req('GET', '/learning')
+    ok('learning HTTP 200', lp.status === 200, `got ${lp.status}`)
+    const d = lp.json
+    ok('learning 字段齐全', Array.isArray(d?.pending) && typeof d?.pendingCount === 'number' && Array.isArray(d?.recentAuto) && Array.isArray(d?.audit))
+    ok('learning pendingCount === pending.length', d?.pendingCount === d?.pending?.length)
+    ok('learning 不注入候选正文以外的字段', (d?.pending ?? []).every((item) => typeof item.id === 'string' && typeof item.content === 'string' && item.status === 'pending'))
+    const badReject = await req('POST', '/learning/reject', { token, body: { pendingId: 'p-does-not-exist' } })
+    ok('learning/reject 未知候选 404', badReject.status === 404, `got ${badReject.status}`)
+    ok('learning/reject code=not-found', badReject.json?.code === 'not-found', JSON.stringify(badReject.json))
+    const noToken = await req('POST', '/learning/approve', { body: { pendingId: 'x' } })
+    ok('learning/approve 缺 token 403', noToken.status === 403, `got ${noToken.status}`)
+  })
+
   // 4. settings：toggle 到反值验证后还原原值（GET 无 {result} 包裹；绝不 reset）
   await check('settings 新键 toggle 后还原', async () => {
     const before = await req('GET', '/settings')
@@ -685,6 +703,10 @@ async function main() {
     const origHint = before.json?.effective?.autoExtractHint
     ok('effective.decayEnabled 为布尔', typeof origDecay === 'boolean', `got ${origDecay}`)
     ok('effective.autoExtractHint 为布尔', typeof origHint === 'boolean', `got ${origHint}`)
+    // v0.28.0：自动学习额度边界随 settings 下发（0–5；默认 5）。
+    ok('bounds.autoWritesMax === 5', before.json?.bounds?.autoWritesMax === 5, JSON.stringify(before.json?.bounds))
+    const autoWrites = before.json?.effective?.autoLearn?.maxWritesPerSession
+    ok('effective.autoLearn.maxWritesPerSession 在 0–5', Number.isInteger(autoWrites) && autoWrites >= 0 && autoWrites <= 5, JSON.stringify(autoWrites))
     const target = !origDecay
     const post = await req('POST', '/settings', { token, body: { decayEnabled: target, autoExtractHint: target } })
     ok('settings POST 生效', post.json?.result?.effective?.decayEnabled === target && post.json?.result?.effective?.autoExtractHint === target)
@@ -966,6 +988,8 @@ async function main() {
     ok('bundle 含 0.24.12 可访问性与导入', code.includes('parseImportText') && code.includes('closeToast') && code.includes('onCategoryKey'))
     ok('bundle 含 0.24.11 面板正确性', code.includes('savedToastKey') && code.includes('exportParams') && code.includes('filterByTag') && code.includes('emptyScopeTitle'))
     ok('bundle 含 0.24.10 设置状态机', code.includes('settingsStatusNext') && code.includes('dm_linkbtn'))
+    // 0.28.0：学习分区（待确认批准/拒绝、最近自动写入、预算/omitted 入口）。
+    ok('bundle 含 0.28.0 学习分区', code.includes('learningTitle') && code.includes('learning/approve') && code.includes('dm-learning') && code.includes('approvePendingItem'))
   })
 
   // 7. 清理测试条目 + 恢复设置/备份快照（正常结束与异常中断共用同一幂等清理）

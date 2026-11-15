@@ -458,6 +458,32 @@ async function main() {
     const pkgVersion = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version
     check('标题旁显示插件版本号且与 package.json 一致', versionState.text === 'v' + pkgVersion && /版本|version/i.test(versionState.title), JSON.stringify({ ...versionState, pkgVersion }))
 
+    // v0.28.0：学习分区（/learning）——真实数据有「待确认」或「最近自动写入」时必须
+    // 在记忆页顶部可见（标题「学习」+ 至少一行）；两者都为空时不得渲染空壳占位。
+    await sleep(1200)
+    const learningDoc = await apiJson('/learning')
+    const learningUi = await evaluate(`(() => {
+      const section = document.querySelector('[data-testid="dm-learning"]')
+      if (!section) return { exists: false, rows: 0, pendingRows: 0, title: '' }
+      return {
+        exists: true,
+        rows: section.querySelectorAll('.dm_learn_row').length,
+        pendingRows: section.querySelectorAll('[data-testid="dm-learning-pending"]').length,
+        title: (section.querySelector('.dm_section_title') || {}).textContent || '',
+      }
+    })()`)
+    const learningMustExist = (learningDoc?.pendingCount || 0) > 0 || (learningDoc?.recentAuto || []).length > 0
+    check('学习分区随 /learning 数据出现（标题「学习」+ 非空行）',
+      learningMustExist
+        ? learningUi.exists && learningUi.rows > 0 && /学习|Learning/.test(learningUi.title)
+        : (!learningUi.exists || learningUi.rows > 0),
+      JSON.stringify({ mustExist: learningMustExist, ui: learningUi, pendingCount: learningDoc?.pendingCount, recentAuto: (learningDoc?.recentAuto || []).length }))
+    check('学习分区自动写入行提供「归档」撤销按钮（可逆撤销入口）',
+      !learningMustExist || await evaluate(`(() => {
+        const btn = document.querySelector('[data-testid="dm-learning-auto"] button')
+        return Boolean(btn) && /归档|Archive/.test((btn.textContent || '').trim())
+      })()`))
+
     // 0.25.0 去 AI 化：主容器不得再有径向氛围光/渐变背景，主按钮与卡片不得用渐变/重投影。
     const visualState = await evaluate(`(() => {
       const cs = (sel) => { const el = document.querySelector(sel); return el ? getComputedStyle(el) : null }

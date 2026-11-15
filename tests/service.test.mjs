@@ -156,7 +156,7 @@ test('status reports root, schemaVersion and counts', () => {
   service.save({ content: '工作区一', scope: 'workspace', workspace: 'D:\\proj\\alpha' })
   const status = service.status()
   assert.equal(status.root, root)
-  assert.equal(status.schemaVersion, 2)
+  assert.equal(status.schemaVersion, 3)
   assert.deepEqual(status.counts, { global: 2, workspaces: 1 })
 })
 
@@ -205,12 +205,19 @@ test('settings view exposes defaults/base/overlay/effective, privacy always-on, 
 test('baseConfig is the base layer; overlay overrides; recallConfig reflects live', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-memory-svc-base-'))
   const service = createMemoryService({ root, baseConfig: { autoInject: false, injectionBudgetChars: 1234 } })
-  assert.deepEqual(service.recallConfig(), { autoInject: false, injectionBudgetChars: 1234, decayEnabled: true })
+  const expected = (autoInject) => ({
+    autoInject,
+    injectionBudgetChars: autoInject ? 8000 : 1234,
+    decayEnabled: true,
+    autoExtractHint: true,
+    autoLearn: { maxWritesPerSession: 5 },
+  })
+  assert.deepEqual(service.recallConfig(), expected(false))
   service.updateSettings({ autoInject: true, injectionBudgetChars: 8000, pageSize: 20 })
-  assert.deepEqual(service.recallConfig(), { autoInject: true, injectionBudgetChars: 8000, decayEnabled: true })
+  assert.deepEqual(service.recallConfig(), expected(true))
   assert.equal(service.settings().effective.pageSize, 20)
   service.resetSettings()
-  assert.deepEqual(service.recallConfig(), { autoInject: false, injectionBudgetChars: 1234, decayEnabled: true })
+  assert.deepEqual(service.recallConfig(), expected(false))
   assert.equal(service.settings().effective.pageSize, 50)
 })
 
@@ -272,7 +279,7 @@ test('v1 migration backup failure degrades to readable status, then recovers', (
   // 修复阻塞后再次加载：完成迁移，状态可观测为已恢复。
   fs.rmSync(path.join(root, 'backups'), { force: true })
   const fixed = createMemoryService({ root })
-  assert.equal(fixed.status().schemaVersion, 2)
+  assert.equal(fixed.status().schemaVersion, 3)
   assert.equal(fixed.status().migrationPending, false)
   assert.equal(fixed.status().migrationError, null)
 })
@@ -386,7 +393,7 @@ test('migration meta write failure stays pending and retry reuses the recent bac
   assert.ok(backupsAfterFail >= 1, 'forced backup happened before the failed meta write')
   // 恢复：最近 10 分钟已有备份 → 复用，不再新增（避免反复启动轮转掉历史备份）；迁移成功。
   const recovered = createMemoryService({ root })
-  assert.equal(recovered.status().schemaVersion, 2)
+  assert.equal(recovered.status().schemaVersion, 3)
   assert.equal(recovered.status().migrationPending, false)
   assert.equal(fs.readdirSync(path.join(root, 'backups')).length, backupsAfterFail, 'recent backup reused')
 })

@@ -5,9 +5,9 @@ Cross-session long-term memory for DeepSeek Harness: durable user preferences, p
 
 ## 功能 Features
 
-- **双通道写入**：用户显式「记住/忘掉」＋ Agent 依据注入指引在对话中主动记录（自动写入后简短提示）；**自动提取动态提示**按会话活动量周期性提醒沉淀（`origin=auto` 标记、写入后清除、零额外模型调用、可关）。
+- **双通道写入**：用户显式「记住/忘掉」＋ Agent 依据注入指引在对话中主动记录（自动写入后简短提示）；**学习信号驱动**（v3）：插件从会话的**直接用户消息**检测信号（显式记忆指令 / 直接纠正 / 工具失败后的纠正 / 新环境事实 / 重复交代），纯规则、零 LLM、零后台任务；`memory_save` 以 `origin=auto|manual` 写入时必须携带本会话有效且未消费的 `signal_id`，工具边界强制校验会话额度（每会话自动候选默认 ≤5，活跃＋待确认共享）与 R0–R3 风险分级：R3（机密/短期任务/内嵌指令/敏感推断）拒绝且不落候选正文，R2（程序性知识/宽泛约束/来源不符/弱信号/疑似新旧冲突）只进**待确认候选**、批准前不注入，R1 直接生效（可撤销）。直接用户纠正写成的偏好自动带 `constraint` 标记：注入优先级仅次于 pinned 且免软衰减。
 - **两级作用域**：`global`（用户级，跨项目共享）与 `workspace`（按会话有效工作目录隔离，互不污染）。
-- **自动召回**：会话装配系统提示时实时读取记忆，按**钉选最先→分类优先（偏好→决策→事实）→类内衰减乘子倒序**在字符预算内注入全局＋当前工作区条目；注入文本按该优先级**平铺**输出，作用域写进行内标记（`- [global/preference] …` / `- [workspace/fact] …`），跨作用域时不会因分块而破坏优先级。超出预算的条目提示用搜索获取。默认隐藏被取代/已过期/已归档条目。同一次装配的 `selectInjection` 结果复用给命中簿记与渲染，排序/预算只算一遍。
+- **自动召回**：会话装配系统提示时实时读取记忆，按**钉选最先→非钉选 constraint→分类优先（偏好→决策→事实）→类内衰减乘子倒序（同分更新时间、最后 id 稳定排序）**在字符预算内注入全局＋当前工作区条目；注入文本按该优先级**平铺**输出，作用域与 constraint 写在行内标记（`- [global/preference/constraint] …`），跨作用域时不会因分块而破坏优先级。超出预算的条目提示用搜索获取。默认隐藏被取代/已过期/已归档条目。同一次装配的 `selectInjection` 结果复用给命中簿记与渲染，排序/预算只算一遍。默认预算 8000 字符。
 - **相关度检索**：关键词 AND 匹配（大小写不敏感、**CJK bigram 模糊**）之上按相关度×衰减乘子排序——内容命中×3、标签×2、分类/id×1，紧凑短语+4、空格短语+2，钉选小幅 boost；同分按更新时间倒序。空查询仍按更新时间列出。
 - **取代链（supersede）**：信息变化可 save 新条目＋`supersedes=旧id`，旧条目标记被取代、默认隐藏、历史保留可查（`include_superseded`），避免并存矛盾。链完整性受校验：不能取代自身、不能覆盖已有后继、不能形成环（违反返回 `invalid`）；改取代目标会清理旧目标的反向引用（含 save 去重命中后改向/撤销取代的路径，不会留下「无人指向却永久隐藏」的搁浅条目）；删除时自动清理两个方向的悬垂引用（**全作用域扫描**：global＋所有工作区，覆盖「A 建立→移到 global→在 B 删除」）——被删条目的旧记忆恢复可见、后继的 `supersedes` 指针清除。导入数据同样受不变量约束：自指、批内环、从条目作用域不可达的目标、磁盘上未反向声明指向的无关目标都会被丢弃并计入 `repaired`，不会产生永久隐藏且工具无法修复的条目。
 - **可选过期日（expires）**：`YYYY-MM-DD`（UTC、当日含），到期默认隐藏不删除、可恢复（`include_expired`）；坏日期 fail-open。面板日期输入以今天（UTC）为 `min`，新建或改动为过去日期会被拒绝（否则条目保存后立即隐藏，用户会误以为丢数据）；编辑既有已过期条目的原日期仍可继续编辑。
@@ -31,7 +31,8 @@ Cross-session long-term memory for DeepSeek Harness: durable user preferences, p
 - 0.26.0 面板修正与补强：作用域路径比较平台感知（Windows 忽略大小写：「● 当前工作区」可靠显示、`defaultView='workspace'` 的下拉映射回规范 value 不再空白；POSIX 保持大小写敏感不误并）；设置页按 `/` 会先切回记忆页再聚焦搜索（旧实现闭包陈旧导致按键被吞）；翻页只刷新列表、不重扫与页码无关的 `/stats`，页码超界一次跳末页；busy 结束把焦点归还给触发按钮；新建只发送用户显式设置字段；过去过期日被拒绝并提示；查重使用 120s 独立超时并有进行中提示；备份/导出/查重进行中使用中性 info 吐司；导入预览显示 `repaired` 瓦片；导出文件名用本地日期。
 - 0.27.0 列表密度：工具栏分段控件与设置页「列表密度」下拉同步写入 `viewMode`（`comfortable` 默认为索引行；`compact` 为单行高密度表格，隐藏来源/注入/作用域/标签行、展开后恢复，分组与统计同步收紧），持久化到 settings.json；服务端枚举校验、非法值丢弃，旧配置回落舒适视图。
 - 0.27.1 可读性：工具栏操作均带可见文字（搜索/作用域/来源/标签、`视图`＋`舒适/紧凑`、导出/导入/查重/刷新），行内钉选/归档/编辑/删除在舒适视图显示「图标＋文字」（紧凑视图保留图标并用 `aria-label` 提供可访问名称）；不再有需要猜含义的纯图标操作。
-- 数据面：宿主 `webServer` 命名路由 `/plugins/dsh-memory/{status,entries,workspaces,cwd,stats,similar,recall-preview,export,settings,settings/reset,backup,save,update,forget,import}`，浏览器同源 fetch；进程级 token（status 下发），写操作校验 `X-RPC-Key`，全部路由仅回环可达。
+- 0.28.0 学习分区：记忆页顶部新增「学习」分组，展示**待确认候选**（逐条「批准/拒绝」，批准后落盘为活跃条目并保留来源，拒绝只留审计）、**最近自动写入**（「归档」= 可逆撤销，恢复后条目文件逐字节相同）与审计尾部；无待确认/自动写入时整块隐藏。数据来自只读端点 `GET /learning`；批准/拒绝走 `POST /learning/approve|reject`（回环 + token；`pendingId` 缺失 400、未知 404、已处理 409/invalid）。
+- 数据面：宿主 `webServer` 命名路由 `/plugins/dsh-memory/{status,entries,workspaces,cwd,stats,similar,recall-preview,export,settings,settings/reset,backup,save,update,forget,import,learning,learning/approve,learning/reject}`，浏览器同源 fetch；进程级 token（status 下发），写操作校验 `X-RPC-Key`，全部路由仅回环可达。
 - 一个操作，两个调用方：面板与 agent 工具调用同一 `lib/service.js`，语义与失败原因完全一致。工具输出渲染（`renderSaveResult`/`renderSearchResult`/`renderUpdateResult`/`renderForgetResult`）与检索条目映射（`searchResultEntry`）为模块级纯函数，独立单测覆盖（含 lossless JSON 往返）。
 - 样式仅用 `--dsw-alias-*` 主题令牌，自动跟随亮/暗主题；文案中英双语（zh/en）。
 
@@ -39,7 +40,7 @@ Cross-session long-term memory for DeepSeek Harness: durable user preferences, p
 
 | 工具 | 作用 |
 |---|---|
-| `memory_save` | 写入一条记忆（content 必填；category=preference/fact/decision；scope=global/workspace，默认 workspace；tags 可选；origin 必填 manual/auto；supersedes=旧id 取代（目标必须未被他条取代且不成环，否则 `invalid`）；expires=YYYY-MM-DD；pinned）。同作用域完全相同的内容自动去重（仅针对未取代条目；若命中的是归档/过期条目则复活为活跃并返回 `revived: true`）。写入后返回相似记忆提示 `similar`（Jaccard≥0.5、最多 3 条、advisory 不阻断），便于取代/更新旧条目、避免并存矛盾。 |
+| `memory_save` | 写入一条记忆（content 必填；category=preference/fact/decision；scope=global/workspace，默认 workspace；tags 可选；origin 必填 manual/auto；**signal_id 必填**：必须是本会话学习提醒中给出的有效信号，否则 `no-signal`；已消费返回 `signal-consumed`；超出会话额度返回 `autolimit`；R3 候选返回 `rejected-risk`；R2 候选返回 `status:"pending"` 与 pendingId，批准前不生效）。直接用户纠正形成的 preference 自动带 `constraint` 标签。同作用域完全相同的内容自动去重（仅针对未取代条目；若命中的是归档/过期条目则复活为活跃并返回 `revived: true`）。写入后返回相似记忆提示 `similar`（Jaccard≥0.5、最多 3 条、advisory 不阻断），便于取代/更新旧条目、避免并存矛盾。信号驱动的自动写入不接受 `pinned`/`expires`/`supersedes`（须走 `memory_update` 显式修正流）。 |
 | `memory_search` | 关键词检索（大小写不敏感、多词 AND、CJK bigram 模糊），非空查询按相关度×衰减排序；空查询＝按更新时间列出；可按 scope/category/origin/tag 过滤，limit 默认 20、offset 分页；include_superseded/include_expired/include_archived 找回隐藏态（默认 false）。返回 `{entries, hidden}`：hidden 统计被隐藏的匹配数（被取代/过期/归档，按首个排除原因归类），渲染附「可用 include_* 找回」提示。 |
 | `memory_update` | 按 id 新覆旧（content/category/tags 可选更新）；可选 `scope` 在 global ↔ 当前工作区之间移动（可同时 `supersedes` 建立取代链）；supersedes 取代另一条（目标必须未被他条取代且不成环）、expires 设过期日（空串清除）、pinned 钉选、archived 归档/恢复、origin 修正来源标记。 |
 | `memory_forget` | 按 id 永久删除。 |
@@ -50,10 +51,14 @@ Cross-session long-term memory for DeepSeek Harness: durable user preferences, p
 
 ```
 .dsh-memory/
-├── meta.json                 # 存储元数据：schemaVersion/createdAt（首次写入时创建）
+├── meta.json                 # 存储元数据：schemaVersion/createdAt（首次写入时创建；v3 起为 3）
 ├── access.json               # 命中账本：id → { at, count }（检索/注入命中，节流 ≤1 次/小时；可选）
 ├── settings.json             # 设置覆盖层（可选；缺失＝用默认/profile 基线）
-├── backups/                  # 自动/手动备份的全量记忆导出 JSON（只轮转插件自己的 dsh-memory-<时间戳>[-N].json；备份与导入共用写锁、同毫秒文件名去重；不含设置/账本元数据）
+├── learning/                 # v3 学习存储（与条目正文分离；pending/audit 纳入快照与备份）
+│   ├── pending.json          # R2「需确认」候选：状态/风险原因/来源指针；批准前不注入
+│   ├── audit.jsonl           # 只追加审计事件（类型/id/计数，不复制候选正文）
+│   └── state.json            # operational：会话额度、信号提醒/消费状态（TTL 7 天惰性回收；不入快照）
+├── backups/                  # 自动/手动备份的全量记忆导出 JSON（另附 learning 状态；只轮转插件自己的 dsh-memory-<时间戳>[-N].json；备份与导入共用写锁、同毫秒文件名去重；不含设置/账本元数据）
 ├── global/<id>.md
 ├── .cache/entries-v1.json    # 大库（≥1024 条）派生解析索引：条目+文件签名，5s 去抖原子写；可随时删除/重建，含正文副本；库缩到阈值以下或清空时自动删除；被数据根快照忽略
 └── workspaces/
@@ -81,9 +86,11 @@ pinned: true
 
 v2 可选字段（`origin`/`supersedes`/`superseded_by`/`superseded_at`/`expires`/`pinned`/`archived`/`last_access`/`hit_count`）**稀疏存储**：仅在显式设置时写入文件，旧文件无需改写、读取时懒缺省（缺 origin 视为 manual、缺 pinned/archived 视为 false）；origin 可经 `memory_update` 或面板编辑弹窗显式修正（0.10.0 起 save 工具必填 origin，面板文案「显式要求/主动沉淀」）。
 
+v3 学习存储（`learning/`）：`pending.json`（R2 候选：id/来源/风险原因/状态，批准前不注入、不生效）、`audit.jsonl`（自动保存、pending 审批、归档/恢复、合并、迁移等事件；**只记事件与 id，不复制候选正文**）、`state.json`（会话额度、信号提醒/消费状态；operational 数据，TTL 7 天惰性回收，不入数据快照）。条目本身零新字段：`constraint` 是复用 `tags` 的保留标记（注入置顶、免软衰减），直接用户纠正的 preference 由闸门自动补标。
+
 写入为「临时文件＋改名」的原子写（失败时清理临时文件，不在数据目录留垃圾；Windows 上杀软/索引器/同步盘会短暂占用 rename 目标，瞬时错误 EPERM/EACCES/EBUSY 自动重试 3×100ms；仍失败统一返回脱敏的 `code=io` 固定文案，原始 SystemError 含本机路径不进模型/面板）；每次操作实时重读磁盘，因此 DSH 运行中手工编辑文件也会立即生效。**文件名是 id 权威、所在目录是 scope 权威**（frontmatter 里的 id/scope 仅兼容无上下文解析，写回时自动修正）——复制/改名/手改不会让一条记忆「变成」另一条。UTF-8 BOM 与 CRLF 手改文件可正常解析；损坏文件会被跳过而不是报错，但仍可按 id 删除，不留不可管理的孤儿文件（删除损坏文件时同步清理其它条目指向它的取代指针，避免前驱永久隐藏）。条目解析结果带进程内缓存（签名＝路径＋mtime/ctime/size/ino/birthtimeMs，规避 Windows 文件时间 tick 碰撞）：热路径只 `statSync`、不重复读文件与解析；手工编辑、其它进程原子写、删除都会改变签名并自动失效；LRU 上限 32768。大库（目录内 ≥1024 个条目文件）进一步启用目录级列表缓存：缓存解析结果数组，本进程写入/删除走同步补丁，外部手改/增删由递归 `fs.watch` 只重读变化的那一个文件；watcher 不可用时退化为旧路径（不缓存）。因此大库热路径不再逐文件 `statSync`（30k 条目 warm listAll ~50ms），大库中手工编辑在 watcher 事件后（通常毫秒级）可见；小库仍逐文件校验，保持「改完立即可见」的严格语义。大库的目录缓存另持久化为 `<root>/.cache/entries-v1.json`（派生数据，可随时删除；5 秒去抖原子写）：进程重启后只逐文件 `statSync` 校验 mtime/ctime/size/ino/birthtime，未变化条目直接复用解析结果，30k 库冷启动从约 19–23s 降到约 1.7s；签名不一致/新增文件才重新读解析，索引缺失/损坏/版本不符自动回退全量解析；`DSH_MEMORY_INDEX=0` 可禁用。冷启动若发现目录条目已清空/降到阈值以下，会删除过期索引文件——避免「已永久删除」的正文以明文副本残留在 `.cache`；JSON 派生文件（`.cache` 索引、`meta.json`、`access.json`、工作区 `index.json`、导入回执）读取均容忍 UTF-8 BOM（记事本手改后不会被当成空文件覆写）。`.cache/` 被数据根快照忽略，不属于用户数据。命中簿记（`last_access`/`hit_count`）写入独立 `access.json` 账本（原子写＋跨进程锁、读取带签名缓存），**不再改写条目 Markdown**——没有单文件读-改-写窗口，也不会覆盖并发写入的正文；账本损坏按空处理并在下次命中时自愈，删除条目时同步清理其账本记录，并在启动与导入后惰性清理「已无对应文件」的幽灵记录（避免同 id 重新导入继承旧命中、账本无界增长）。
 
-并发与版本化：记忆按 home 共享，多个 DSH 进程可能同时写入。`index.json` 的读-改-写、`access.json` 命中账本与批量导入的落盘阶段由跨进程写锁保护（原子 mkdir 互斥；锁目录记录 owner nonce，释放只删自己的锁——临界区超时被抢占后不会误删新持有者；批量导入每 128 条刷新锁 mtime 心跳，长临界区不会被并发进程判为陈旧；持锁进程崩溃留下的陈旧锁按 mtime 自愈——自愈前先把锁目录原子 `rename` 到带 owner nonce 的认领目录（只有一个进程能成功），复核仍陈旧才删除，避免两个等待者各自删掉对方刚建立的新锁（双持有）；认领到新锁则放回；锁超时错误带 `code=busy`（HTTP 503，设置页显示可重试忙碌提示），文案固定为 `lock timeout`、不拼接锁路径（工具面经宿主原样渲染给模型，不得泄漏数据根绝对路径）；陈旧锁认领 `rename` 失败（Windows 目录被占用可长期 EBUSY）时回到统一等待路径（deadline 检查＋退避 sleep），不会 100% CPU 自旋冻结宿主、`timeoutMs` 始终生效。用绝对时间差判断，未来 mtime 的锁同样会自愈；获取超时抛错；锁是同步临界区，async 回调会被显式拒绝以免提前放锁）。面板一次刷新会同时请求 entries 与 stats：两者共用单遍 `collectEntries`（一次列目录＋一次遍历产出可见集/隐藏计数/状态分布），大库下不再各自两遍全量遍历；两者使用同一组过滤参数（status/include_*/category/origin/tag），过滤视图下统计头与列表一致；隐藏计数按 `entryStatus` 优先级归类（superseded→expired→archived），与状态 chips 同口径。相似查重使用内容特征倒排候选，避免 O(N²)。单条保存/更新/移动/删除与批量导入一样持根级写锁（`.lock-write`，导入先持 `.lock-import` 再进本锁，锁序一致无死锁；单条临界区毫秒级），避免跨进程双后继取代/并发更新丢字段/删除后被陈旧读复活；导入幂等回执持久化（`.cache/import-receipts.json`）在 `.lock-receipts` 内合并写、读时锁外重读兜底，跨进程/跨实例重放不会互相清掉回执。`meta.json` 记录 `schemaVersion`（当前 2）；加载时若检测到旧 v1 数据，先强制备份一次（即使自动备份关闭）再升级 meta 锚点，新字段懒缺省、不逐文件改写，旧记忆零丢失；迁移写失败会保持 `migrationPending` 并在 status 暴露 `migrationError`（最近 10 分钟已有备份则复用，避免反复启动新增备份挤掉历史恢复点）。缺失或损坏时自动重建，不影响读写；但**存在却不可解析**的 meta.json 不再回落成「健康 v2」，status 上报 `schemaVersion:null` + `metaError`。`/status` 的 counts 是目录文件计数（不解析内容，大库也是毫秒级）；设置页的存储占用统计有 5 秒缓存，避免每次设置保存响应对大库全树 stat。HTTP 写路由只接受 JSON 对象 body，非对象（null/数组/标量）统一 400 `invalid-json`。
+并发与版本化：记忆按 home 共享，多个 DSH 进程可能同时写入。`index.json` 的读-改-写、`access.json` 命中账本与批量导入的落盘阶段由跨进程写锁保护（原子 mkdir 互斥；锁目录记录 owner nonce，释放只删自己的锁——临界区超时被抢占后不会误删新持有者；批量导入每 128 条刷新锁 mtime 心跳，长临界区不会被并发进程判为陈旧；持锁进程崩溃留下的陈旧锁按 mtime 自愈——自愈前先把锁目录原子 `rename` 到带 owner nonce 的认领目录（只有一个进程能成功），复核仍陈旧才删除，避免两个等待者各自删掉对方刚建立的新锁（双持有）；认领到新锁则放回；锁超时错误带 `code=busy`（HTTP 503，设置页显示可重试忙碌提示），文案固定为 `lock timeout`、不拼接锁路径（工具面经宿主原样渲染给模型，不得泄漏数据根绝对路径）；陈旧锁认领 `rename` 失败（Windows 目录被占用可长期 EBUSY）时回到统一等待路径（deadline 检查＋退避 sleep），不会 100% CPU 自旋冻结宿主、`timeoutMs` 始终生效。用绝对时间差判断，未来 mtime 的锁同样会自愈；获取超时抛错；锁是同步临界区，async 回调会被显式拒绝以免提前放锁）。面板一次刷新会同时请求 entries 与 stats：两者共用单遍 `collectEntries`（一次列目录＋一次遍历产出可见集/隐藏计数/状态分布），大库下不再各自两遍全量遍历；两者使用同一组过滤参数（status/include_*/category/origin/tag），过滤视图下统计头与列表一致；隐藏计数按 `entryStatus` 优先级归类（superseded→expired→archived），与状态 chips 同口径。相似查重使用内容特征倒排候选，避免 O(N²)。单条保存/更新/移动/删除与批量导入一样持根级写锁（`.lock-write`，导入先持 `.lock-import` 再进本锁，锁序一致无死锁；单条临界区毫秒级），避免跨进程双后继取代/并发更新丢字段/删除后被陈旧读复活；导入幂等回执持久化（`.cache/import-receipts.json`）在 `.lock-receipts` 内合并写、读时锁外重读兜底，跨进程/跨实例重放不会互相清掉回执。`meta.json` 记录 `schemaVersion`（当前 3）；加载时若检测到旧 v1/v2 数据，先强制备份一次（即使自动备份关闭）再升级 meta 锚点：v2→v3 同时创建 `learning/` 目录与初始状态文件，**条目正文与 frontmatter 零改写**，旧记忆零丢失；迁移写失败会保持 `migrationPending` 并在 status 暴露 `migrationError`（最近 10 分钟已有备份则复用，避免反复启动新增备份挤掉历史恢复点）。缺失或损坏时自动重建，不影响读写；但**存在却不可解析**的 meta.json 不再回落成「健康版本」，status 上报 `schemaVersion:null` + `metaError`。`/status` 的 counts 是目录文件计数（不解析内容，大库也是毫秒级）；设置页的存储占用统计有 5 秒缓存，避免每次设置保存响应对大库全树 stat。HTTP 写路由只接受 JSON 对象 body，非对象（null/数组/标量）统一 400 `invalid-json`。
 
 导出文档格式（面板「导出」生成，「导入」接受）：
 
@@ -108,9 +115,12 @@ global 条目的 `workspace` 为 `null`。`skipped` 是导出时发现的损坏 
 | 组 | 字段 | 默认 | 说明 |
 |---|---|---|---|
 | 注入与召回 | `autoInject` | `true` | 是否把召回的记忆注入系统提示（关闭后工具仍可用）。 |
-| 注入与召回 | `injectionBudgetChars` | `6000` | 注入字符预算（0–20000）；按钉选最先→分类优先→类内衰减乘子装填，超出提示用 `memory_search`。设置页「召回预览」展示当前注入/未注入条数、占用字符与注入清单（`GET /recall-preview`，刷新按需重算）。 |
-| 注入与召回 | `autoExtractHint` | `true` | 自动提取动态提示：按会话活动量周期性提醒主 agent 沉淀记忆（零额外模型调用）。 |
+| 注入与召回 | `injectionBudgetChars` | `8000` | 注入字符预算（0–20000）；按钉选最先→constraint→分类优先→类内衰减乘子装填，超出提示用 `memory_search`。设置页「召回预览」展示当前注入/未注入条数、占用字符与注入清单（`GET /recall-preview`，刷新按需重算）。 |
+| 注入与召回 | `autoExtractHint` | `true` | **自动学习总开关**：关闭后不检测学习信号、不注入学习提醒、拒绝信号驱动的自动候选（面板手动添加不受影响）。 |
 | 注入与召回 | `decayEnabled` | `true` | 软衰减排序：相关度×新近度乘子；关闭回退按更新时间排序。 |
+| 学习 | `autoLearn.maxWritesPerSession` | `5` | 每会话自动落盘候选上限（0–5；活跃＋pending 共享；0＝关闭自动候选）。用户显式 `origin=manual` 保存不占额度。 |
+| 学习 | `conflictAlert` | `true` | 疑似冲突/待确认提醒开关（I4 使用；待确认候选始终不会注入）。 |
+| 学习 | `digest.enabled` / `digest.weekday` | `true` / `1` | 确定性周报开关与星期（1=周一；I4 使用；只做审计数据聚合，不调用 LLM）。 |
 | 存储与备份 | `autoBackup` | `false` | 开启后每天自动导出全量到 `backups/`（启动 5 秒首检、每小时检查、距上次超 24h 才落盘；只轮转插件自己的时间戳备份；失败降级并在 status 暴露 `backupError`）。 |
 | 存储与备份 | `backupRetention` | `7` | 备份保留份数（1–30），超出裁剪最旧；仅删备份，不删记忆。 |
 | 面板偏好 | `defaultView` | `all` | 默认视图：`all`/`global`/`workspace`（workspace＝当前工作区）。 |
@@ -130,13 +140,17 @@ profile 插件行 `config`（`cordis.patch.yml` 中 `id: dsh-memory` 条目）�
 |---|---|---|
 | `enabled` | `true` | 总开关：关闭后不注册工具与注入（仅 profile 可设）。 |
 | `autoInject` | `true` | 注入基线值；面板设置可覆盖。 |
-| `injectionBudgetChars` | `6000` | 注入预算基线值；面板设置可覆盖。 |
+| `injectionBudgetChars` | `8000` | 注入预算基线值；面板设置可覆盖。 |
 
 ## 限制 Limitations
 
 - 检索为关键词匹配（含 CJK bigram 模糊）＋相关度×衰减排序，无语义/向量检索。
 - 软衰减仅影响排序（永不过滤、可关）；不自动物理清理记忆，遗忘只能手动（自动备份仅裁剪备份文件，不删记忆）；过期/归档/取代均为可逆隐藏。
-- 自动记录依赖模型遵循注入指引与动态提示，不是后台独立提取（零额外模型调用）。
+- **自动学习是信号驱动的"人在环"**：没有直接用户消息信号就不会自动落盘；R2 候选需面板批准后才生效；不做后台 LLM 提取/整合（零额外模型调用）。规则层是保守启发式，可能漏检真实信号或误报（漏检＝少学，误报＝多一条待确认/可撤销条目）。
+- **`constraint` 是行为偏好提示，不是工具级强制安全策略**：真正的高风险操作仍需宿主策略/审批；R3（机密/短期任务/内嵌指令/敏感推断）是规则型护栏，不能识别全部敏感语义——面板必须保留来源、审阅与撤销入口。
+- 备份/导出会附带 `learning` 状态（pending/audit），但**导入/恢复只恢复 entries**：不从备份恢复 pending 候选（设计已知限制，留待后续增量）。
+- 信号状态的清理依赖 TTL（7 天）与写入时惰性回收；会话异常退出可能在 `learning/state.json` 留下短期残留（operational 数据，不参与快照 diff）。
+- 学习分区的 GUI 断言在 I4 补齐；I1 以单元测试、live 契约与 `scripts/eval-replay.mjs`（FI-1…FI-10）覆盖机制，面板回归由既有 gui-check 全绿保障。
 - 记忆按 home 共享：同一台机器上的所有 profile 看到同一份记忆。
 - 移动仅支持 global ↔ 当前工作区（工具按会话有效目录，面板按所选工作区）；不支持在两个不同工作区之间直接移动。
 - 导入时，工作区条目优先按权威 `workspaceKey` 定位目录——索引损坏/缺失（cwd 未知）也能恢复到原工作区；只有**旧格式导出（无 workspaceKey）且 cwd 缺失**的条目会被拒绝（no-workspace），可手工把文件放回对应目录。
@@ -147,4 +161,4 @@ profile 插件行 `config`（`cordis.patch.yml` 中 `id: dsh-memory` 条目）�
 
 ## English summary
 
-dsh-memory gives the agent durable cross-session memory. Four tools (`memory_save`, `memory_search`, `memory_update`, `memory_forget`) and a Web management panel (sidebar "Memory" entry) share one service layer over one-fact-per-entry Markdown files under `~/.dsh/.dsh-memory/`, split into a global scope and per-workspace scopes keyed by the session's effective working directory. A system-prompt section re-reads the files on every assembly and injects entries within a configurable character budget, ordering pinned entries first, then preferences over decisions over facts, then by a soft-decay multiplier within a category; superseded/expired/archived entries are hidden by default. Non-empty searches are AND keyword matches (with CJK bigram fuzzy matching) ranked by relevance times a decay multiplier. Schema v2 adds optional, sparsely-stored fields: `origin` (manual/auto), a supersede chain (`supersedes`/`superseded_by`/`superseded_at`), `expires` (hide-on-expiry, reversible, bad dates fail-open), `pinned`, `archived`, and access bookkeeping (`last_access`/`hit_count`, throttled to once per hour). Loading old v1 data forces a backup before bumping the meta anchor; entry files are never rewritten (lazy defaults), so migration is lossless. A feature-detected `systemPrompt.context()` provider periodically reminds the agent to consolidate memories (zero extra model calls, toggleable). The panel offers scope/status/origin filtering, pin/archive quick actions, an expires editor, and talks to loopback-only `webServer` routes guarded by a process token. Credentials (including bearer tokens and connection strings with passwords) are rejected at the service boundary; other sensitive information requires user confirmation per the injected guidance. Updates supersede in place or via the supersede chain, and can move an entry between global and the current workspace. The panel exports all memories as a versioned JSON document (preserving v2 fields) and imports them back with a dry-run preview, per-entry validation, dedupe, and preserved ids/timestamps. Forgetting is manual only; decay never filters and nothing is auto-deleted. Hand edits to the Markdown files take effect immediately. A cross-process mkdir lock protects the workspace index and bulk-import writes when several DSH profiles share the same home.
+dsh-memory gives the agent durable cross-session memory. Four tools (`memory_save`, `memory_search`, `memory_update`, `memory_forget`) and a Web management panel (sidebar "Memory" entry) share one service layer over one-fact-per-entry Markdown files under `~/.dsh/.dsh-memory/`, split into a global scope and per-workspace scopes keyed by the session's effective working directory. A system-prompt section re-reads the files on every assembly and injects entries within a configurable character budget, ordering pinned entries first, then preferences over decisions over facts, then by a soft-decay multiplier within a category; superseded/expired/archived entries are hidden by default. Non-empty searches are AND keyword matches (with CJK bigram fuzzy matching) ranked by relevance times a decay multiplier. Schema v2 adds optional, sparsely-stored fields: `origin` (manual/auto), a supersede chain (`supersedes`/`superseded_by`/`superseded_at`), `expires` (hide-on-expiry, reversible, bad dates fail-open), `pinned`, `archived`, and access bookkeeping (`last_access`/`hit_count`, throttled to once per hour). Loading old v1 data forces a backup before bumping the meta anchor; entry files are never rewritten (lazy defaults), so migration is lossless. A feature-detected `systemPrompt.context()` provider turns direct-user learning signals (explicit "remember" instructions, direct corrections, corrections after a failed tool, new environment facts, repeated statements) into a one-line reminder carrying only signal ids; `memory_save` must present a live, unconsumed `signal_id` and the tool boundary enforces per-session auto-write quota (default 5) plus R0–R3 risk separation: refused (credentials/short-term/embedded-instructions/sensitive inference), pending review (procedural knowledge, broad constraints, weak/inferred signals, suspected conflicts), or active low-risk. Direct-user corrections become `constraint`-tagged preferences that inject right after pinned entries and are exempt from soft decay. Schema v3 adds a `learning/` directory (`pending.json`, append-only `audit.jsonl`, operational `state.json`) created by a backup-first, entry-preserving v2→v3 migration. The panel gains a "Learning" section for pending approval/rejection, recent auto writes (archive = reversible undo) and audit; loopback-only `/learning`, `/learning/approve`, `/learning/reject` routes back it. `scripts/eval-replay.mjs` deterministically replays mechanisms FI-1…FI-10 against isolated data roots. The panel offers scope/status/origin filtering, pin/archive quick actions, an expires editor, and talks to loopback-only `webServer` routes guarded by a process token. Credentials (including bearer tokens and connection strings with passwords) are rejected at the service boundary; other sensitive information requires user confirmation per the injected guidance. Updates supersede in place or via the supersede chain, and can move an entry between global and the current workspace. The panel exports all memories as a versioned JSON document (preserving v2 fields) and imports them back with a dry-run preview, per-entry validation, dedupe, and preserved ids/timestamps. Forgetting is manual only; decay never filters and nothing is auto-deleted. Hand edits to the Markdown files take effect immediately. A cross-process mkdir lock protects the workspace index and bulk-import writes when several DSH profiles share the same home.

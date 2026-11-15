@@ -168,7 +168,14 @@ async function main() {
       const page = document.querySelector('.dm_page')
       const max = page.scrollHeight - page.clientHeight
       if (max < 200) return { inconclusive: true, max }
-      page.scrollTop = Math.min(400, max)
+      // v0.28.0：学习分区会把工具栏自然位置推低（顶部内容高度不再固定）；
+      // 滚动距离按「工具栏静止位置 + 余量」派生，保证测试仍能把工具栏推过容器顶，
+      // 断言不变（gap≤1px），只是不再硬编码 400px。
+      const toolbarBefore = document.querySelector('.dm_toolbar_wrap')
+      const pageRect = page.getBoundingClientRect()
+      const restOffset = toolbarBefore ? toolbarBefore.getBoundingClientRect().top - pageRect.top : 0
+      const target = Math.min(max, Math.max(400, Math.ceil(restOffset) + 80))
+      page.scrollTop = target
       await new Promise(r => setTimeout(r, 450))
       const toolbar = document.querySelector('.dm_toolbar_wrap')
       const pr = page.getBoundingClientRect()
@@ -179,7 +186,7 @@ async function main() {
       const card = document.querySelector('.dm_card')
       const cr = card ? card.getBoundingClientRect() : null
       return {
-        max, scrollTop: page.scrollTop, pageTop: pr.top, toolbarTop: tr.top, toolbarBottom: tr.bottom,
+        max, scrollTop: page.scrollTop, restOffset, target, pageTop: pr.top, toolbarTop: tr.top, toolbarBottom: tr.bottom,
         gap, bandHits,
         // 露出带只在 gap>1 时存在；gap≤1 时采样点落在工具栏上，栈下层被盖住属正常吸顶。
         bandContent: gap > 1 && bandHits.some(c => /dm_card|dm_section_title|dm_content|dm_rail/.test(c)),

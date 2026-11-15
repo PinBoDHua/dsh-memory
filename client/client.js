@@ -953,6 +953,17 @@ function newImportRunId() {
     errBusy: '另一个进程正在写入，请稍后重试',
     tabMemories: '记忆',
     tabSettings: '设置',
+    learningTitle: '学习',
+    learningPendingCount: '待确认 {n}',
+    learningPendingBadge: '待确认',
+    learningAutoBadge: '自动',
+    learningReason: '原因：',
+    learningApprove: '批准',
+    learningReject: '拒绝',
+    learningArchive: '归档',
+    learningArchivedMsg: '已归档自动写入',
+    learningApproved: '已批准并写入记忆',
+    learningRejected: '已拒绝该候选',
     settingsSubtitle: '注入 · 隐私 · 存储 · 面板',
     groupInjection: '注入与召回',
     groupPrivacy: '隐私护栏',
@@ -1195,6 +1206,17 @@ function newImportRunId() {
     errBusy: 'Another process is writing; please retry shortly',
     tabMemories: 'Memories',
     tabSettings: 'Settings',
+    learningTitle: 'Learning',
+    learningPendingCount: '{n} pending',
+    learningPendingBadge: 'Pending',
+    learningAutoBadge: 'Auto',
+    learningReason: 'reason: ',
+    learningApprove: 'Approve',
+    learningReject: 'Reject',
+    learningArchive: 'Archive',
+    learningArchivedMsg: 'Auto-save archived',
+    learningApproved: 'Approved and saved',
+    learningRejected: 'Candidate rejected',
     settingsSubtitle: 'Injection · Privacy · Storage · Panel',
     groupInjection: 'Injection & recall',
     groupPrivacy: 'Privacy guard',
@@ -1527,6 +1549,15 @@ function newImportRunId() {
     '.dm_audit_tag_new{background:var(--dm-accent-soft);color:var(--dm-primary);}',
     '.dm_audit_content{font-size:12.5px;line-height:1.55;color:var(--dm-ink2);word-break:break-word;}',
     '.dm_audit_actions{display:flex;justify-content:flex-end;gap:6px;margin-top:9px;}',
+    // ---- 学习分区：待确认候选 / 最近自动写入（细线行，无装饰） ----
+    '.dm_learn_row{display:flex;align-items:flex-start;gap:12px;padding:11px 16px;border-bottom:1px solid var(--dm-line);}',
+    '.dm_learn_row:last-child{border-bottom:0;}',
+    '.dm_learn_main{flex:1;min-width:0;display:flex;flex-wrap:wrap;align-items:center;gap:8px;}',
+    '.dm_learn_badge{flex-shrink:0;font:600 10px var(--dm-mono);color:var(--dm-primary);background:var(--dm-accent-soft);border:1px solid var(--dm-accent-line);border-radius:99px;padding:1px 7px;}',
+    '.dm_learn_text{font-size:13px;line-height:1.55;color:var(--dm-ink);word-break:break-word;flex:1;min-width:0;}',
+    '.dm_learn_reason{font:500 10.5px var(--dm-mono);color:var(--dm-ink3);}',
+    '.dm_learn_time{font:500 11px var(--dm-mono);color:var(--dm-ink3);white-space:nowrap;}',
+    '.dm_learn_actions{display:flex;gap:6px;flex-shrink:0;}',
     '.dm_recall{margin-top:14px;border:1px solid var(--dm-line);border-radius:8px;padding:14px;background:var(--dm-inset);}',
     '.dm_recall_head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:2px;}',
     '.dm_recall_head .dm_label{margin:0;font-size:11.5px;}',
@@ -1825,6 +1856,9 @@ function newImportRunId() {
           stats: function (params) { return request(API_BASE + '/stats' + buildEntriesQuery(params)) },
           similar: function (params) { return request(API_BASE + '/similar' + buildEntriesQuery(params), { timeoutMs: SIMILAR_TIMEOUT_MS }) },
           recallPreview: function (workspace) { return request(API_BASE + '/recall-preview' + (workspace ? '?workspace=' + encodeURIComponent(workspace) : '')) },
+          learning: function (workspace) { return request(API_BASE + '/learning' + (workspace ? '?workspace=' + encodeURIComponent(workspace) : '')) },
+          approveLearning: function (input) { return post(API_BASE + '/learning/approve', input).then(unwrapResult) },
+          rejectLearning: function (input) { return post(API_BASE + '/learning/reject', input).then(unwrapResult) },
           export: function (params) { return request(API_BASE + '/export' + buildEntriesQuery(params || {}), { timeoutMs: EXPORT_TIMEOUT_MS }) },
           settings: function () { return request(API_BASE + '/settings') },
           saveSettings: function (input) { return post(API_BASE + '/settings', input).then(unwrapResult) },
@@ -2745,6 +2779,9 @@ function newImportRunId() {
         var bumpDataVersion = useCallback(function () { setDataVersion(function (v) { return v + 1 }) }, [])
         var auditState = useState(null)
         var audit = auditState[0]; var setAudit = auditState[1]
+        // 学习分区（v3）：待确认候选 / 最近自动写入 / 审计尾。数据失败不阻塞记忆列表。
+        var learningState = useState(null)
+        var learning = learningState[0]; var setLearning = learningState[1]
         var toastState = useState(null)
         var toast = toastState[0]; var setToast = toastState[1]
         var toastRef = useRef(null)
@@ -2972,6 +3009,36 @@ function newImportRunId() {
         }, [api, ctx, t])
 
         useEffect(function () { loadInitial() }, [loadInitial])
+
+        // 学习分区刷新：面板就绪后只自动拉一次，之后仅在显式写操作（批准/拒绝）
+        // 或用户点「刷新」时更新——避免每次切 tab 都异步插入/移除区块，破坏列表
+        // 滚动位置的稳定性（tab 切换恢复 scrollTop 的回归）。
+        var learningSeq = useRef(0)
+        var learningLoadedRef = useRef(false)
+        var learningRetryRef = useRef(0)
+        var loadLearning = useCallback(function () {
+          var seq = ++learningSeq.current
+          return api.learning(currentCwd).then(function (doc) {
+            if (seq !== learningSeq.current) return
+            learningRetryRef.current = 0
+            setLearning(doc || null)
+          }).catch(function () {
+            if (seq !== learningSeq.current) return
+            // 首次装配可能早于回环路由就绪，或宿主短暂不可用：单次失败不应让
+            // 学习分区永久缺席（用户「没看到学习」的直接原因），退避重试至多 3 次。
+            if (learningRetryRef.current >= 3) return
+            learningRetryRef.current += 1
+            var delay = 1200 * learningRetryRef.current
+            setTimeout(function () {
+              if (seq === learningSeq.current) loadLearning()
+            }, delay)
+          })
+        }, [api, currentCwd])
+        useEffect(function () {
+          if (phase !== 'ready' || learningLoadedRef.current) return
+          learningLoadedRef.current = true
+          loadLearning()
+        }, [phase, loadLearning])
 
         // 设置：加载有效值作为可编辑草稿；改动防抖自动保存（改完即生效）。
         // 加载不覆盖「防抖窗内」未保存的草稿（否则改完立刻点备份/切换会把改动回滚）。
@@ -3379,6 +3446,33 @@ function newImportRunId() {
           })
         }
 
+        // 待确认候选：批准=落盘为活跃条目（origin 沿用候选来源），拒绝=只留审计。
+        function approvePendingItem(item) {
+          if (busy) return
+          setBusy(true)
+          api.approveLearning({ pendingId: item.id, workspace: item.cwd || currentCwd }).then(function () {
+            bumpDataVersion()
+            showToast('ok', t('learningApproved'))
+            return loadLearning()
+          }).catch(writeFailure).then(function () {
+            setBusy(false)
+            refreshRef.current().catch(function () {})
+          })
+        }
+        function rejectPendingItem(item) {
+          if (busy) return
+          setBusy(true)
+          api.rejectLearning({ pendingId: item.id }).then(function () {
+            bumpDataVersion()
+            showToast('ok', t('learningRejected'))
+            return loadLearning()
+          }).catch(writeFailure).then(function () { setBusy(false) })
+        }
+        // 撤销自动写入：复用归档/恢复（可逆、留审计），不是物理删除。
+        function archiveRecentAuto(entry) {
+          toggleArchive({ id: entry.id, scope: entry.scope, archived: false })
+        }
+
         function writeFailure(err) {
           if (err.status === 403) {
             return api.status().then(function () {
@@ -3759,6 +3853,39 @@ function newImportRunId() {
                 }))))
         }
 
+        // 学习分区（v3）：只展示待确认候选与最近自动写入；数据来自 /learning 只读端点。
+        // 待确认候选永不注入、批准前不生效；「归档」撤销自动写入复用可逆归档而非删除。
+        function renderLearning() {
+          var data = learning || {}
+          var pending = Array.isArray(data.pending) ? data.pending : []
+          var recent = Array.isArray(data.recentAuto) ? data.recentAuto : []
+          if (pending.length === 0 && recent.length === 0) return null
+          var rows = []
+          pending.slice(0, 5).forEach(function (item) {
+            rows.push(h('div', { key: 'pending-' + item.id, className: 'dm_learn_row', 'data-testid': 'dm-learning-pending' },
+              h('div', { className: 'dm_learn_main' },
+                h('span', { className: 'dm_learn_badge' }, t('learningPendingBadge')),
+                h('span', { className: 'dm_learn_text', title: item.content }, item.content),
+                item.reason ? h('span', { className: 'dm_learn_reason' }, t('learningReason') + item.reason) : null),
+              h('div', { className: 'dm_learn_actions' },
+                h('button', { className: 'dm_btn dm_btn_mini dm_btn_primary', disabled: busy, onClick: function () { approvePendingItem(item) } }, t('learningApprove')),
+                h('button', { className: 'dm_btn dm_btn_mini', disabled: busy, onClick: function () { rejectPendingItem(item) } }, t('learningReject')))))
+          })
+          recent.slice(0, 3).forEach(function (entry) {
+            rows.push(h('div', { key: 'auto-' + entry.id, className: 'dm_learn_row', 'data-testid': 'dm-learning-auto' },
+              h('div', { className: 'dm_learn_main' },
+                h('span', { className: 'dm_learn_badge' }, t('learningAutoBadge')),
+                h('span', { className: 'dm_learn_text', title: entry.content }, entry.content),
+                h('span', { className: 'dm_learn_time' }, relativeTime(entry.updated, null, uiLang()))),
+              h('div', { className: 'dm_learn_actions' },
+                h('button', { className: 'dm_btn dm_btn_mini', disabled: busy, onClick: function () { archiveRecentAuto(entry) } }, t('learningArchive')))))
+          })
+          return h('section', { className: 'dm_group dm_learn', 'data-testid': 'dm-learning' },
+            h('div', { className: 'dm_section_title' }, h(Icon, { name: 'zap', size: 13 }), t('learningTitle'),
+              pending.length > 0 ? h('span', { className: 'dm_section_n' }, t('learningPendingCount').replace('{n}', String(pending.length))) : null),
+            h('div', { className: 'dm_group_body' }, rows))
+        }
+
         function renderList() {
           var filtered = !!(query || categoryFilter || originFilter || tagFilter || statusFilter !== 'active')
           // 只有「单页完整结果」时区块计数才等于真实总数；分页或筛选状态下不显示，
@@ -3865,6 +3992,7 @@ function newImportRunId() {
 // 同时保留列表/设置的滚动与焦点上下文；hidden 使非激活面板不可聚焦。
           h('div', { id: 'dm-panel-memories', role: 'tabpanel', 'aria-labelledby': 'dm-tab-memories', hidden: tab !== 'memories' },
               renderStats(),
+              renderLearning(),
               h('div', { className: 'dm_toolbar_wrap' },
                 h('div', { className: 'dm_toolbar' },
                   h(Select, {
@@ -3916,7 +4044,7 @@ function newImportRunId() {
                   h('button', { className: 'dm_btn dm_toolbtn', onClick: handleExport, disabled: busy || phase !== 'ready' }, t('export')),
                   h('button', { className: 'dm_btn dm_toolbtn', onClick: function () { if (fileInputRef.current) fileInputRef.current.click() }, disabled: busy || phase !== 'ready' }, t('import')),
                   h('button', { className: 'dm_btn dm_toolbtn', onClick: handleAudit, disabled: busy || phase !== 'ready' }, t('audit')),
-                  h('button', { className: 'dm_btn dm_toolbtn', 'aria-label': t('refreshList'), title: t('refreshList'), onClick: function () { refreshRef.current().catch(function () {}) }, disabled: busy || phase !== 'ready' }, t('refresh')),
+                  h('button', { className: 'dm_btn dm_toolbtn', 'aria-label': t('refreshList'), title: t('refreshList'), onClick: function () { refreshRef.current().catch(function () {}); loadLearning() }, disabled: busy || phase !== 'ready' }, t('refresh')),
                   h('input', { ref: fileInputRef, type: 'file', accept: '.json,application/json', style: { display: 'none' }, onChange: handleImportFile }))),
               unknownWorkspaces.length > 0 ? h('div', { className: 'dm_hint', style: { margin: '8px 0 0' } }, t('unknownWorkspaceHint')) : null,
               // 批量选择浮栏放在列表之前（视觉仍是 fixed 底部）：键盘 Tab 顺序靠近工具栏，

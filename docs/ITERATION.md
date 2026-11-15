@@ -29,8 +29,17 @@ This file is the self-iteration ledger for dsh-memory: per-round increments, ver
 | `scripts/verify-lock.mjs` | 验证脚本互斥锁 | 数据根 `.lock-verify`（data-snapshot 忽略其存在）；并发第二个脚本码 `busy` 快速退出；陈旧锁按 mtime 自愈、owner 死 PID 立即自愈；`tests/verify-lock.test.mjs` 覆盖 |
 | `scripts/watchdog.mjs` | live/gui 强杀看门狗 | 父进程启动时写清理 manifest（root/测试标记/settings 原始内容/backups 基线），detached 子进程每 1.5s 检查父存活；被 taskkill/CI 超时杀死后自动删测试条目、恢复 settings、删除新增备份与残留锁；正常结束由 cleanup 注册表停掉；`tests/watchdog.test.mjs` 覆盖，真实 `taskkill /F` 实测通过 |
 | `scripts/bench.mjs` | 大库性能基准 | `--entries=30000 [--dir=<临时根>] [--regen] [--force]`；默认复用已存在数据根，只有带 `.bench-root` marker 或目录名为 `dsh-memory-bench-*` 的目录才允许 `--regen` 删除（否则拒绝，需显式 `--force`）；输出冷/热 listAll、`indexColdListMs`（从持久化索引进程冷启动）、status、export、recallPreview、search、forgetOne 毫秒数（JSON）；`tests/bench.test.mjs` 覆盖删除决策 |
+| `scripts/eval-replay.mjs` | 学习机制确定性回放（v0.28.0） | `node scripts/eval-replay.mjs [--json] [--keep]`；FI-1…FI-10：无信号/伪造信号/manual 绕过、直接纠正→constraint、重复交代与信号重放、会话写入上限、5 次会话召回、首次新会话召回、注入顺序、R2/R3 分级、撤销恢复逐字节、v2→v3 迁移与失败注入；每个场景独立临时数据根，结束即删，不触碰真实数据 |
 
 环境注意：GUI 端口每次启动不同，以运行时上下文为准；PowerShell 5.1 输出中文需 `[Console]::OutputEncoding=[Text.Encoding]::UTF8`；`git push` 的 stderr 进度可能被 PS 报 NonZeroExit，需看内容判断。
+
+## 0.28.0 主动学习 I1（2026-11-15，设计稿 `docs/learning-design.md`）
+
+- 设计来源：与用户 4 轮设计追问（17 个决策点）后由 kimi3.1pro 修订的《主动学习与自进化：设计修订稿》；I1 范围＝信号驱动写入闭环、v3 基础存储与迁移、工具边界闸门、学习提醒、面板「学习」基础区、确定性评测基建。
+- 实现：新增 `lib/signals.js`（信号检测/R0–R3 分级/单行提醒）、`lib/learning.js`（pending/audit/state、额度、一次性消费、闸门）；`index.js` 接入 `detectSignals` + 学习 reminder（context provider，仅新信号）与 `memory_save` 闸门；`lib/{settings,render,store,service,routes}.js` 与 `client/client.js` 同步。
+- 关键不变量：规则层只检测/限流/分级（零 LLM）；自动与模型手写保存都必须绑定有效 `signal_id`；R3 不落候选正文；R2 批准前不注入；每会话自动候选 ≤5；`constraint` 注入置顶且免衰减；v3 迁移先备份、零改写条目。
+- 验证：单元 **470/470**（新增 52）、live **216/216**、真实 GUI **104/104**（新增学习分区可见性/归档按钮断言）、吸顶回归 **2/2**（滚动距离改为按工具栏静止位置派生，断言不变）、`eval-replay` **10/10**、数据根快照零残留；真实数据根 v2→v3 迁移备份成功；在用户当前 GUI 实机复验学习分区可见。
+- 已知限制（记入 backlog）：GUI 学习分区已覆盖可见性/归档按钮，审批流与摘要的完整断言留到 I4；备份不恢复 pending；规则信号存在漏检/误报（R2 可撤销、R3 拒绝）；`learning/state.json` 为 operational 数据（TTL 回收，不入快照）；设置 overlay 不再物化未触碰的嵌套默认值（新回归测试守护）；客户端学习分区首载失败会退避重试（至多 3 次）。
 
 ## 待办 Backlog
 

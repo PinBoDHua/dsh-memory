@@ -10,7 +10,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { saveResultValue, updateResultValue, sanitizeToolError, withSanitizedToolErrors } from '../index.js'
+import { savePendingResultValue, saveResultValue, updateResultValue, sanitizeToolError, withSanitizedToolErrors } from '../index.js'
 import { createMemoryService } from '../lib/service.js'
 import * as store from '../lib/store.js'
 
@@ -78,12 +78,21 @@ test('saveResultValue wraps a legacy dedupe hit without origin losslessly', () =
 test('saveResultValue keeps origin, similar and sparse revived flag lossless', () => {
   const normal = saveResultValue({ id: 'm-1', scope: 'global', category: 'fact', origin: 'auto' }, false, [{ id: 'm-old', content: '相似', score: 0.8 }], false)
   assert.equal(normal.origin, 'auto')
+  assert.equal(normal.status, 'active', 'v3 save result reports status=active for lossless consumers')
   assert.equal('revived' in normal, false)
   assertLossless(normal)
   const revived = saveResultValue({ id: 'm-2', scope: 'global', category: 'fact', origin: 'manual' }, true, [], true)
   assert.equal(revived.revived, true)
   assert.equal(revived.deduplicated, true)
   assertLossless(revived)
+})
+
+test('savePendingResultValue is lossless and carries no entry id', () => {
+  const value = savePendingResultValue({ pendingId: 'p-1', scope: 'global', category: 'preference', origin: 'auto', risk: 'R2', reason: 'repeat' })
+  assert.equal(value.status, 'pending')
+  assert.equal(value.pendingId, 'p-1')
+  assert.equal('id' in value, false, 'pending candidates have no entry id yet')
+  assertLossless(value)
 })
 
 test('normal entries keep their origin unchanged (no behavior drift)', () => {

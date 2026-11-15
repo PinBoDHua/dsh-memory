@@ -12,7 +12,8 @@ import os from 'node:os'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { apply } from '../index.js'
+import { apply, buildSignalMessages } from '../index.js'
+import { detectSignals } from '../lib/signals.js'
 import { createMemoryService } from '../lib/service.js'
 import * as store from '../lib/store.js'
 
@@ -202,10 +203,20 @@ test('system prompt injection records hits (throttled) through the ledger', () =
       logger: { warn() {} },
     }
     apply(ctx, {})
-    const session = { id: 'sess-inject', header: { cwd: 'D:\\proj' } }
+    const messages = []
+    const session = {
+      id: 'sess-inject',
+      header: { cwd: 'D:\\proj' },
+      deriveMessages: () => messages,
+    }
     const exec = { agent: { session } }
-    tools.memory_save.execute({ content: '注入命中事实甲', origin: 'auto', scope: 'global' }, exec)
-    tools.memory_save.execute({ content: '注入命中事实乙', origin: 'auto', scope: 'global' }, exec)
+    const saveWithSignal = (content) => {
+      messages.push({ role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: `记住：${content}` }] })
+      const signal = detectSignals({ sessionId: session.id, messages: buildSignalMessages(messages) })[0]
+      tools.memory_save.execute({ content, origin: 'manual', scope: 'global', signal_id: signal.id }, exec)
+    }
+    saveWithSignal('注入命中事实甲')
+    saveWithSignal('构建工具统一使用 pnpm 而不是 npm')
 
     const text = sectionText({ agent: { session } })
     assert.ok(text.includes('注入命中事实甲'), 'injected section contains memory')

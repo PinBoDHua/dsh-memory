@@ -48,8 +48,9 @@ function collectEntries(dir, prefix, out) {
 function collectJunk(root) {
   const junk = new Set()
   // mode 决定该目录里「合法文件」扩展名：root/workspaces/backups 允许 .json（元数据/备份），
-  // 条目目录只允许 .md；other（根级意外子目录）什么都不允许；其余一律视为垃圾。
-  const allowedExt = { root: '.json', workspaces: '.json', entries: '.md', backups: '.json', other: null }
+  // 条目目录只允许 .md，learning 目录允许 .json/.jsonl（pending/audit；state 为 operational），
+  // other（根级意外子目录）什么都不允许；其余一律视为垃圾。
+  const allowedExt = { root: '.json', workspaces: '.json', entries: '.md', backups: '.json', learning: null, other: null }
   const rootJsonAllowed = new Set(['settings.json', 'meta.json', 'access.json'])
   const visit = (dir, relative, mode) => {
     let names = []
@@ -67,14 +68,21 @@ function collectJunk(root) {
         if (ent.name.startsWith('.lock')) { junk.add(rel); continue }
         const childMode = ent.name === 'workspaces' ? 'workspaces'
           : ent.name === 'backups' ? 'backups'
-            : ent.name === 'global' ? 'entries'
-              : mode === 'workspaces' ? 'entries'
-                : 'other'
+            : ent.name === 'learning' ? 'learning'
+              : ent.name === 'global' ? 'entries'
+                : mode === 'workspaces' ? 'entries'
+                  : 'other'
         visit(path.join(dir, ent.name), rel, childMode)
         continue
       }
       if (ent.name.startsWith('.lock') || ent.name.includes('.tmp-')) {
         junk.add(rel)
+        continue
+      }
+      // learning/：state.json 是 operational 状态（允许变化、不入快照），其余 json/jsonl 合法。
+      if (mode === 'learning') {
+        if (ent.name === 'state.json') continue
+        if (!ent.name.endsWith('.json') && !ent.name.endsWith('.jsonl')) junk.add(rel)
         continue
       }
       // 根级除文档化排除外的 .json 一律列 junk（O12）：脚本误写 root/foo.json 必须可见。
@@ -88,6 +96,19 @@ function collectJunk(root) {
   }
   visit(root, '', 'root')
   return [...junk].sort()
+}
+
+/** 学习数据（pending/audit 等，state.json 属 operational 排除）的内容指纹。 */
+function collectLearning(root) {
+  const out = {}
+  let names = []
+  try { names = readdirSync(path.join(root, 'learning')) } catch { return out }
+  for (const name of names) {
+    if (name === 'state.json') continue
+    if (!name.endsWith('.json') && !name.endsWith('.jsonl')) continue
+    out[name] = sha256File(path.join(root, 'learning', name)) ?? '<unreadable>'
+  }
+  return out
 }
 
 /** 生成数据根快照；root 缺失时返回 null（调用方应跳过 diff 检查）。 */
@@ -105,6 +126,7 @@ export function snapshotDataRoot(root) {
   return {
     entries,
     backups,
+    learning: collectLearning(root),
     junk: collectJunk(root),
     settings: sha256File(path.join(root, 'settings.json')),
     meta: sha256File(path.join(root, 'meta.json')),
@@ -138,6 +160,7 @@ export function diffSnapshots(before, after) {
   const changes = []
   changes.push(...diffMap(before.entries || {}, after.entries || {}))
   changes.push(...diffMap(before.backups || {}, after.backups || {}))
+  changes.push(...diffMap(before.learning || {}, after.learning || {}))
   changes.push(...diffList(before.junk || [], after.junk || [], '垃圾文件'))
   if (before.settings !== after.settings) changes.push('settings.json 变更')
   if (before.meta !== after.meta) changes.push('meta.json 变更')
