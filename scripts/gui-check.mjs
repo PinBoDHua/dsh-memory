@@ -484,6 +484,32 @@ async function main() {
         return Boolean(btn) && /归档|Archive/.test((btn.textContent || '').trim())
       })()`))
 
+    // v0.29.0：存量治理入口——「合并重复」弹窗（精确重复组摘要或空态），只读打开、Esc 关闭。
+    const dupOpened = await evaluate(`(() => {
+      const btn = [...document.querySelectorAll('.dm_toolbar button')].find((el) => /合并重复|Duplicates/.test((el.textContent || '').trim()))
+      if (!btn) return false
+      btn.click()
+      return true
+    })()`)
+    await sleep(1500)
+    const dupModal = await evaluate(`(() => {
+      const dialog = document.querySelector('.dm_dialog')
+      if (!dialog) return { open: false }
+      const summary = dialog.querySelector('[data-testid="dm-duplicates-summary"]')
+      const merge = dialog.querySelector('[data-testid="dm-duplicates-merge"]')
+      return {
+        open: true,
+        hasSummary: Boolean(summary),
+        summaryText: summary ? (summary.textContent || '') : '',
+        mergeDisabled: merge ? merge.disabled : null,
+        empty: /没有可合并|No exact duplicate/.test(dialog.textContent || ''),
+      }
+    })()`)
+    check('合并重复弹窗打开（重复组摘要或空态）', dupOpened && dupModal.open && (dupModal.hasSummary || dupModal.empty), JSON.stringify(dupModal))
+    await key('Escape', 'Escape', 27)
+    await sleep(400)
+    check('合并重复弹窗 Esc 关闭（不残留遮罩）', await evaluate(`document.querySelector('.dm_dialog') === null`))
+
     // 0.25.0 去 AI 化：主容器不得再有径向氛围光/渐变背景，主按钮与卡片不得用渐变/重投影。
     const visualState = await evaluate(`(() => {
       const cs = (sel) => { const el = document.querySelector(sel); return el ? getComputedStyle(el) : null }
@@ -1124,6 +1150,14 @@ async function main() {
         }
       })()`)
       check('批量浮栏在列表之前且可聚焦（键盘可达）', selState !== null && selState.before && selState.role === 'region' && selState.buttons >= 2, JSON.stringify(selState))
+      // v0.29.0：批量归档/恢复入口与删除并列（复用 archived 字段，可逆）。
+      const selbarArchive = await evaluate(`(() => {
+        const bar = document.querySelector('.dm_selbar')
+        if (!bar) return ''
+        const btn = [...bar.querySelectorAll('button')].find((el) => /归档所选|恢复所选|Archive selected|Restore selected/.test((el.textContent || '').trim()))
+        return btn ? (btn.textContent || '').trim() : ''
+      })()`)
+      check('批量浮栏提供批量归档/恢复入口', /归档所选|恢复所选|Archive selected|Restore selected/.test(selbarArchive), String(selbarArchive))
       await evaluate(`(() => { const b = [...document.querySelectorAll('.dm_selbar button')].find((el) => /取消选择|Clear selection/.test((el.textContent || '').trim())); if (b) b.click(); return Boolean(b) })()`)
       await sleep(300)
       const clearFocus = await evaluate(`(document.activeElement ? (document.activeElement.className || '') : '').includes('dm_page')`)
@@ -1536,6 +1570,14 @@ async function main() {
       await evaluate(`(() => { const tab = document.querySelector('#dm-tab-settings'); if (tab) tab.click(); return Boolean(tab) })()`)
       await sleep(1000)
       check('设置页已打开', await evaluate(`document.querySelector('#dm-panel-settings') !== null && document.querySelectorAll('.dm_numinput').length > 0`))
+      // v0.29.0：召回预览分层（常驻/索引）与未注入原因可视化。
+      await sleep(1200)
+      const recallLayers = await evaluate(`(() => {
+        const layers = document.querySelector('[data-testid="dm-recall-layers"]')
+        const omitted = document.querySelector('[data-testid="dm-recall-omitted"]')
+        return { layers: layers ? (layers.textContent || '') : '', omitted: omitted ? (omitted.textContent || '') : '' }
+      })()`)
+      check('召回预览显示分层信息（常驻/索引）', /常驻|resident/i.test(recallLayers.layers) && /索引|index/i.test(recallLayers.layers), JSON.stringify(recallLayers))
       const setRetention = async (value) => evaluate(`(() => {
         const input = document.querySelectorAll('.dm_numinput')[0]
         if (!input) return false

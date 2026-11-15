@@ -33,6 +33,14 @@ This file is the self-iteration ledger for dsh-memory: per-round increments, ver
 
 环境注意：GUI 端口每次启动不同，以运行时上下文为准；PowerShell 5.1 输出中文需 `[Console]::OutputEncoding=[Text.Encoding]::UTF8`；`git push` 的 stderr 进度可能被 PS 报 NonZeroExit，需看内容判断。
 
+## 0.29.0 主动学习 I2（2026-11-15，设计稿 `docs/learning-design.md` §4 I2）
+
+- 分层召回：常驻层 pinned+constraint 完整正文；索引层其余活跃条目确定性单行摘要（80 字符截断）；未注入按「预算不足/单条过长」分类。`recall-preview` 与面板召回预览同步分层/原因。
+- 存量治理：精确重复组（同作用域+规范化正文+关键元数据一致）dryRun→用户确认合并（keeper=最早 created，其余归档可恢复，审计 `duplicates_merged`）；元数据不同只报告；批量归档/恢复 `/archive` 可逆+审计。
+- 面板：工具栏「合并重复」弹窗 + 批量浮栏「归档所选/恢复所选」+ 撤销；召回预览常驻（画像只读）/索引分组。
+- 评测：`eval-replay` 扩到 FI-11…FI-15（15/15），FI-15 500 条库纯函数 P95 ≤20ms（实测约 1.2ms）+ 端到端记录。
+- 验证：单元 **486/486**、live **231/231**、真实 GUI **108/108**（新增合并/归档/召回预览分层断言）、吸顶 **2/2**、快照零残留。
+
 ## 0.28.0 主动学习 I1（2026-11-15，设计稿 `docs/learning-design.md`）
 
 - 设计来源：与用户 4 轮设计追问（17 个决策点）后由 kimi3.1pro 修订的《主动学习与自进化：设计修订稿》；I1 范围＝信号驱动写入闭环、v3 基础存储与迁移、工具边界闸门、学习提醒、面板「学习」基础区、确定性评测基建。

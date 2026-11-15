@@ -658,7 +658,7 @@ test('render: guidance, budget, flat scope-tagged ordering, empty', () => {
   assert.ok(full.includes('- [workspace/decision] 工作区决策丙'))
   assert.ok(full.includes('- [workspace/fact] 工作区事实乙'))
   assert.ok(full.indexOf('m-1') < full.indexOf('m-3') && full.indexOf('m-3') < full.indexOf('m-2'))
-  assert.ok(!full.includes('未注入'))
+  assert.ok(!/另有 \d+ 条记忆未注入/.test(full))
   const tiny = renderSection(entries, { budgetChars: 30 })
   assert.ok(tiny.includes('未注入'))
   assert.ok(tiny.includes('memory_search'))

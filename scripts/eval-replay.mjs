@@ -17,7 +17,7 @@ import { buildSignalMessages } from '../index.js'
 import { createMemoryService } from '../lib/service.js'
 import { detectSignals } from '../lib/signals.js'
 import * as learning from '../lib/learning.js'
-import { selectInjection } from '../lib/render.js'
+import { selectInjection, renderSection } from '../lib/render.js'
 import * as store from '../lib/store.js'
 
 const ARGS = new Set(process.argv.slice(2))
@@ -292,6 +292,192 @@ scenario('FI-10', 'v2→v3 迁移：先备份、条目零改写、失败可恢�
   } finally {
     fs.rmSync(root2, { recursive: true, force: true })
   }
+})
+
+// ---------- FI-11 分层排序与裁剪边界 ----------
+scenario('FI-11', '分层召回：50/200/500、预算 0、恰好装满、单条过长', ({ root }) => {
+  const svc = createMemoryService({ root })
+  const now = Date.parse('2026-11-15T00:00:00.000Z')
+  const at = (n) => new Date(now - n * 60000).toISOString()
+  const mk = (id, content, extra = {}) => ({ id, scope: 'global', category: 'fact', content, updated: at(0), ...extra })
+  const pinned = mk('m-pin', '钉选常驻', { pinned: true })
+  const constraint = mk('m-con', '约束偏好', { tags: ['constraint'], category: 'preference' })
+  const index = mk('m-idx', '普通索引条目')
+  const residentLine = '- [global/fact] 钉选常驻 (id: m-pin)'
+  const constraintLine = '- [global/preference/constraint] 约束偏好 (id: m-con)'
+  const indexLineText = '- [global/fact] 普通索引条目 (id: m-idx)'
+  const entries = [pinned, constraint, index]
+
+  const exact = residentLine.length + 1 + constraintLine.length + 1 + indexLineText.length + 1
+  const full = selectInjection(entries, { budgetChars: exact, now })
+  assert.deepEqual(full.selected.map((e) => e.id), ['m-pin', 'm-con', 'm-idx'])
+  assert.equal(full.usedChars, exact)
+  assert.equal(full.omitted, 0)
+  assert.equal(full.residentSelected.length, 2)
+  assert.equal(full.indexSelected.length, 1)
+
+  const zero = selectInjection(entries, { budgetChars: 0, now })
+  assert.equal(zero.selected.length, 0)
+  assert.equal(zero.omitted, 3)
+  assert.equal(zero.oversized, 0)
+  assert.equal(zero.omittedResident, 2)
+  assert.equal(zero.omittedIndex, 1)
+
+  const tight = selectInjection(entries, { budgetChars: residentLine.length + 1, now })
+  assert.deepEqual(tight.selected.map((e) => e.id), ['m-pin'])
+  assert.equal(tight.omitted, 2)
+  assert.equal(tight.usedChars, residentLine.length + 1)
+
+  const oversizedEntry = mk('m-big', 'z'.repeat(300))
+  const over = selectInjection([oversizedEntry, index], { budgetChars: indexLineText.length + 1, now })
+  assert.equal(over.oversized, 1)
+  assert.equal(over.omitted, 1)
+  assert.deepEqual(over.selected.map((e) => e.id), ['m-idx'])
+
+  for (const count of [50, 200, 500]) {
+    const many = []
+    for (let i = 0; i < count; i += 1) {
+      many.push(i % 25 === 0
+        ? mk(`m-r-${i}`, `常驻 ${i}`, { pinned: i % 50 === 0, tags: i % 50 === 0 ? [] : ['constraint'] })
+        : mk(`m-i-${i}`, `索引 ${i} ${'q'.repeat(120)}`))
+    }
+    const picked = selectInjection(many, { budgetChars: 8000, now })
+    ok(picked.usedChars <= 8000, `used ${picked.usedChars} must fit budget`)
+    ok(picked.selected.length + picked.omitted === count, 'selected + omitted covers all active entries')
+    ok(picked.omitted === picked.omittedResident + picked.omittedIndex + picked.oversized, 'omitted math consistent')
+    ok(picked.residentSelected.length >= 1, 'resident prioritized')
+    const again = selectInjection(many, { budgetChars: 8000, now })
+    assert.deepEqual(again.selected.map((e) => e.id), picked.selected.map((e) => e.id), 'deterministic across runs')
+  }
+  // 渲染层：两层标题 + omitted 原因文案
+  const text = renderSection(entries, { budgetChars: exact, now })
+  ok(text.includes('### 常驻记忆 Resident memories') && text.includes('### 记忆索引 Memory index'), 'layered headings render')
+  const tiny = renderSection(entries, { budgetChars: 3, now })
+  ok(/另有 3 条记忆未注入/.test(tiny) && /单条过长/.test(tiny), `omitted reasons render: ${tiny.slice(-160)}`)
+})
+
+// ---------- FI-12 关键条目优先 ----------
+scenario('FI-12', '关键条目优先：预算充足 100% 常驻；超预算不破预算且原因正确', ({ root }) => {
+  const now = Date.parse('2026-11-15T00:00:00.000Z')
+  const at = (n) => new Date(now - n * 60000).toISOString()
+  const entries = []
+  for (let i = 0; i < 10; i += 1) {
+    entries.push({ id: `m-pin-${i}`, scope: 'global', category: 'preference', content: `钉选偏好 ${i}`, pinned: true, updated: at(i) })
+  }
+  for (let i = 0; i < 10; i += 1) {
+    entries.push({ id: `m-con-${i}`, scope: 'global', category: 'preference', content: `约束偏好 ${i}`, tags: ['constraint'], updated: at(i + 20) })
+  }
+  for (let i = 0; i < 190; i += 1) {
+    entries.push({ id: `m-idx-${i}`, scope: 'global', category: 'fact', content: `普通事实 ${i}`, updated: at(i + 40) })
+  }
+  const residentIds = new Set(entries.filter((e) => e.pinned || (e.tags || []).includes('constraint')).map((e) => e.id))
+  const ample = selectInjection(entries, { budgetChars: 20000, now })
+  ok([...residentIds].every((id) => ample.selected.some((e) => e.id === id)), 'all resident entries inject when budget suffices')
+  const tight = selectInjection(entries, { budgetChars: 8000, now })
+  ok(tight.usedChars <= 8000, 'budget is never exceeded')
+  ok(tight.residentSelected.length === 10 + 10, 'resident layer fully selected within 8000 chars')
+  ok(tight.omitted > 0 && tight.omitted === tight.omittedResident + tight.omittedIndex + tight.oversized, 'overflow reasons are separated')
+})
+
+// ---------- FI-13 合并边界 ----------
+scenario('FI-13', '确定性合并：仅元数据完全一致的精确重复组；dryRun 零写入；审计可追溯', ({ root }) => {
+  const svc = createMemoryService({ root })
+  const write = (id, content, extra = {}) => store.writeEntry(root, {
+    id, category: 'fact', scope: 'global', tags: [], origin: 'manual',
+    created: '2026-01-01T00:00:00.000Z', updated: '2026-01-01T00:00:00.000Z', source: '', content, ...extra,
+  })
+  write('m-same-1', '精确重复正文')
+  write('m-same-2', '精确重复正文')
+  write('m-meta-1', '同文不同元数据', { tags: ['a'] })
+  write('m-meta-2', '同文不同元数据', { tags: ['b'] })
+  write('m-near', '精确重复正文，但多一句不同的话')
+  const groups = svc.duplicateGroups({ scope: 'all' })
+  assert.equal(groups.length, 2, 'only exact same-content groups are reported')
+  const mergeable = groups.find((g) => g.mergeable === true)
+  ok(mergeable && mergeable.keeperId === 'm-same-1', 'earliest created is keeper')
+  const reportOnly = groups.find((g) => g.mergeable === false)
+  ok(reportOnly && reportOnly.metadataMismatch.length === 2, 'metadata mismatch is report-only')
+
+  const before = svc.list({ scope: 'global' }).filter((e) => e.archived !== true).length
+  const plan = svc.mergeDuplicates({ scope: 'all', dryRun: true })
+  assert.equal(plan.wouldArchive, 1)
+  assert.equal(svc.list({ scope: 'global' }).filter((e) => e.archived !== true).length, before, 'dryRun writes nothing')
+
+  const applied = svc.mergeDuplicates({ scope: 'all' })
+  assert.deepEqual(applied.archived, ['m-same-2'])
+  const audit = learning.auditTail(root).filter((e) => e.type === 'duplicates_merged')
+  ok(audit.length === 1 && audit[0].keeperId === 'm-same-1' && audit[0].archivedIds[0] === 'm-same-2', 'audit keeps keeper/archived ids')
+  ok(svc.list({ scope: 'global' }).find((e) => e.id === 'm-same-1').archived !== true, 'keeper stays active')
+  ok(svc.list({ scope: 'global' }).find((e) => e.id === 'm-same-2').archived === true, 'duplicate archived (reversible)')
+})
+
+// ---------- FI-14 批量归档恢复 ----------
+scenario('FI-14', '批量归档/恢复：可逆、审计只追加、恢复后内容哈希一致', ({ root }) => {
+  const svc = createMemoryService({ root })
+  const ids = []
+  for (let i = 0; i < 5; i += 1) {
+    const saved = svc.save({ content: `批量治理条目 ${i}`, scope: 'global', origin: 'manual' })
+    ids.push(saved.entry.id)
+  }
+  const fileOf = (id) => globalFile(root, id)
+  const before = new Map(ids.map((id) => [id, fs.readFileSync(fileOf(id), 'utf8')]))
+  const archived = svc.archiveMany({ ids: ids.slice(0, 3), workspace: undefined })
+  assert.equal(archived.archived.length, 3)
+  ok(archived.failed.length === 0, 'no failures for valid ids')
+  const visible = selectInjection(svc.list({ scope: 'global' }), { budgetChars: 8000 }).selected.map((e) => e.id)
+  ok(ids.slice(0, 3).every((id) => !visible.includes(id)), 'archived entries are not injected')
+  const restored = svc.archiveMany({ ids: ids.slice(0, 3), archived: false })
+  assert.equal(restored.restored.length, 3)
+  for (const id of ids.slice(0, 3)) ok(fs.readFileSync(fileOf(id), 'utf8') === before.get(id), `${id} restored byte-identically`)
+  const audit = learning.auditTail(root).map((e) => e.type)
+  ok(audit.includes('entries_archived') && audit.includes('entries_restored'), 'audit records both directions')
+  const visibleAgain = selectInjection(svc.list({ scope: 'global' }), { budgetChars: 8000 }).selected.map((e) => e.id)
+  ok(ids.slice(0, 3).every((id) => visibleAgain.includes(id)), 'restored entries are injectable again')
+})
+
+// ---------- FI-15 性能 ----------
+scenario('FI-15', '性能：500 条库纯选择＋渲染 P95 ≤20ms（另报端到端）', ({ root }) => {
+  const svc = createMemoryService({ root })
+  const now = Date.parse('2026-11-15T00:00:00.000Z')
+  const at = (n) => new Date(now - n * 60000).toISOString()
+  const entries = []
+  for (let i = 0; i < 500; i += 1) {
+    entries.push({
+      id: `m-perf-${i}`,
+      scope: 'global',
+      category: i % 6 === 0 ? 'preference' : i % 4 === 0 ? 'decision' : 'fact',
+      content: `${i % 20 === 0 ? '常驻' : '索引'}条目 ${i} ${'x'.repeat(40 + (i % 120))}`,
+      pinned: i % 100 === 0,
+      tags: i % 50 === 0 && i % 100 !== 0 ? ['constraint'] : [],
+      updated: at(i),
+    })
+  }
+  const rounds = 200
+  for (let i = 0; i < 20; i += 1) selectInjection(entries, { budgetChars: 8000, now })
+  const timings = []
+  for (let i = 0; i < rounds; i += 1) {
+    const start = process.hrtime.bigint()
+    const picked = selectInjection(entries, { budgetChars: 8000, now })
+    renderSection(entries, { budgetChars: 8000, now, selection: picked })
+    timings.push(Number(process.hrtime.bigint() - start) / 1e6)
+  }
+  timings.sort((a, b) => a - b)
+  const p95 = timings[Math.min(timings.length - 1, Math.floor(timings.length * 0.95))]
+  ok(p95 <= 20, `P95 ${p95.toFixed(2)}ms exceeds 20ms`)
+  // 端到端（读盘 listAll + 选择 + 渲染）单独记录，不混入纯函数门禁。
+  // 先把 500 条真实写入隔离数据根，确保端到端包含目录扫描/解析缓存路径。
+  store.writeEntryBatch(root, entries.map((entry) => ({ entry })))
+  let e2e = 0
+  for (let i = 0; i < 5; i += 1) {
+    const start = process.hrtime.bigint()
+    const list = svc.list({ scope: 'all' })
+    const picked = selectInjection(list, { budgetChars: 8000 })
+    renderSection(list, { budgetChars: 8000, selection: picked })
+    e2e = Number(process.hrtime.bigint() - start) / 1e6
+  }
+  ok(svc.list({ scope: 'all' }).length === 500, '500-entry fixture persisted to the isolated root')
+  if (!JSON_OUT) console.log(`    · FI-15 纯函数 P95=${p95.toFixed(2)}ms / 端到端≈${e2e.toFixed(2)}ms（500 条库）`)
+  ok(e2e < 500, `end-to-end ${e2e.toFixed(2)}ms looks pathological`)
 })
 
 // ---------- 汇总 ----------

@@ -673,12 +673,36 @@ async function main() {
     ok('stats.byStatus 存在', json?.stats?.byStatus && typeof json.stats.byStatus.active === 'number')
   })
 
-  await check('GET /recall-preview 召回预览（0.14.0）', async () => {
+  await check('GET /recall-preview 召回预览（0.14.0 → 0.29.0 分层）', async () => {
     const rp = await req('GET', '/recall-preview')
     ok('recall-preview HTTP 200', rp.status === 200, `got ${rp.status}`)
     const d = rp.json
     ok('recall-preview 字段齐全', typeof d?.injected === 'number' && typeof d?.omitted === 'number' && typeof d?.usedChars === 'number' && typeof d?.budgetChars === 'number' && Array.isArray(d?.entries))
     ok('recall-preview injected===entries.length', d?.injected === d?.entries?.length)
+    ok('分层字段齐全', Number.isInteger(d?.residentCount) && Number.isInteger(d?.indexCount), JSON.stringify({ r: d?.residentCount, i: d?.indexCount }))
+    ok('omitted 原因字段齐全', Number.isInteger(d?.omittedResident) && Number.isInteger(d?.omittedIndex) && Number.isInteger(d?.oversized), JSON.stringify({ br: d?.omittedResident, bi: d?.omittedIndex, o: d?.oversized }))
+    ok('omitted = 原因之和', d?.omitted === (d?.omittedResident || 0) + (d?.omittedIndex || 0) + (d?.oversized || 0))
+    ok('entries 分层标记合法', (d?.entries ?? []).every((e) => e.layer === 'resident' || e.layer === 'index'))
+    ok('entries 分层数量与统计一致', (d?.entries ?? []).filter((e) => e.layer === 'resident').length === d?.residentCount && (d?.entries ?? []).filter((e) => e.layer === 'index').length === d?.indexCount)
+  })
+
+  // 3c. 存量治理（v0.29.0）：精确重复组只读 + 合并 dry-run（零写入）+ 批量归档错误语义。
+  await check('GET /duplicates 与 dry-run 合并计划（v0.29.0）', async () => {
+    const dup = await req('GET', '/duplicates?scope=all')
+    ok('duplicates HTTP 200', dup.status === 200, `got ${dup.status}`)
+    const groups = dup.json?.groups
+    ok('duplicates groups 数组', Array.isArray(groups))
+    ok('duplicates 组结构', (groups ?? []).every((g) => typeof g.key === 'string' && Array.isArray(g.entries) && typeof g.mergeable === 'boolean' && typeof g.keeperId === 'string' && Array.isArray(g.metadataMismatch)))
+    ok('可合并组至少 2 条、keeper 在组内', (groups ?? []).filter((g) => g.mergeable).every((g) => g.entries.length >= 2 && g.entries.some((e) => e.id === g.keeperId)))
+    const plan = await req('POST', '/duplicates/merge', { token, body: { dryRun: true, scope: 'all' } })
+    ok('duplicates/merge dryRun HTTP 200', plan.status === 200, `got ${plan.status}`)
+    const r = plan.json?.result
+    ok('dryRun 计划字段', r && r.dryRun === true && Number.isInteger(r.mergeable) && Number.isInteger(r.wouldArchive) && Array.isArray(r.archived) && Array.isArray(r.failed))
+    ok('dryRun 零写入', (r.archived ?? []).length === 0 && (r.failed ?? []).length === 0)
+    const badArchive = await req('POST', '/archive', { token, body: {} })
+    ok('archive 空 ids HTTP 400', badArchive.status === 400 && badArchive.json?.code === 'invalid', JSON.stringify(badArchive.json))
+    const missingToken = await req('POST', '/duplicates/merge', { body: { dryRun: true } })
+    ok('duplicates/merge 缺 token 403', missingToken.status === 403, `got ${missingToken.status}`)
   })
 
   // 3b. 学习分区（v0.28.0）：只读端点 + 写路由错误语义；不在真实数据根制造写入。
@@ -990,6 +1014,8 @@ async function main() {
     ok('bundle 含 0.24.10 设置状态机', code.includes('settingsStatusNext') && code.includes('dm_linkbtn'))
     // 0.28.0：学习分区（待确认批准/拒绝、最近自动写入、预算/omitted 入口）。
     ok('bundle 含 0.28.0 学习分区', code.includes('learningTitle') && code.includes('learning/approve') && code.includes('dm-learning') && code.includes('approvePendingItem'))
+    // 0.29.0：分层召回 + 存量治理（合并重复/批量归档）。
+    ok('bundle 含 0.29.0 分层召回与存量治理', code.includes('duplicatesTitle') && code.includes('duplicates/merge') && code.includes('recallLayers') && code.includes('bulkArchive') && code.includes('dm-recall-layers'))
   })
 
   // 7. 清理测试条目 + 恢复设置/备份快照（正常结束与异常中断共用同一幂等清理）

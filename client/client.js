@@ -662,6 +662,28 @@ function pageSlice(entries, size) {
     return { items: list.slice(0, n), hasMore: list.length > n }
   }
 
+  /**
+ * 精确重复组合计（纯函数，存量治理用）：可合并组数 / 仅报告组数 / 合并将归档条数。
+ * mergeable 组按 entries.length-1 计（keeper 保留），与 service.mergeDuplicates 口径一致。
+ */
+function duplicatePlanSummary(groups) {
+  var list = Array.isArray(groups) ? groups : []
+  var mergeable = 0
+  var reportOnly = 0
+  var wouldArchive = 0
+  for (var i = 0; i < list.length; i++) {
+    var group = list[i] || {}
+    var entries = Array.isArray(group.entries) ? group.entries : []
+    if (group.mergeable === true && entries.length >= 2) {
+      mergeable += 1
+      wouldArchive += entries.length - 1
+    } else {
+      reportOnly += 1
+    }
+  }
+  return { groups: list.length, mergeable: mergeable, reportOnly: reportOnly, wouldArchive: wouldArchive }
+}
+
   /** 真实写入条数（imported+updated）；被判重复/拒绝的条目不算「已写入」。 */
   function importWriteCount(totals) {
     var t = totals || {}
@@ -731,7 +753,7 @@ function pageSlice(entries, size) {
     return (mb < 10 ? mb.toFixed(1) : Math.round(mb)) + ' MB'
   }
 
-  var helpers = { validateDraft: validateDraft, buildCreatePayload: buildCreatePayload, clampPageToTotal: clampPageToTotal, todayUtcIso: todayUtcIso, localDateStamp: localDateStamp, cwdCompareKey: cwdCompareKey, canonicalWorkspaceValue: canonicalWorkspaceValue, platformIsWindows: platformIsWindows, groupEntries: groupEntries, nextToken: nextToken, entriesParams: entriesParams, buildEntriesQuery: buildEntriesQuery, workspaceOptions: workspaceOptions, errorKeyFor: errorKeyFor, shouldQueueToast: shouldQueueToast, toastRemainingMs: toastRemainingMs, shouldResumeToast: shouldResumeToast, settingsSignature: settingsSignature, shouldAutoRefresh: shouldAutoRefresh, partitionSettled: partitionSettled, idSetOf: idSetOf, settleBulkDelete: settleBulkDelete, parseTags: parseTags, unwrapResult: unwrapResult, settingsStatusNext: settingsStatusNext, savedToastKey: savedToastKey, exportParams: exportParams, defaultViewSelection: defaultViewSelection, sectionCountsExact: sectionCountsExact, chunkEntries: chunkEntries, chunkEntriesPreservingLinks: chunkEntriesPreservingLinks, parseImportText: parseImportText, validateImportDoc: validateImportDoc, importSummary: importSummary, importWriteCount: importWriteCount, rebaseRejectedIndexes: rebaseRejectedIndexes, aggregateImportPlans: aggregateImportPlans, shouldFocusToastAction: shouldFocusToastAction, categoryChipCount: categoryChipCount, importRejectText: importRejectText, pageSlice: pageSlice, entryDetailRows: entryDetailRows, relativeTime: relativeTime, formatBytes: formatBytes, isExpired: isExpired, statusOf: statusOf, originOf: originOf, statusQueryFlags: statusQueryFlags }
+  var helpers = { validateDraft: validateDraft, buildCreatePayload: buildCreatePayload, clampPageToTotal: clampPageToTotal, todayUtcIso: todayUtcIso, localDateStamp: localDateStamp, cwdCompareKey: cwdCompareKey, canonicalWorkspaceValue: canonicalWorkspaceValue, platformIsWindows: platformIsWindows, groupEntries: groupEntries, nextToken: nextToken, entriesParams: entriesParams, buildEntriesQuery: buildEntriesQuery, workspaceOptions: workspaceOptions, errorKeyFor: errorKeyFor, shouldQueueToast: shouldQueueToast, toastRemainingMs: toastRemainingMs, shouldResumeToast: shouldResumeToast, settingsSignature: settingsSignature, shouldAutoRefresh: shouldAutoRefresh, partitionSettled: partitionSettled, idSetOf: idSetOf, settleBulkDelete: settleBulkDelete, parseTags: parseTags, unwrapResult: unwrapResult, settingsStatusNext: settingsStatusNext, savedToastKey: savedToastKey, exportParams: exportParams, defaultViewSelection: defaultViewSelection, sectionCountsExact: sectionCountsExact, chunkEntries: chunkEntries, chunkEntriesPreservingLinks: chunkEntriesPreservingLinks, parseImportText: parseImportText, validateImportDoc: validateImportDoc, importSummary: importSummary, importWriteCount: importWriteCount, rebaseRejectedIndexes: rebaseRejectedIndexes, aggregateImportPlans: aggregateImportPlans, shouldFocusToastAction: shouldFocusToastAction, categoryChipCount: categoryChipCount, importRejectText: importRejectText, pageSlice: pageSlice, duplicatePlanSummary: duplicatePlanSummary, entryDetailRows: entryDetailRows, relativeTime: relativeTime, formatBytes: formatBytes, isExpired: isExpired, statusOf: statusOf, originOf: originOf, statusQueryFlags: statusQueryFlags }
 
   // ===== node 测试导出（CJS） =====
   if (typeof module !== 'undefined' && module.exports) {
@@ -964,6 +986,27 @@ function newImportRunId() {
     learningArchivedMsg: '已归档自动写入',
     learningApproved: '已批准并写入记忆',
     learningRejected: '已拒绝该候选',
+    duplicates: '合并重复',
+    duplicatesTitle: '合并重复记忆',
+    duplicatesHint: '仅合并「同作用域 + 规范化正文 + 关键元数据完全一致」的精确重复：保留最早一条，其余归档（可恢复）并写审计。相似/冲突或元数据不同只报告，不自动合并。',
+    duplicatesEmpty: '没有可合并的精确重复组',
+    duplicatesSummary: '重复组 {g} / 可合并 {m} / 仅报告 {r}',
+    duplicatesMergeable: '可合并',
+    duplicatesReportOnly: '元数据不同（仅报告）',
+    duplicatesCount: '{n} 条同文',
+    duplicatesKeeper: '保留：{id}',
+    duplicatesMismatch: '元数据（分类/标签/来源/钉选/过期日）不一致，需人工处理，不自动合并。',
+    duplicatesMerge: '合并 {n} 组',
+    duplicatesMerged: '已合并 {n} 组（归档 {m} 条，可恢复）',
+    bulkArchive: '归档所选',
+    bulkRestore: '恢复所选',
+    bulkArchived: '已归档 {n} 条',
+    bulkRestored: '已恢复 {n} 条',
+    recallResidentTitle: '常驻（画像，只读）：pinned 与用户纠正形成的 constraint',
+    recallIndexTitle: '索引层（单行摘要，完整正文用 memory_search）',
+    recallLayers: '常驻 {r} 条 / 索引 {i} 条',
+    recallOmittedReasons: '未注入原因：预算不足 {b} 条 / 单条过长 {o} 条',
+    recallIndexBadge: '索引',
     settingsSubtitle: '注入 · 隐私 · 存储 · 面板',
     groupInjection: '注入与召回',
     groupPrivacy: '隐私护栏',
@@ -1217,6 +1260,27 @@ function newImportRunId() {
     learningArchivedMsg: 'Auto-save archived',
     learningApproved: 'Approved and saved',
     learningRejected: 'Candidate rejected',
+    duplicates: 'Duplicates',
+    duplicatesTitle: 'Merge duplicate memories',
+    duplicatesHint: 'Only exact duplicates with identical scope, normalized content and key metadata are merged: the earliest entry is kept, the rest are archived (reversible) with an audit record. Similar/conflicting or metadata-different entries are reported only.',
+    duplicatesEmpty: 'No exact duplicate groups to merge',
+    duplicatesSummary: '{g} groups / {m} mergeable / {r} report-only',
+    duplicatesMergeable: 'Mergeable',
+    duplicatesReportOnly: 'Metadata differs (report only)',
+    duplicatesCount: '{n} same-text entries',
+    duplicatesKeeper: 'Keep: {id}',
+    duplicatesMismatch: 'Metadata (category/tags/origin/pinned/expires) differs; needs manual handling, never auto-merged.',
+    duplicatesMerge: 'Merge {n} groups',
+    duplicatesMerged: 'Merged {n} groups ({m} archived, reversible)',
+    bulkArchive: 'Archive selected',
+    bulkRestore: 'Restore selected',
+    bulkArchived: '{n} archived',
+    bulkRestored: '{n} restored',
+    recallResidentTitle: 'Resident (profile, read-only): pinned and user-correction constraints',
+    recallIndexTitle: 'Index layer (one-line summaries; use memory_search for full text)',
+    recallLayers: '{r} resident / {i} index',
+    recallOmittedReasons: 'Not injected: {b} over budget / {o} single entry too long',
+    recallIndexBadge: 'index',
     settingsSubtitle: 'Injection · Privacy · Storage · Panel',
     groupInjection: 'Injection & recall',
     groupPrivacy: 'Privacy guard',
@@ -1856,6 +1920,9 @@ function newImportRunId() {
           stats: function (params) { return request(API_BASE + '/stats' + buildEntriesQuery(params)) },
           similar: function (params) { return request(API_BASE + '/similar' + buildEntriesQuery(params), { timeoutMs: SIMILAR_TIMEOUT_MS }) },
           recallPreview: function (workspace) { return request(API_BASE + '/recall-preview' + (workspace ? '?workspace=' + encodeURIComponent(workspace) : '')) },
+          duplicates: function (params) { return request(API_BASE + '/duplicates' + buildEntriesQuery({ scope: (params && params.scope) || 'all', workspace: params && params.workspace })) },
+          mergeDuplicates: function (input) { return post(API_BASE + '/duplicates/merge', input) },
+          archive: function (input) { return post(API_BASE + '/archive', input) },
           learning: function (workspace) { return request(API_BASE + '/learning' + (workspace ? '?workspace=' + encodeURIComponent(workspace) : '')) },
           approveLearning: function (input) { return post(API_BASE + '/learning/approve', input).then(unwrapResult) },
           rejectLearning: function (input) { return post(API_BASE + '/learning/reject', input).then(unwrapResult) },
@@ -2343,6 +2410,45 @@ function newImportRunId() {
           h('div', { className: 'dm_setgroup_body' }, props.children))
       }
 
+      function DuplicatesModal(props) {
+        var t = props.t
+        var groups = props.groups || []
+        var plan = duplicatePlanSummary(groups)
+        return h(Modal, { title: t('duplicatesTitle'), onClose: props.onClose, busy: props.busy },
+          h('div', { className: 'dm_dialog_head' },
+            h('div', { className: 'dm_dialog_medal dm_dialog_medal_primary' }, h(Icon, { name: 'copy', size: 17, strokeWidth: 2 })),
+            h('h2', { className: 'dm_dialog_title' }, t('duplicatesTitle'))),
+          h('div', { className: 'dm_hint', style: { marginBottom: 12 } }, t('duplicatesHint')),
+          groups.length === 0
+            ? h('div', { className: 'dm_empty', style: { padding: '24px 0' } },
+              h(Icon, { name: 'checkCircle', size: 28, style: { color: 'var(--dm-success)', marginBottom: 10 } }),
+              h('div', null, t('duplicatesEmpty')))
+            : h('div', null,
+              h('div', { className: 'dm_hint', 'data-testid': 'dm-duplicates-summary' },
+                t('duplicatesSummary').replace('{g}', String(plan.groups)).replace('{m}', String(plan.mergeable)).replace('{r}', String(plan.reportOnly))),
+              h('div', { className: 'dm_audit_list', style: { marginTop: 10 } },
+                groups.slice(0, 30).map(function (group) {
+                  var entries = Array.isArray(group.entries) ? group.entries : []
+                  return h('div', { key: group.key, className: 'dm_audit_pair' },
+                    h('div', { className: 'dm_audit_score' }, group.mergeable ? t('duplicatesMergeable') : t('duplicatesReportOnly')),
+                    h('div', { className: 'dm_audit_side' },
+                      h('span', { className: 'dm_audit_tag' }, t('duplicatesCount').replace('{n}', String(entries.length))),
+                      h('span', { className: 'dm_audit_content' }, group.content)),
+                    h('div', { className: 'dm_audit_side' },
+                      h('span', { className: 'dm_audit_tag dm_audit_tag_new' }, t('duplicatesKeeper').replace('{id}', String(group.keeperId)))),
+                    group.mergeable ? null : h('div', { className: 'dm_hint', style: { marginTop: 6 } }, t('duplicatesMismatch')))
+                })),
+              groups.length > 30 ? h('div', { className: 'dm_hint' }, '… +' + (groups.length - 30)) : null),
+          h('div', { className: 'dm_dialog_footer' },
+            h('button', { className: 'dm_btn', onClick: props.onClose, disabled: props.busy }, t('cancel')),
+            h('button', {
+              className: 'dm_btn dm_btn_primary',
+              onClick: props.onMerge,
+              disabled: props.busy || plan.mergeable === 0,
+              'data-testid': 'dm-duplicates-merge',
+            }, h(Icon, { name: 'check', size: 14, strokeWidth: 2.2 }), t('duplicatesMerge').replace('{n}', String(plan.mergeable)))))
+      }
+
       function RecallPreview(props) {
         var t = props.t
         var api = props.api
@@ -2377,6 +2483,18 @@ function newImportRunId() {
         var summary = data
           ? t('recallSummary').replace('{injected}', String(data.injected)).replace('{omitted}', String(data.omitted)).replace('{used}', String(data.usedChars)).replace('{budget}', String(data.budgetChars))
           : ''
+        var residentEntries = data ? data.entries.filter(function (entry) { return entry.layer === 'resident' }) : []
+        var indexEntries = data ? data.entries.filter(function (entry) { return entry.layer !== 'resident' }) : []
+        var omittedBudget = data ? (Number(data.omittedResident) || 0) + (Number(data.omittedIndex) || 0) : 0
+        var oversized = data ? (Number(data.oversized) || 0) : 0
+        function recallItem(entry) {
+          var meta = CATEGORY_META[entry.category] || CATEGORY_META.fact
+          var text = String(entry.content || '')
+          return h('div', { key: entry.id, className: 'dm_recall_item' },
+            h('span', { className: 'dm_recall_cat', style: { '--dm-cat': meta.cat } }, t(meta.label)),
+            h('span', { className: 'dm_recall_content' }, text.length > 60 ? text.slice(0, 60) + '…' : text),
+            entry.layer === 'index' ? h('span', { className: 'dm_hint', style: { marginLeft: 8, fontSize: 10 } }, t('recallIndexBadge')) : null)
+        }
         return h('div', { className: 'dm_recall' },
           h('div', { className: 'dm_recall_head' },
             h('span', { className: 'dm_label' }, h(Icon, { name: 'database', size: 13 }), t('recallTitle')),
@@ -2386,15 +2504,18 @@ function newImportRunId() {
             : !data ? h('div', { className: 'dm_hint' }, t('recallLoading'))
             : h('div', null,
               h('div', { className: 'dm_hint' }, summary + (data.autoInject ? '' : ' ' + t('recallAutoOff'))),
-              data.entries.length > 0
+              h('div', { className: 'dm_hint', 'data-testid': 'dm-recall-layers' },
+                t('recallLayers').replace('{r}', String(data.residentCount || 0)).replace('{i}', String(data.indexCount || 0))),
+              data.omitted > 0
+                ? h('div', { className: 'dm_hint', 'data-testid': 'dm-recall-omitted' },
+                  t('recallOmittedReasons').replace('{b}', String(omittedBudget)).replace('{o}', String(oversized)))
+                : null,
+              residentEntries.length + indexEntries.length > 0
                 ? h('div', { className: 'dm_recall_list' },
-                  data.entries.slice(0, 30).map(function (e) {
-                    var meta = CATEGORY_META[e.category] || CATEGORY_META.fact
-                    return h('div', { key: e.id, className: 'dm_recall_item' },
-                      h('span', { className: 'dm_recall_cat', style: { '--dm-cat': meta.cat } }, t(meta.label)),
-                      h('span', { className: 'dm_recall_content' }, e.content.length > 60 ? e.content.slice(0, 60) + '…' : e.content))
-                  }),
-                  data.entries.length > 30 ? h('div', { className: 'dm_hint' }, '… +' + (data.entries.length - 30)) : null)
+                  residentEntries.length > 0 ? h('div', { className: 'dm_hint', style: { fontWeight: 600 } }, t('recallResidentTitle')) : null,
+                  residentEntries.slice(0, 20).map(recallItem),
+                  indexEntries.length > 0 ? h('div', { className: 'dm_hint', style: { fontWeight: 600, marginTop: 6 } }, t('recallIndexTitle')) : null,
+                  indexEntries.slice(0, 20).map(recallItem))
                 : null))
       }
 
@@ -2779,6 +2900,9 @@ function newImportRunId() {
         var bumpDataVersion = useCallback(function () { setDataVersion(function (v) { return v + 1 }) }, [])
         var auditState = useState(null)
         var audit = auditState[0]; var setAudit = auditState[1]
+        // 存量治理（v0.29.0）：精确重复组弹窗与合并入口。
+        var duplicatesState = useState(null)
+        var duplicates = duplicatesState[0]; var setDuplicates = duplicatesState[1]
         // 学习分区（v3）：待确认候选 / 最近自动写入 / 审计尾。数据失败不阻塞记忆列表。
         var learningState = useState(null)
         var learning = learningState[0]; var setLearning = learningState[1]
@@ -2850,7 +2974,7 @@ function newImportRunId() {
         var confirmRef = useRef(null)
         confirmRef.current = confirm
         var modalOpenRef = useRef(false)
-        modalOpenRef.current = !!(editor || confirm || importPlan || audit)
+        modalOpenRef.current = !!(editor || confirm || importPlan || audit || duplicates)
         var importStopRef = useRef(false)
         var selectedRef = useRef(selected)
         selectedRef.current = selected
@@ -3797,6 +3921,56 @@ function newImportRunId() {
           setAudit(Object.assign({}, audit, { pairs: audit.pairs.filter(function (p) { return !(p.older.id === pair.older.id && p.newer.id === pair.newer.id) }) }))
         }
 
+        // ---- 存量治理（v0.29.0）：精确重复组合并 + 批量归档/恢复 ----
+        function handleDuplicates() {
+          if (busy) return
+          setBusy(true)
+          var params = auditParams()
+          api.duplicates(params).then(function (payload) {
+            setDuplicates({ groups: (payload && payload.groups) || [], params: params })
+          }).catch(writeFailure).then(function () { setBusy(false) })
+        }
+        function mergeDuplicatesNow() {
+          if (busy || !duplicates) return
+          setBusy(true)
+          var params = duplicates.params
+          api.mergeDuplicates({ scope: params.scope, workspace: params.workspace }).then(function (payload) {
+            var result = (payload && payload.result) || {}
+            var archived = Array.isArray(result.archived) ? result.archived : []
+            bumpDataVersion()
+            setDuplicates(null)
+            showToast(archived.length > 0 ? 'ok' : 'info',
+              t('duplicatesMerged').replace('{n}', String(Number(result.mergeable) || 0)).replace('{m}', String(archived.length)))
+            return refreshRef.current().catch(function () {})
+          }).catch(writeFailure).then(function () { setBusy(false) })
+        }
+        function bulkArchiveSelected() {
+          if (busy || selected.length === 0) return
+          var ids = selected.slice()
+          var restoring = statusFilter === 'archived'
+          setBusy(true)
+          api.archive({ ids: ids, archived: !restoring, workspace: currentCwd }).then(function (payload) {
+            var result = (payload && payload.result) || {}
+            var done = restoring ? (result.restored || []) : (result.archived || [])
+            bumpDataVersion()
+            setSelected([])
+            if (done.length > 0) {
+              showToast('ok', t(restoring ? 'bulkRestored' : 'bulkArchived').replace('{n}', String(done.length)), {
+                label: t('undo'),
+                run: function () {
+                  api.archive({ ids: done, archived: restoring, workspace: currentCwd }).then(function () {
+                    bumpDataVersion()
+                    refreshRef.current().catch(function () {})
+                  }).catch(writeFailure)
+                },
+              })
+            } else {
+              showToast('error', t('errStaleSelection'))
+            }
+            return refreshRef.current().catch(function () {})
+          }).catch(writeFailure).then(function () { setBusy(false) })
+        }
+
         function renderStats() {
           var total = stats ? stats.total : null
           var cats = ['preference', 'fact', 'decision']
@@ -4044,6 +4218,7 @@ function newImportRunId() {
                   h('button', { className: 'dm_btn dm_toolbtn', onClick: handleExport, disabled: busy || phase !== 'ready' }, t('export')),
                   h('button', { className: 'dm_btn dm_toolbtn', onClick: function () { if (fileInputRef.current) fileInputRef.current.click() }, disabled: busy || phase !== 'ready' }, t('import')),
                   h('button', { className: 'dm_btn dm_toolbtn', onClick: handleAudit, disabled: busy || phase !== 'ready' }, t('audit')),
+                  h('button', { className: 'dm_btn dm_toolbtn', onClick: handleDuplicates, disabled: busy || phase !== 'ready' }, t('duplicates')),
                   h('button', { className: 'dm_btn dm_toolbtn', 'aria-label': t('refreshList'), title: t('refreshList'), onClick: function () { refreshRef.current().catch(function () {}); loadLearning() }, disabled: busy || phase !== 'ready' }, t('refresh')),
                   h('input', { ref: fileInputRef, type: 'file', accept: '.json,application/json', style: { display: 'none' }, onChange: handleImportFile }))),
               unknownWorkspaces.length > 0 ? h('div', { className: 'dm_hint', style: { margin: '8px 0 0' } }, t('unknownWorkspaceHint')) : null,
@@ -4052,6 +4227,7 @@ function newImportRunId() {
               selected.length > 0
                 ? h('div', { className: 'dm_selbar', role: 'region', 'aria-label': t('bulkSelected').replace('{n}', String(selected.length)) },
                   h('span', { className: 'dm_selbar_n', 'aria-live': 'polite' }, t('bulkSelected').replace('{n}', String(selected.length))),
+                  h('button', { className: 'dm_btn', onClick: bulkArchiveSelected, disabled: busy }, t(statusFilter === 'archived' ? 'bulkRestore' : 'bulkArchive')),
                   h('button', { className: 'dm_btn dm_btn_danger_solid', onClick: openBulkDelete, disabled: busy }, h(Icon, { name: 'trash', size: 14 }), t('bulkDelete')),
                   h('button', { className: 'dm_btn', onClick: function () { setSelected([]); if (pageRef.current) { try { pageRef.current.focus() } catch { /* ignore */ } } }, disabled: busy }, t('clearSelection')))
                 : null,
@@ -4073,6 +4249,7 @@ function newImportRunId() {
           confirm ? h(ConfirmModal, { entries: confirm.entries, t: t, busy: busy, onConfirm: handleDelete, onClose: function () { if (!busy) setConfirm(null) } }) : null,
           importPlan ? h(ImportModal, { plan: importPlan.plan, mode: importPlan.mode, progress: importProgress, confirming: importConfirming, previewing: importPreviewing, t: t, busy: busy, onStop: function () { importStopRef.current = true }, onConfirm: confirmImport, onModeChange: changeImportMode, onClose: function () { if (!busy) setImportPlan(null) } }) : null,
           audit ? h(AuditModal, { pairs: audit.pairs, t: t, busy: busy, onSupersede: handleSupersedePair, onDismiss: dismissPair, onClose: function () { if (!busy) setAudit(null) } }) : null,
+          duplicates ? h(DuplicatesModal, { groups: duplicates.groups, t: t, busy: busy, onMerge: mergeDuplicatesNow, onClose: function () { if (!busy) setDuplicates(null) } }) : null,
           toast ? h(Toast, { key: toast.id, toast: toast, t: t, raised: selected.length > 0, onClose: dismissToast, actionRef: toastActionRef, onPause: pauseToast, onResume: resumeToast }) : null)
       }
 

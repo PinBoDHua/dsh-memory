@@ -8,7 +8,18 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import helpers from '../client/client.js'
 
-const { validateDraft, buildCreatePayload, clampPageToTotal, todayUtcIso, localDateStamp, cwdCompareKey, canonicalWorkspaceValue, groupEntries, nextToken, entriesParams, buildEntriesQuery, workspaceOptions, errorKeyFor, shouldQueueToast, partitionSettled, parseTags, unwrapResult, settingsStatusNext, savedToastKey, exportParams, defaultViewSelection, sectionCountsExact, chunkEntries, chunkEntriesPreservingLinks, aggregateImportPlans, shouldFocusToastAction, categoryChipCount, importRejectText, importWriteCount, rebaseRejectedIndexes, parseImportText, validateImportDoc, importSummary, pageSlice, entryDetailRows, relativeTime, formatBytes, isExpired, statusOf, originOf, statusQueryFlags, settleBulkDelete, idSetOf, toastRemainingMs, shouldResumeToast, settingsSignature, shouldAutoRefresh } = helpers
+const { validateDraft, buildCreatePayload, clampPageToTotal, todayUtcIso, localDateStamp, cwdCompareKey, canonicalWorkspaceValue, groupEntries, nextToken, entriesParams, buildEntriesQuery, workspaceOptions, errorKeyFor, shouldQueueToast, partitionSettled, parseTags, unwrapResult, settingsStatusNext, savedToastKey, exportParams, defaultViewSelection, sectionCountsExact, chunkEntries, chunkEntriesPreservingLinks, aggregateImportPlans, shouldFocusToastAction, categoryChipCount, importRejectText, importWriteCount, rebaseRejectedIndexes, parseImportText, validateImportDoc, importSummary, pageSlice, duplicatePlanSummary, entryDetailRows, relativeTime, formatBytes, isExpired, statusOf, originOf, statusQueryFlags, settleBulkDelete, idSetOf, toastRemainingMs, shouldResumeToast, settingsSignature, shouldAutoRefresh } = helpers
+
+test('duplicatePlanSummary counts mergeable/report-only groups and archive targets', () => {
+  const groups = [
+    { key: 'a', mergeable: true, entries: [{ id: '1' }, { id: '2' }, { id: '3' }] },
+    { key: 'b', mergeable: false, entries: [{ id: '4' }, { id: '5' }] },
+    { key: 'c', mergeable: true, entries: [{ id: '6' }, { id: '7' }] },
+    { key: 'd', mergeable: true, entries: [{ id: '8' }] },
+  ]
+  assert.deepEqual(duplicatePlanSummary(groups), { groups: 4, mergeable: 2, reportOnly: 2, wouldArchive: 3 })
+  assert.deepEqual(duplicatePlanSummary(null), { groups: 0, mergeable: 0, reportOnly: 0, wouldArchive: 0 })
+})
 
 test('validateDraft accepts a complete draft and rejects bad ones', () => {
   assert.deepEqual(validateDraft({ content: '一条事实', category: 'fact' }), { ok: true })

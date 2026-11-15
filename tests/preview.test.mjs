@@ -36,7 +36,7 @@ test('selectInjection fills budget by priority, counts omitted and usedChars', (
   assert.equal(tight.usedChars, prefLine.length + 1)
 })
 
-test('selectInjection excludes hidden entries; empty input yields zeros', () => {
+test('selectInjection excludes hidden entries; empty input yields zeroed layered result', () => {
   const entries = [
     { id: 'm-a', scope: 'global', category: 'fact', content: '活跃', updated: '2026-01-01' },
     { id: 'm-b', scope: 'global', category: 'fact', content: '归档', updated: '2026-01-02', archived: true },
@@ -44,14 +44,26 @@ test('selectInjection excludes hidden entries; empty input yields zeros', () => 
   const res = selectInjection(entries, { budgetChars: 6000 })
   assert.equal(res.selected.length, 1)
   assert.equal(res.selected[0].id, 'm-a')
-  assert.deepEqual(selectInjection([], {}), { selected: [], omitted: 0, usedChars: 0 })
+  assert.deepEqual(selectInjection([], {}), {
+    selected: [],
+    residentSelected: [],
+    indexSelected: [],
+    usedChars: 0,
+    budgetChars: 8000,
+    omitted: 0,
+    omittedResident: 0,
+    omittedIndex: 0,
+    oversized: 0,
+  })
 })
 
-test('selectInjection budget 0 omits all active entries', () => {
+test('selectInjection budget 0 omits all active entries by budget (not oversized)', () => {
   const entries = [{ id: 'm-a', scope: 'global', category: 'fact', content: 'x', updated: '2026-01-01' }]
   const res = selectInjection(entries, { budgetChars: 0 })
   assert.equal(res.selected.length, 0)
   assert.equal(res.omitted, 1)
+  assert.equal(res.omittedIndex, 1)
+  assert.equal(res.oversized, 0)
   assert.equal(res.usedChars, 0)
 })
 
@@ -67,10 +79,15 @@ test('service.recallPreview reports injected/omitted/usedChars/budget and entrie
   assert.equal(p.budgetChars, 8000)
   assert.equal(p.injected, 2)
   assert.equal(p.omitted, 0)
+  assert.equal(p.omittedResident, 0)
+  assert.equal(p.omittedIndex, 0)
+  assert.equal(p.oversized, 0)
+  assert.equal(p.residentCount, 0, 'no pinned/constraint entries in this fixture')
+  assert.equal(p.indexCount, 2)
   assert.ok(p.usedChars > 0)
   assert.equal(p.entries.length, 2)
   assert.equal(p.entries[0].category, 'preference')
-  assert.ok(p.entries.every((e) => typeof e.id === 'string' && typeof e.content === 'string' && typeof e.pinned === 'boolean'))
+  assert.ok(p.entries.every((e) => typeof e.id === 'string' && typeof e.content === 'string' && typeof e.pinned === 'boolean' && typeof e.constraint === 'boolean' && e.layer === 'index'))
 })
 
 test('service.recallPreview reflects budget overlay (0 omits all)', () => {
@@ -83,6 +100,8 @@ test('service.recallPreview reflects budget overlay (0 omits all)', () => {
   assert.equal(p.budgetChars, 0)
   assert.equal(p.injected, 0)
   assert.equal(p.omitted, 2)
+  assert.equal(p.omittedIndex, 2)
+  assert.equal(p.oversized, 0)
   assert.deepEqual(p.entries, [])
 })
 
@@ -106,5 +125,7 @@ test('GET /recall-preview returns preview doc from loopback', async () => {
   const doc = res.json()
   assert.equal(doc.injected, 1)
   assert.equal(doc.budgetChars, 8000)
+  assert.ok(Number.isInteger(doc.residentCount) && Number.isInteger(doc.indexCount))
+  assert.ok(Number.isInteger(doc.omittedResident) && Number.isInteger(doc.omittedIndex) && Number.isInteger(doc.oversized))
   assert.ok(Array.isArray(doc.entries))
 })

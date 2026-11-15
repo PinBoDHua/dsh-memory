@@ -3,6 +3,21 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.29.0] - 2026-11-15
+
+### 新增 Added — 主动学习 I2：分层召回与存量治理
+- **分层召回**：常驻层（pinned + constraint，完整正文，装不下整条省略、永不截断）→ 索引层（其余活跃条目的**确定性单行摘要**，正文超 80 字符截断加 …，完整内容用 memory_search 按 id 读取）。500 条库不再被长正文挤爆预算；`renderSection` 输出「### 常驻记忆 / ### 记忆索引」两层。
+- **预算与 omitted 原因可视化**：`selectInjection` 返回 `residentSelected/indexSelected/omittedResident/omittedIndex/oversized/usedChars`；注入文本按「预算不足 / 单条过长」分类提示；`GET /recall-preview` 下发 `residentCount/indexCount/omitted*` 与每条 `layer/constraint/truncated`；设置页召回预览显示常驻（画像，只读）与索引分组。
+- **确定性存量治理**：新增 `GET /duplicates`（同作用域+规范化正文完全一致的精确重复组；元数据不同只报告）、`POST /duplicates/merge`（dryRun 计划 + 用户确认后合并：保留最早一条、其余归档（可逆）、写审计 `duplicates_merged`）、`POST /archive`（批量归档/恢复，可逆、审计）。面板工具栏「合并重复」弹窗（可合并/仅报告计数、keeper、合并按钮）+ 批量浮栏「归档所选/恢复所选」+ 撤销。
+- **性能基线**：FI-15 固定 500 条 fixture 纯选择+渲染 P95 ≤20ms（实测约 1.2ms），读盘端到端单独记录。
+
+### 变更 Changed
+- `selectInjection` 返回值扩展（`selected/omitted/usedChars` 语义保持兼容）；`renderSection` 分层标题与 omitted 原因文案。
+- 批量归档/恢复复用 `archived` 字段（operational 更新不刷新 `updated`），恢复后条目文件逐字节相同；访问暴露与存活不触发任何自动归档。
+
+### 验证证据
+- 单元 **486/486**（新增 16：render-layers 6 / curation 10，另修 preview/store 既有断言）；live **231/231**（新增分层召回字段、重复组合并 dry-run、批量归档错误语义与 bundle 标记断言）；真实 GUI **108/108**（新增合并重复弹窗/Esc、批量归档入口、召回预览分层断言）；吸顶 **2/2**；`eval-replay` **15/15**（新增 FI-11…FI-15，FI-15 500 条库纯选择+渲染 P95≈1.2ms）；数据根快照前后一致、零残留。
+
 ## [0.28.0] - 2026-11-15
 
 ### 新增 Added — 主动学习 I1：信号驱动写入闭环（设计稿 `docs/learning-design.md`）
