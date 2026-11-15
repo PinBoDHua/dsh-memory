@@ -50,7 +50,7 @@ function collectJunk(root) {
   // mode 决定该目录里「合法文件」扩展名：root/workspaces/backups 允许 .json（元数据/备份），
   // 条目目录只允许 .md，learning 目录允许 .json/.jsonl（pending/audit；state 为 operational），
   // other（根级意外子目录）什么都不允许；其余一律视为垃圾。
-  const allowedExt = { root: '.json', workspaces: '.json', entries: '.md', backups: '.json', learning: null, other: null }
+  const allowedExt = { root: '.json', workspaces: '.json', entries: '.md', backups: '.json', learning: null, skills: '.md', other: null }
   const rootJsonAllowed = new Set(['settings.json', 'meta.json', 'access.json'])
   const visit = (dir, relative, mode) => {
     let names = []
@@ -69,9 +69,11 @@ function collectJunk(root) {
         const childMode = ent.name === 'workspaces' ? 'workspaces'
           : ent.name === 'backups' ? 'backups'
             : ent.name === 'learning' ? 'learning'
-              : ent.name === 'global' ? 'entries'
-                : mode === 'workspaces' ? 'entries'
-                  : 'other'
+              : ent.name === 'skills' ? 'skills'
+                : ent.name === 'global' ? 'entries'
+                  : mode === 'workspaces' ? 'entries'
+                    : mode === 'skills' ? 'skills'
+                      : 'other'
         visit(path.join(dir, ent.name), rel, childMode)
         continue
       }
@@ -111,6 +113,24 @@ function collectLearning(root) {
   return out
 }
 
+/** 程序性知识正文（skills/<id>.md 与 skills/.revisions/<id>/<v>.md）内容指纹。 */
+function collectSkills(root) {
+  const out = {}
+  const walk = (dir, prefix) => {
+    let names = []
+    try { names = readdirSync(dir, { withFileTypes: true }) } catch { return }
+    for (const ent of names) {
+      const full = path.join(dir, ent.name)
+      const rel = prefix ? `${prefix}/${ent.name}` : ent.name
+      if (ent.isDirectory()) { walk(full, rel); continue }
+      if (!ent.name.endsWith('.md')) continue
+      out[rel] = sha256File(full) ?? '<unreadable>'
+    }
+  }
+  walk(path.join(root, 'skills'), 'skills')
+  return out
+}
+
 /** 生成数据根快照；root 缺失时返回 null（调用方应跳过 diff 检查）。 */
 export function snapshotDataRoot(root) {
   if (!root) return null
@@ -127,6 +147,7 @@ export function snapshotDataRoot(root) {
     entries,
     backups,
     learning: collectLearning(root),
+    skills: collectSkills(root),
     junk: collectJunk(root),
     settings: sha256File(path.join(root, 'settings.json')),
     meta: sha256File(path.join(root, 'meta.json')),
@@ -161,6 +182,7 @@ export function diffSnapshots(before, after) {
   changes.push(...diffMap(before.entries || {}, after.entries || {}))
   changes.push(...diffMap(before.backups || {}, after.backups || {}))
   changes.push(...diffMap(before.learning || {}, after.learning || {}))
+  changes.push(...diffMap(before.skills || {}, after.skills || {}))
   changes.push(...diffList(before.junk || [], after.junk || [], '垃圾文件'))
   if (before.settings !== after.settings) changes.push('settings.json 变更')
   if (before.meta !== after.meta) changes.push('meta.json 变更')

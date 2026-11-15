@@ -33,6 +33,14 @@ This file is the self-iteration ledger for dsh-memory: per-round increments, ver
 
 环境注意：GUI 端口每次启动不同，以运行时上下文为准；PowerShell 5.1 输出中文需 `[Console]::OutputEncoding=[Text.Encoding]::UTF8`；`git push` 的 stderr 进度可能被 PS 报 NonZeroExit，需看内容判断。
 
+## 0.30.0 主动学习 I3（2026-11-15，设计稿 `docs/learning-design.md` §4 I3）
+
+- spike：desktop profile 未启用 `tool-skill`/`skill-filesystem`，插件不得 import @deepseek-ai/* → 采用 fallback（自有 `memory_skill_load` 读取 `skills/*.md`），provider 集成留待有 skill 工具的 profile。
+- 程序性知识：正文 `skills/<id>.md` 与记忆索引条目（tag `skill-index`）分离；候选需 signal（同一学习闸门）且一律 pending，批准后才索引/可加载；修订重新待确认，拒绝可恢复上一已批准版本；`skills/.revisions/<id>/<v>.md` 版本快照 + `/skills/rollback` 回滚（版本+1，索引同步）；id/路径严格校验、approved 才可加载、渲染标注不可信参考数据。
+- 面板学习分区新增技能待批（批准/拒绝）与已批准技能（回滚上一版）；导出/备份/快照纳入 skills。
+- 评测：eval-replay 扩到 FI-16…FI-18（18/18）。
+- 验证：单元 **494/494**、live **240/240**、真实 GUI **108/108**、吸顶 **2/2**、快照零残留。
+
 ## 0.29.0 主动学习 I2（2026-11-15，设计稿 `docs/learning-design.md` §4 I2）
 
 - 分层召回：常驻层 pinned+constraint 完整正文；索引层其余活跃条目确定性单行摘要（80 字符截断）；未注入按「预算不足/单条过长」分类。`recall-preview` 与面板召回预览同步分层/原因。

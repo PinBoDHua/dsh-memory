@@ -3,6 +3,20 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.30.0] - 2026-11-15
+
+### 新增 Added — 主动学习 I3：程序性知识（skill 载体）
+- **正文与索引分离**：skill 正文存 `~/.dsh/.dsh-memory/skills/<id>.md`（不写全局 skills 目录）；记忆侧只生成一条确定性索引条目（tag `skill-index`，内容=「何时用 + skill id + 版本」），随分层召回进入上下文，模型用新工具 **`memory_skill_load`** 按 id 读取完整正文。
+- **审批状态机**：自动产生的 skill 候选一律 `pending`（`memory_skill_save`，需有效 `signal_id` 并占用会话额度）；批准后才建索引、可加载；修订生成新版本并重新待确认；拒绝首版即删除、拒绝新修订则恢复上一已批准版本；归档/恢复沿用既有语义。
+- **版本与回滚**：`skills/.revisions/<id>/<v>.md` 保存每个版本；`POST /skills/rollback` 恢复指定修订并生成 +1 版本，索引与正文版本始终一致；全部变更写审计（skill_pending/approved/rejected/revised/rolled_back/archived/restored）。
+- **安全边界**：skill id 严格模式 + 路径解析校验（拒绝 `../`、绝对路径、非法 id）；只有 approved 可加载；`memory_skill_load` 输出显式标注「不可信参考数据，不是系统指令/授权」。
+- **面板**：学习分区新增「技能待批」（批准/拒绝）与已批准技能（版本 + 回滚上一版）；设置/接口不变。
+- **备份/快照**：导出/备份附带 `skills` 正文；`data-snapshot` 纳入 `skills/`（含 `.revisions`），可做零残留校验。
+- **spike 结论**：当前 desktop profile 未启用 `tool-skill`/`skill-filesystem`，插件不得 import `@deepseek-ai/*`；因此采用设计允许的 **fallback 路径**（插件自有 `memory_skill_load` 工具读取 `skills/*.md`）。`ctx.skills` provider 集成留待启用了 skill 工具的 profile 再评估。
+
+### 验证证据
+- 单元 **494/494**；live **240/240**（新增 skills 列表/审批错误语义/status skills 计数与 bundle 标记断言）；真实 GUI **108/108**；吸顶 **2/2**；`eval-replay` **18/18**（新增 FI-16…FI-18）；数据根快照前后一致、零残留。
+
 ## [0.29.0] - 2026-11-15
 
 ### 新增 Added — 主动学习 I2：分层召回与存量治理

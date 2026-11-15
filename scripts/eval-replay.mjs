@@ -17,6 +17,7 @@ import { buildSignalMessages } from '../index.js'
 import { createMemoryService } from '../lib/service.js'
 import { detectSignals } from '../lib/signals.js'
 import * as learning from '../lib/learning.js'
+import * as skills from '../lib/skills.js'
 import { selectInjection, renderSection } from '../lib/render.js'
 import * as store from '../lib/store.js'
 
@@ -478,6 +479,74 @@ scenario('FI-15', '性能：500 条库纯选择＋渲染 P95 ≤20ms（另报端
   ok(svc.list({ scope: 'all' }).length === 500, '500-entry fixture persisted to the isolated root')
   if (!JSON_OUT) console.log(`    · FI-15 纯函数 P95=${p95.toFixed(2)}ms / 端到端≈${e2e.toFixed(2)}ms（500 条库）`)
   ok(e2e < 500, `end-to-end ${e2e.toFixed(2)}ms looks pathological`)
+})
+
+// ---------- FI-16 索引与加载路径 ----------
+scenario('FI-16', '程序性知识：索引条目 + skill 正文分离，批准后才索引/可加载', ({ root }) => {
+  const svc = createMemoryService({ root })
+  const signal = detect('s16', [A('x'), U('不对，应该先建 tag 再推送')])[0]
+  const saved = svc.saveSkillWithSignal({
+    sessionId: 's16', signalId: signal.id, detectedSignals: [signal],
+    name: '发布流程', trigger: '当要发布版本时', body: '1. 建 tag\n2. 推送\n3. 验证',
+  })
+  assert.equal(saved.status, 'pending')
+  assert.equal(store.findEntry(root, `m-skill-${saved.id}`, undefined), undefined, 'pending skill is not indexed')
+  assert.throws(() => svc.loadSkill({ id: saved.id }), (err) => err.code === 'not-approved')
+  assert.ok(fs.existsSync(path.join(root, 'skills', `${saved.id}.md`)), 'skill body lives in skills/<id>.md')
+  svc.approveSkill({ skillId: saved.id })
+  const index = store.findEntry(root, `m-skill-${saved.id}`, undefined)
+  ok(index && index.content.includes('当要发布版本时') && index.content.includes(`skill: ${saved.id}`) && index.content.includes('v1'), 'index entry carries trigger + skill id + version')
+  const loaded = svc.loadSkill({ id: saved.id })
+  assert.equal(loaded.content, '1. 建 tag\n2. 推送\n3. 验证')
+  // 索引条目参与召回（决策分类，预算充足时被选中）。
+  const selected = selectInjection(svc.list({ scope: 'global' }), { budgetChars: 8000 }).selected.map((e) => e.id)
+  ok(selected.includes(`m-skill-${saved.id}`), 'skill index entry is recalled')
+  // 全局 skills 目录未被写入（正文只在数据根内）。
+  ok(!fs.existsSync(path.join(root, 'skills', '..', '..', '..', 'skills', saved.id + '.md')), 'does not write the global skills directory')
+})
+
+// ---------- FI-17 不误加载与审批 ----------
+scenario('FI-17', '不误加载：pending/archived 不可加载，非法 id 与路径穿越拒绝', ({ root }) => {
+  const svc = createMemoryService({ root })
+  const pending = skills.createPendingSkill(root, { name: '待审批', trigger: '当测试审批时', body: 'body' })
+  assert.throws(() => svc.loadSkill({ id: pending.id }), (err) => err.code === 'not-approved')
+  svc.approveSkill({ skillId: pending.id })
+  svc.archiveSkill({ skillId: pending.id })
+  assert.throws(() => svc.loadSkill({ id: pending.id }), (err) => err.code === 'not-approved')
+  for (const bad of ['../etc/passwd', 'sk-../../x', 'm-skill-abc', '', 'sk-UPPER']) {
+    assert.throws(() => svc.loadSkill({ id: bad }), (err) => err.code === 'invalid' || err.code === 'not-found')
+  }
+  const missing = skills.listSkills(root, { status: 'pending' }).length
+  assert.equal(missing, 0, 'no pending skills leak into the approved index')
+  // 未命中索引时不加载任何正文（load 只按显式 id）。
+  assert.ok(!fs.readdirSync(path.join(root, 'skills')).some((name) => name === 'body.txt'))
+})
+
+// ---------- FI-18 skill 版本回滚 ----------
+scenario('FI-18', 'skill 修订与回滚：版本可追溯、回滚后索引与正文版本一致', ({ root }) => {
+  const svc = createMemoryService({ root })
+  const created = svc.createSkill({ name: '部署', trigger: '当部署时', body: '旧流程：手动上传' })
+  const signal = detect('s18', [A('x'), U('不对，应该用脚本部署')])[0]
+  const revised = svc.reviseSkillWithSignal({
+    sessionId: 's18', signalId: signal.id, detectedSignals: [signal], skillId: created.id, body: '新流程：脚本部署',
+  })
+  assert.equal(revised.status, 'pending')
+  assert.equal(revised.version, 2)
+  svc.approveSkill({ skillId: created.id })
+  const v2 = svc.loadSkill({ id: created.id })
+  assert.equal(v2.content, '新流程：脚本部署')
+  const indexV2 = store.findEntry(root, `m-skill-${created.id}`, undefined)
+  ok(indexV2.content.includes('v2'), 'index shows v2 after approval')
+  const rolled = svc.rollbackSkill({ skillId: created.id, revision: 1 })
+  const v3 = svc.loadSkill({ id: created.id })
+  assert.equal(v3.content, '旧流程：手动上传', 'rollback restores revision 1 body')
+  assert.equal(v3.version, rolled.skill.version)
+  const indexV3 = store.findEntry(root, `m-skill-${created.id}`, undefined)
+  ok(indexV3.content.includes(`v${v3.version}`), 'index version equals body version after rollback')
+  const revisions = skills.listSkillRevisions(root, created.id)
+  ok(revisions.includes(1) && revisions.includes(v3.version), 'revision history is preserved')
+  const audit = learning.auditTail(root).map((e) => e.type)
+  ok(audit.includes('skill_revised') && audit.includes('skill_rolled_back'), 'revision and rollback are audited')
 })
 
 // ---------- 汇总 ----------

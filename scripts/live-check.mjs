@@ -168,6 +168,7 @@ async function main() {
     // v0.28.0：学习分区计数（pending 候选）随 status 下发。
     ok('learning.pendingCount 为整数', Number.isInteger(json?.learning?.pendingCount), JSON.stringify(json?.learning))
     ok('learning.schemaVersion === 1', json?.learning?.schemaVersion === 1, `got ${json?.learning?.schemaVersion}`)
+    ok('skills 计数下发', Number.isInteger(json?.skills?.pending) && Number.isInteger(json?.skills?.approved), JSON.stringify(json?.skills))
     // 0.24.18：迁移/备份失败可观测字段（健康时应为 false/null）。
     ok('migrationPending=false', json?.migrationPending === false, `got ${JSON.stringify(json?.migrationPending)}`)
     ok('backupError=null', json?.backupError === null, `got ${JSON.stringify(json?.backupError)}`)
@@ -720,6 +721,21 @@ async function main() {
     ok('learning/approve 缺 token 403', noToken.status === 403, `got ${noToken.status}`)
   })
 
+  // 3d. 程序性知识（v0.30.0）：skill 列表只读 + 审批错误语义（真实库无 skill 时为空）。
+  await check('GET /skills 与审批错误语义（v0.30.0）', async () => {
+    const r = await req('GET', '/skills')
+    ok('skills HTTP 200', r.status === 200, `got ${r.status}`)
+    ok('skills 数组 + pendingCount', Array.isArray(r.json?.skills) && Number.isInteger(r.json?.pendingCount), JSON.stringify({ n: r.json?.skills?.length, p: r.json?.pendingCount }))
+    ok('skills 条目字段齐全', (r.json?.skills ?? []).every((s) => typeof s.id === 'string' && typeof s.name === 'string' && typeof s.trigger === 'string' && Number.isInteger(s.version) && Array.isArray(s.revisions)))
+    ok('skills 未泄漏 pending 正文', (r.json?.skills ?? []).every((s) => s.body === undefined))
+    const badApprove = await req('POST', '/skills/approve', { token, body: { skillId: 'sk-nope0000' } })
+    ok('skills/approve 未知 404', badApprove.status === 404, `got ${badApprove.status} ${JSON.stringify(badApprove.json)}`)
+    const badRollback = await req('POST', '/skills/rollback', { token, body: { skillId: 'sk-nope0000', revision: 1 } })
+    ok('skills/rollback 未知 404', badRollback.status === 404, `got ${badRollback.status}`)
+    const noToken = await req('POST', '/skills/approve', { body: { skillId: 'x' } })
+    ok('skills/approve 缺 token 403', noToken.status === 403, `got ${noToken.status}`)
+  })
+
   // 4. settings：toggle 到反值验证后还原原值（GET 无 {result} 包裹；绝不 reset）
   await check('settings 新键 toggle 后还原', async () => {
     const before = await req('GET', '/settings')
@@ -1016,6 +1032,8 @@ async function main() {
     ok('bundle 含 0.28.0 学习分区', code.includes('learningTitle') && code.includes('learning/approve') && code.includes('dm-learning') && code.includes('approvePendingItem'))
     // 0.29.0：分层召回 + 存量治理（合并重复/批量归档）。
     ok('bundle 含 0.29.0 分层召回与存量治理', code.includes('duplicatesTitle') && code.includes('duplicates/merge') && code.includes('recallLayers') && code.includes('bulkArchive') && code.includes('dm-recall-layers'))
+    // 0.30.0：程序性知识（skill 候选批准/拒绝/回滚）。
+    ok('bundle 含 0.30.0 程序性知识', code.includes('learningSkillBadge') && code.includes('skills/approve') && code.includes('rollbackSkillItem') && code.includes('learningSkillRollback'))
   })
 
   // 7. 清理测试条目 + 恢复设置/备份快照（正常结束与异常中断共用同一幂等清理）

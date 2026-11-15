@@ -351,3 +351,5 @@ I3 增加 `skills/`，I4 增加 `digest/`。两者都纳入备份、快照和垃
 - 设计 §1.2「pinned+constraint 在预算内 100% 注入」按预算硬上限语义执行：超预算时不破预算、按既有规则省略并计数（与 §3.3 末条一致）。
 
 **I2（v0.29.0）实施记录**：分层召回（常驻 pinned+constraint 完整 / 索引层 80 字符确定性单行摘要 / 未注入按预算不足与单条过长分类）已落地并在注入文本与 `recall-preview`/面板召回预览暴露；存量治理仅合并「同作用域+规范化正文+关键元数据完全一致」的精确重复组（dryRun → 面板确认 → keep 最早 created，其余归档可恢复 + `duplicates_merged` 审计），相似/冲突/元数据不同只报告；批量归档/恢复走 `/archive`（可逆+审计），访问暴露与存活不触发自动归档；FI-11…FI-15 全部通过，500 条库纯函数 P95 约 1.2ms（门槛 20ms）。实施差异：`duplicateGroups` 扫描范围限于 global+当前工作区（与面板一致）；「画像视图」实现为召回预览中的常驻只读分组，不新增存储。
+
+**I3（v0.30.0）实施记录**：spike 结论——当前 desktop profile 未启用 `tool-skill`/`skill-filesystem`、插件不得 import `@deepseek-ai/*`，因此采用设计允许的 **fallback 载体**：插件自有 `memory_skill_load` 工具读取 `skills/<id>.md`（不写全局 skills 目录）；`ctx.skills` provider 集成留待启用 skill 工具的 profile。正文与索引分离（索引条目 tag `skill-index` 只含触发条件+id+版本，随分层召回注入）；候选需 signal 且一律 pending，批准后建索引/可加载；修订生成新版本重新待确认；拒绝首版删除、拒绝新修订恢复上一已批准版本；`skills/.revisions/<id>/<v>.md` + `/skills/rollback` 回滚（版本 +1、索引同步）；id/路径严格校验、approved 才可加载、输出标注不可信参考数据；归档/恢复/备份/快照复用 I1/I2 能力；FI-16…FI-18 通过（eval 18/18）。

@@ -986,6 +986,13 @@ function newImportRunId() {
     learningArchivedMsg: '已归档自动写入',
     learningApproved: '已批准并写入记忆',
     learningRejected: '已拒绝该候选',
+    learningSkillBadge: '技能待批',
+    learningSkillApprovedBadge: '技能',
+    learningSkillRow: '{name}：{trigger}',
+    learningSkillRollback: '回滚上一版',
+    learningSkillApprovedMsg: '技能已批准并进入索引：{name}',
+    learningSkillRejectedMsg: '已拒绝技能候选：{name}',
+    learningSkillRolledBackMsg: '已回滚技能：{name}',
     duplicates: '合并重复',
     duplicatesTitle: '合并重复记忆',
     duplicatesHint: '仅合并「同作用域 + 规范化正文 + 关键元数据完全一致」的精确重复：保留最早一条，其余归档（可恢复）并写审计。相似/冲突或元数据不同只报告，不自动合并。',
@@ -1260,6 +1267,13 @@ function newImportRunId() {
     learningArchivedMsg: 'Auto-save archived',
     learningApproved: 'Approved and saved',
     learningRejected: 'Candidate rejected',
+    learningSkillBadge: 'Skill pending',
+    learningSkillApprovedBadge: 'Skill',
+    learningSkillRow: '{name}: {trigger}',
+    learningSkillRollback: 'Roll back one version',
+    learningSkillApprovedMsg: 'Skill approved and indexed: {name}',
+    learningSkillRejectedMsg: 'Skill candidate rejected: {name}',
+    learningSkillRolledBackMsg: 'Skill rolled back: {name}',
     duplicates: 'Duplicates',
     duplicatesTitle: 'Merge duplicate memories',
     duplicatesHint: 'Only exact duplicates with identical scope, normalized content and key metadata are merged: the earliest entry is kept, the rest are archived (reversible) with an audit record. Similar/conflicting or metadata-different entries are reported only.',
@@ -1923,6 +1937,10 @@ function newImportRunId() {
           duplicates: function (params) { return request(API_BASE + '/duplicates' + buildEntriesQuery({ scope: (params && params.scope) || 'all', workspace: params && params.workspace })) },
           mergeDuplicates: function (input) { return post(API_BASE + '/duplicates/merge', input) },
           archive: function (input) { return post(API_BASE + '/archive', input) },
+          skills: function (params) { return request(API_BASE + '/skills' + buildEntriesQuery({ status: params && params.status })) },
+          approveSkill: function (input) { return post(API_BASE + '/skills/approve', input) },
+          rejectSkill: function (input) { return post(API_BASE + '/skills/reject', input) },
+          rollbackSkill: function (input) { return post(API_BASE + '/skills/rollback', input) },
           learning: function (workspace) { return request(API_BASE + '/learning' + (workspace ? '?workspace=' + encodeURIComponent(workspace) : '')) },
           approveLearning: function (input) { return post(API_BASE + '/learning/approve', input).then(unwrapResult) },
           rejectLearning: function (input) { return post(API_BASE + '/learning/reject', input).then(unwrapResult) },
@@ -3596,6 +3614,34 @@ function newImportRunId() {
         function archiveRecentAuto(entry) {
           toggleArchive({ id: entry.id, scope: entry.scope, archived: false })
         }
+        // v0.30.0：程序性知识候选批准/拒绝/回滚（批准前不索引、不可加载）。
+        function approveSkillItem(skill) {
+          if (busy) return
+          setBusy(true)
+          api.approveSkill({ skillId: skill.id }).then(function () {
+            bumpDataVersion()
+            showToast('ok', t('learningSkillApprovedMsg').replace('{name}', String(skill.name)))
+            return loadLearning()
+          }).catch(writeFailure).then(function () { setBusy(false) })
+        }
+        function rejectSkillItem(skill) {
+          if (busy) return
+          setBusy(true)
+          api.rejectSkill({ skillId: skill.id }).then(function () {
+            bumpDataVersion()
+            showToast('ok', t('learningSkillRejectedMsg').replace('{name}', String(skill.name)))
+            return loadLearning()
+          }).catch(writeFailure).then(function () { setBusy(false) })
+        }
+        function rollbackSkillItem(skill) {
+          if (busy) return
+          setBusy(true)
+          api.rollbackSkill({ skillId: skill.id, revision: Math.max(1, Number(skill.version) - 1) }).then(function () {
+            bumpDataVersion()
+            showToast('ok', t('learningSkillRolledBackMsg').replace('{name}', String(skill.name)))
+            return loadLearning()
+          }).catch(writeFailure).then(function () { setBusy(false) })
+        }
 
         function writeFailure(err) {
           if (err.status === 403) {
@@ -4053,6 +4099,30 @@ function newImportRunId() {
                 h('span', { className: 'dm_learn_time' }, relativeTime(entry.updated, null, uiLang()))),
               h('div', { className: 'dm_learn_actions' },
                 h('button', { className: 'dm_btn dm_btn_mini', disabled: busy, onClick: function () { archiveRecentAuto(entry) } }, t('learningArchive')))))
+          })
+          // v0.30.0：程序性知识（skill）候选——批准前不可加载/不索引。
+          var pendingSkills = Array.isArray(data.pendingSkills) ? data.pendingSkills : []
+          pendingSkills.slice(0, 5).forEach(function (skill) {
+            rows.push(h('div', { key: 'skill-' + skill.id, className: 'dm_learn_row', 'data-testid': 'dm-learning-skill-pending' },
+              h('div', { className: 'dm_learn_main' },
+                h('span', { className: 'dm_learn_badge' }, t('learningSkillBadge')),
+                h('span', { className: 'dm_learn_text', title: skill.trigger }, t('learningSkillRow').replace('{name}', String(skill.name)).replace('{trigger}', String(skill.trigger))),
+                h('span', { className: 'dm_learn_time' }, 'v' + String(skill.version))),
+              h('div', { className: 'dm_learn_actions' },
+                h('button', { className: 'dm_btn dm_btn_mini dm_btn_primary', disabled: busy, onClick: function () { approveSkillItem(skill) } }, t('learningApprove')),
+                h('button', { className: 'dm_btn dm_btn_mini', disabled: busy, onClick: function () { rejectSkillItem(skill) } }, t('learningReject')))))
+          })
+          var approvedSkills = Array.isArray(data.approvedSkills) ? data.approvedSkills : []
+          approvedSkills.slice(0, 3).forEach(function (skill) {
+            rows.push(h('div', { key: 'skill-ok-' + skill.id, className: 'dm_learn_row', 'data-testid': 'dm-learning-skill-approved' },
+              h('div', { className: 'dm_learn_main' },
+                h('span', { className: 'dm_learn_badge' }, t('learningSkillApprovedBadge')),
+                h('span', { className: 'dm_learn_text', title: skill.trigger }, t('learningSkillRow').replace('{name}', String(skill.name)).replace('{trigger}', String(skill.trigger))),
+                h('span', { className: 'dm_learn_time' }, 'v' + String(skill.version))),
+              h('div', { className: 'dm_learn_actions' },
+                skill.version > 1 && skill.revised
+                  ? h('button', { className: 'dm_btn dm_btn_mini', disabled: busy, onClick: function () { rollbackSkillItem(skill) } }, t('learningSkillRollback'))
+                  : null)))
           })
           return h('section', { className: 'dm_group dm_learn', 'data-testid': 'dm-learning' },
             h('div', { className: 'dm_section_title' }, h(Icon, { name: 'zap', size: 13 }), t('learningTitle'),
