@@ -35,6 +35,16 @@ test('auditCounts aggregates audit event types deterministically without content
   assert.deepEqual(auditCounts(null), [])
 })
 
+test('auditCounts is prototype-safe for hand-edited audit types (C8)', () => {
+  // audit.jsonl 可手工编辑：type='__proto__'/'constructor' 不得被原型 setter 吞掉或拼出 garbage。
+  const rows = auditCounts([{ type: '__proto__' }, { type: 'constructor' }, { type: 'auto_saved' }, { type: '__proto__' }])
+  const proto = rows.find((r) => r.type === '__proto__')
+  assert.ok(proto && proto.count === 2, '__proto__ counted as a normal key')
+  const ctor = rows.find((r) => r.type === 'constructor')
+  assert.ok(ctor && ctor.count === 1, 'constructor counted as a normal key')
+  for (const r of rows) assert.equal(typeof r.count, 'number', 'no stringified-function garbage counts')
+})
+
 test('duplicatePlanSummary counts mergeable/report-only groups and archive targets', () => {
   const groups = [
     { key: 'a', mergeable: true, entries: [{ id: '1' }, { id: '2' }, { id: '3' }] },
@@ -185,6 +195,17 @@ test('relativeTime renders zh/en buckets and falls back to a date', () => {
   assert.match(relativeTime(at(-120_000), now, 'zh'), /11 月 13 日/)
   assert.equal(relativeTime('not-a-date', now, 'zh'), 'not-a-date')
   assert.equal(relativeTime('', now, 'en'), '')
+})
+
+test('relativeTime treats null/undefined now as the current time (learning auto rows)', () => {
+  // 学习分区曾传 null 期望「用当前时间」，但 Number(null)===0 通过 isFinite 守卫，
+  // 所有近期条目都被当成相对 1970 年的未来时间 → 永远显示绝对日期。
+  const recent = new Date(Date.now() - 10_000).toISOString()
+  assert.equal(relativeTime(recent, null, 'zh'), '刚刚')
+  assert.equal(relativeTime(recent, undefined, 'en'), 'just now')
+  assert.equal(relativeTime(recent, NaN, 'zh'), '刚刚')
+  const hourAgo = new Date(Date.now() - 3_600_000).toISOString()
+  assert.equal(relativeTime(hourAgo, null, 'zh'), '1 小时前')
 })
 
 test('formatBytes renders human-readable sizes', () => {

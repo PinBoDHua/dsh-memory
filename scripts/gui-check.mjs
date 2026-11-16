@@ -524,6 +524,74 @@ async function main() {
     check('批量审批/周报存档/审计摘要 与 /learning 数据一致', i4Ui.batch === expectBatch && i4Ui.digest === expectDigest && i4Ui.audit === expectAudit,
       JSON.stringify({ ui: i4Ui, expectBatch, expectDigest, expectAudit, pending: learningDocI4?.pendingCount, archive: (digestDocI4?.archive || []).length }))
 
+    // ===== 第十二轮 UI/UX 回归（U1 学习设置组 / U4 复选框可发现 / 学习分区紧凑化 / C6 归档态）=====
+    const uxToken = (await apiJson('/status'))?.key ?? ''
+    // U4：复选框常驻低透明度（不再 opacity:0 仅 hover 可见）。
+    const checkOpacity = await evaluate(`(() => { const el = document.querySelector('.dm_check input'); return el ? getComputedStyle(el).opacity : 'no-checkbox' })()`)
+    check('U4 复选框常驻可发现（opacity≈0.4，非 0）', checkOpacity !== 'no-checkbox' && Number(checkOpacity) > 0 && Number(checkOpacity) < 1, String(checkOpacity))
+    // U1：设置页「学习」组控件齐全（额度滑杆/冲突提醒/周报开关/星期下拉）。
+    await evaluate(`(() => { const tab = [...document.querySelectorAll('[role="tab"]')].find((el) => /设置|Settings/.test(el.textContent || '')); if (tab) tab.click(); return Boolean(tab) })()`)
+    await sleep(1500)
+    const learnSettings = await evaluate(`(() => {
+      const byLabel = (re) => [...document.querySelectorAll('.dm_settings [aria-label]')].some((el) => re.test(el.getAttribute('aria-label') || ''))
+      const groups = [...document.querySelectorAll('.dm_settings .dm_setgroup')].map((g) => (g.querySelector('.dm_setgroup_title') || {}).textContent || '')
+      return {
+        hasGroup: groups.some((title) => /学习|Learning/.test(title)),
+        quota: byLabel(/自动写入额度|Auto-write quota/),
+        conflict: byLabel(/疑似冲突提醒|Conflict alerts/),
+        digest: byLabel(/确定性周报|Deterministic weekly digest/),
+        weekday: byLabel(/周报星期|Digest weekday/),
+      }
+    })()`)
+    check('U1 设置页学习组控件齐全（额度/冲突/周报/星期）', learnSettings.hasGroup && learnSettings.quota && learnSettings.conflict && learnSettings.digest && learnSettings.weekday, JSON.stringify(learnSettings))
+    await evaluate(`(() => { const tab = [...document.querySelectorAll('[role="tab"]')].find((el) => /记忆|Memories/.test(el.textContent || '')); if (tab) tab.click(); return Boolean(tab) })()`)
+    await sleep(1200)
+    // 紧凑化 + C6：造一条长自动写入 → 自动行单行截断、工具栏仍在首屏；归档后按钮变「恢复」并可还原。
+    const uxIds = []
+    registerCleanup(async () => { await forgetIds(uxIds); uxIds.length = 0 })
+    const uxLong = '__gui_ux_ ' + '这是一条用于验证学习分区紧凑化与归档态的长自动写入记忆。'.repeat(8)
+    const uxCreated = await apiJson('/save', { method: 'POST', token: uxToken, body: { content: uxLong, scope: 'global', origin: 'auto' } })
+    const uxId = uxCreated?.result?.entry?.id
+    if (uxId) uxIds.push(uxId)
+    check('UX 验收临时自动写入已创建', Boolean(uxId), String(uxId))
+    const clickRefresh = () => evaluate(`(() => { const btn = [...document.querySelectorAll('.dm_toolbar button')].find((el) => /^(刷新|Refresh)$/.test((el.textContent || '').trim())); if (btn) btn.click(); return Boolean(btn) })()`)
+    await clickRefresh(); await sleep(1500)
+    await evaluate(`(() => { const p = document.querySelector('.dm_page'); if (p) p.scrollTop = 0; return true })()`)
+    await sleep(400)
+    const uxCompact = await evaluate(`(() => {
+      const rows = [...document.querySelectorAll('[data-testid="dm-learning-auto"]')]
+      const row = rows.find((r) => (r.textContent || '').includes('__gui_ux_'))
+      if (!row) return { found: false }
+      const text = row.querySelector('.dm_learn_text')
+      const cs = text ? getComputedStyle(text) : null
+      const tb = document.querySelector('.dm_toolbar_wrap')
+      return {
+        found: true,
+        clamp: cs ? cs.webkitLineClamp : null,
+        clamped: text ? text.scrollHeight > text.clientHeight + 1 : false,
+        toolbarInFirstView: tb ? tb.getBoundingClientRect().top < window.innerHeight : false,
+      }
+    })()`)
+    check('学习分区自动行单行截断且工具栏仍在首屏（紧凑化）', uxCompact.found && uxCompact.clamp === '1' && uxCompact.clamped && uxCompact.toolbarInFirstView, JSON.stringify(uxCompact))
+    // C6：归档该自动写入 → 学习区按钮应变「恢复」，点击可还原（旧实现硬编码 archived:false 恒报归档）。
+    await apiJson('/update', { method: 'POST', token: uxToken, body: { id: uxId, archived: true } })
+    await clickRefresh(); await sleep(1500)
+    const uxRestoreBtn = await evaluate(`(() => {
+      const rows = [...document.querySelectorAll('[data-testid="dm-learning-auto"]')]
+      const row = rows.find((r) => (r.textContent || '').includes('__gui_ux_'))
+      if (!row) return { found: false }
+      const btn = row.querySelector('.dm_learn_actions button')
+      const label = btn ? (btn.textContent || '').trim() : ''
+      if (btn) btn.click()
+      return { found: true, label, isRestore: /恢复|Restore/.test(label) }
+    })()`)
+    check('C6 已归档自动写入按钮为「恢复」并可点击还原', uxRestoreBtn.found && uxRestoreBtn.isRestore, JSON.stringify(uxRestoreBtn))
+    await sleep(1500)
+    const uxRestored = (await apiJson('/learning'))?.recentAuto?.find((e) => e.id === uxId)
+    check('C6 点击恢复后自动写入回到活跃态', Boolean(uxRestored) && uxRestored.archived === false, JSON.stringify(uxRestored && { archived: uxRestored.archived }))
+    await forgetIds(uxIds); uxIds.length = 0
+    await clickRefresh(); await sleep(800)
+
     // 0.25.0 去 AI 化：主容器不得再有径向氛围光/渐变背景，主按钮与卡片不得用渐变/重投影。
     const visualState = await evaluate(`(() => {
       const cs = (sel) => { const el = document.querySelector(sel); return el ? getComputedStyle(el) : null }
@@ -1554,7 +1622,8 @@ async function main() {
     for (let i = 0; i < 16; i += 1) {
       await sleep(300)
       offlineError = await evaluate(`(() => {
-        const el = document.querySelector('.dm_empty')
+        // U5：列表非空时刷新失败渲染 .dm_listerror 横幅，空列表才整块 .dm_empty 错误态。
+        const el = document.querySelector('.dm_listerror') || document.querySelector('.dm_empty')
         return el ? (el.innerText || '').replace(/\\s+/g, ' ').slice(0, 160) : ''
       })()`)
       if (/网络异常|Network error|失败|Failed/.test(offlineError)) break
@@ -1568,7 +1637,7 @@ async function main() {
     await evaluate(`(() => { const chips = [...document.querySelectorAll('.dm_chips .dm_chip')]; if (chips[0]) chips[0].click(); return Boolean(chips[0]) })()`)
     await sleep(1200)
     const entriesAfterOnline = requests.filter((u) => u.includes('/entries')).length
-    const onlineError = await evaluate(`(() => { const el = document.querySelector('.dm_empty'); return el ? (el.innerText || '') : '' })()`)
+    const onlineError = await evaluate(`(() => { const el = document.querySelector('.dm_listerror') || document.querySelector('.dm_empty'); return el ? (el.innerText || '') : '' })()`)
     check('恢复在线后列表重新加载', entriesAfterOnline > entriesBeforeOnline && !/网络异常|Network error/.test(onlineError), `${entriesBeforeOnline} -> ${entriesAfterOnline}`)
 
     // 8) 设置页：保留份数夹取 + 备份触发重载不覆盖防抖中的草稿（0.24.5）

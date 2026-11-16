@@ -690,7 +690,9 @@ function duplicatePlanSummary(groups) {
  */
 function auditCounts(events) {
   var list = Array.isArray(events) ? events : []
-  var counts = {}
+  // 无原型对象：audit.jsonl 可手改，type='__proto__'/'constructor' 不得被原型 setter
+  // 吞掉或拼出 garbage（与 idSetOf/settleBulkDelete 等同一加固口径，C8）。
+  var counts = Object.create(null)
   for (var i = 0; i < list.length; i++) {
     var type = list[i] && typeof list[i].type === 'string' ? list[i].type : 'unknown'
     if (type === 'digest_emitted') continue
@@ -749,7 +751,9 @@ function auditCounts(events) {
     var then = new Date(iso).getTime()
     if (isNaN(then)) return String(iso || '')
     var zh = lang === 'zh'
-    var nowMs = Number(now)
+    // null/undefined 表示「用当前时间」：Number(null)===0 会骗过 isFinite 守卫，
+    // 把近期条目当成 1970 年之后的未来时间而永远显示绝对日期。
+    var nowMs = now == null ? Date.now() : Number(now)
     if (!Number.isFinite(nowMs)) nowMs = Date.now()
     function dateLabel(ms) {
       var d = new Date(ms)
@@ -843,6 +847,7 @@ function newImportRunId() {
     del: '删除',
     save: '保存',
     cancel: '取消',
+    close: '关闭',
     contentLabel: '内容（一条事实）',
     contentCount: '{n} 字',
     editorHint: 'Ctrl/⌘ + Enter 快速保存',
@@ -1024,6 +1029,19 @@ function newImportRunId() {
     learningRejectAll: '全部拒绝',
     learningBatchApproved: '已批量批准 {n} 条（失败 {m} 条）',
     learningBatchRejected: '已批量拒绝 {n} 条（失败 {m} 条）',
+    learningShowAll: '显示全部 {n} 条',
+    learningCollapse: '收起',
+    learningConflict: '疑似冲突 {n}',
+    groupLearning: '学习',
+    autoLearnLabel: '自动写入额度',
+    autoLearnDesc: '每会话自动沉淀候选上限（0=关闭自动，仅手动添加）',
+    conflictAlertLabel: '疑似冲突提醒',
+    conflictAlertDesc: '待确认候选与旧记忆疑似冲突时给出提示',
+    digestLabel: '确定性周报',
+    digestDesc: '每周聚合审计事件注入一次（零 LLM，可关）',
+    digestWeekdayLabel: '周报星期',
+    digestWeekdayDesc: '每周哪天生成并注入周报',
+    weekday1: '周一', weekday2: '周二', weekday3: '周三', weekday4: '周四', weekday5: '周五', weekday6: '周六', weekday7: '周日',
     learningDigestBadge: '周报',
     learningAuditTitle: '最近审计',
     auditAutoSaved: '自动写入',
@@ -1090,7 +1108,7 @@ function newImportRunId() {
     defaultViewLabel: '默认视图',
     pageSizeLabel: '每页条数',
     animationsLabel: '界面动效',
-    animationsDesc: '卡片入场、悬停浮起等动画',
+    animationsDesc: '吐司滑入、弹窗淡入、骨架屏微光等反馈动效',
     relativeTimeLabel: '相对时间',
     relativeTimeDesc: '显示「N 小时前」而非绝对时间',
     viewModeLabel: '列表密度',
@@ -1140,6 +1158,7 @@ function newImportRunId() {
     del: 'Delete',
     save: 'Save',
     cancel: 'Cancel',
+    close: 'Close',
     contentLabel: 'Content (one fact)',
     contentCount: '{n} chars',
     editorHint: 'Ctrl/⌘ + Enter to save',
@@ -1321,6 +1340,19 @@ function newImportRunId() {
     learningRejectAll: 'Reject all',
     learningBatchApproved: 'Approved {n} candidates ({m} failed)',
     learningBatchRejected: 'Rejected {n} candidates ({m} failed)',
+    learningShowAll: 'Show all {n}',
+    learningCollapse: 'Collapse',
+    learningConflict: '{n} possible conflicts',
+    groupLearning: 'Learning',
+    autoLearnLabel: 'Auto-write quota',
+    autoLearnDesc: 'Max auto-saved candidates per session (0 = off, manual only)',
+    conflictAlertLabel: 'Conflict alerts',
+    conflictAlertDesc: 'Alert when a pending candidate may conflict with existing memory',
+    digestLabel: 'Deterministic weekly digest',
+    digestDesc: 'Aggregate audit events once a week (zero LLM, can disable)',
+    digestWeekdayLabel: 'Digest weekday',
+    digestWeekdayDesc: 'Which weekday to generate and inject the digest',
+    weekday1: 'Mon', weekday2: 'Tue', weekday3: 'Wed', weekday4: 'Thu', weekday5: 'Fri', weekday6: 'Sat', weekday7: 'Sun',
     learningDigestBadge: 'Digest',
     learningAuditTitle: 'Recent audit',
     auditAutoSaved: 'auto-saved',
@@ -1387,7 +1419,7 @@ function newImportRunId() {
     defaultViewLabel: 'Default view',
     pageSizeLabel: 'Entries per page',
     animationsLabel: 'Animations',
-    animationsDesc: 'Card entrance, hover lift and other motion',
+    animationsDesc: 'Toast slide-in, dialog fade, skeleton shimmer and other feedback motion',
     relativeTimeLabel: 'Relative time',
     relativeTimeDesc: 'Show “N hours ago” instead of absolute timestamps',
     viewModeLabel: 'List density',
@@ -1410,9 +1442,9 @@ function newImportRunId() {
 
   var CSS = [
     // ---- 设计令牌：宿主主题令牌 + 三枚可辨识的分类色（低饱和，只做功能识别） ----
-    '.dm_page,.dm_select_pop{--dm-bg:var(--dsw-alias-bg-base,#f6f8fc);--dm-surface:var(--dsw-alias-bg-layer-1,#ffffff);--dm-raised:color-mix(in srgb,var(--dm-ink) 3.5%,var(--dm-bg));--dm-inset:color-mix(in srgb,var(--dm-ink) 2.5%,var(--dm-surface));--dm-ink:var(--dsw-alias-label-primary,#141821);--dm-ink2:var(--dsw-alias-label-secondary,#4b5565);--dm-ink3:var(--dsw-alias-label-tertiary,#8a93a3);--dm-line:var(--dsw-alias-border-l1,#dbe2ee);--dm-line2:var(--dsw-alias-border-l2,#c6d2e4);--dm-primary:var(--dsw-alias-state-business-primary,#2154ce);--dm-primary2:var(--dsw-alias-state-business-primary,#2154ce);--dm-on-primary:var(--dsw-alias-label-on-color,#ffffff);--dm-accent-soft:color-mix(in srgb,var(--dm-primary) 10%,transparent);--dm-accent-line:color-mix(in srgb,var(--dm-primary) 38%,transparent);--dm-pref:#a15c07;--dm-pref-soft:color-mix(in srgb,#d97706 13%,transparent);--dm-fact:#2358a8;--dm-fact-soft:color-mix(in srgb,#2563eb 11%,transparent);--dm-dec:#0f6b4a;--dm-dec-soft:color-mix(in srgb,#059669 11%,transparent);--dm-danger:var(--dsw-alias-state-error-primary,#bf0f0f);--dm-danger-soft:color-mix(in srgb,#dc2626 10%,transparent);--dm-success:var(--dsw-alias-state-success-primary,#137036);--dm-success-soft:color-mix(in srgb,#059669 10%,transparent);--dm-mono:var(--ds-font-family-code,ui-monospace,"Cascadia Mono",Consolas,monospace);--dm-shadow:0 1px 2px rgba(16,25,45,.05);--dm-pop:0 14px 40px -18px rgba(16,25,45,.32),0 2px 6px rgba(16,25,45,.06);--dm-overlay-shadow:0 28px 80px -32px rgba(16,25,45,.5),0 2px 8px rgba(16,25,45,.07);--dm-ring:0 0 0 3px color-mix(in srgb,var(--dm-primary) 20%,transparent);}',
+    '.dm_page,.dm_select_pop{--dm-bg:var(--dsw-alias-bg-base,#f6f8fc);--dm-surface:var(--dsw-alias-bg-layer-1,#ffffff);--dm-raised:color-mix(in srgb,var(--dm-ink) 3.5%,var(--dm-bg));--dm-inset:color-mix(in srgb,var(--dm-ink) 2.5%,var(--dm-surface));--dm-ink:var(--dsw-alias-label-primary,#141821);--dm-ink2:var(--dsw-alias-label-secondary,#4b5565);--dm-ink3:var(--dsw-alias-label-tertiary,#6b7280);--dm-line:var(--dsw-alias-border-l1,#dbe2ee);--dm-line2:var(--dsw-alias-border-l2,#c6d2e4);--dm-primary:var(--dsw-alias-state-business-primary,#2154ce);--dm-primary2:var(--dsw-alias-state-business-primary,#2154ce);--dm-on-primary:var(--dsw-alias-label-on-color,#ffffff);--dm-accent-soft:color-mix(in srgb,var(--dm-primary) 10%,transparent);--dm-accent-line:color-mix(in srgb,var(--dm-primary) 38%,transparent);--dm-pref:#a15c07;--dm-pref-soft:color-mix(in srgb,#d97706 13%,transparent);--dm-fact:#2358a8;--dm-fact-soft:color-mix(in srgb,#2563eb 11%,transparent);--dm-dec:#0f6b4a;--dm-dec-soft:color-mix(in srgb,#059669 11%,transparent);--dm-danger:var(--dsw-alias-state-error-primary,#bf0f0f);--dm-danger-soft:color-mix(in srgb,#dc2626 10%,transparent);--dm-success:var(--dsw-alias-state-success-primary,#137036);--dm-success-soft:color-mix(in srgb,#059669 10%,transparent);--dm-mono:var(--ds-font-family-code,ui-monospace,"Cascadia Mono",Consolas,monospace);--dm-shadow:0 1px 2px rgba(16,25,45,.05);--dm-pop:0 14px 40px -18px rgba(16,25,45,.32),0 2px 6px rgba(16,25,45,.06);--dm-overlay-shadow:0 28px 80px -32px rgba(16,25,45,.5),0 2px 8px rgba(16,25,45,.07);--dm-ring:0 0 0 3px color-mix(in srgb,var(--dm-primary) 20%,transparent);}',
     '.dm_page{height:100%;overflow-y:auto;box-sizing:border-box;color:var(--dm-ink);font-size:13px;line-height:1.55;background-color:var(--dm-bg);background-image:none;scrollbar-width:thin;scrollbar-color:color-mix(in srgb,var(--dm-ink) 20%,transparent) transparent;}',
-    'body[data-ds-dark-theme] .dm_page,body[data-ds-dark-theme] .dm_select_pop{--dm-bg:var(--dsw-alias-bg-base,#0f1115);--dm-surface:var(--dsw-alias-bg-layer-1,#171a21);--dm-ink:var(--dsw-alias-label-primary,#e8eaf0);--dm-ink2:var(--dsw-alias-label-secondary,#a8aebd);--dm-ink3:var(--dsw-alias-label-tertiary,#6f7688);--dm-line:var(--dsw-alias-border-l1,rgba(232,234,240,.08));--dm-line2:var(--dsw-alias-border-l2,rgba(232,234,240,.16));--dm-pref:#e4b357;--dm-pref-soft:rgba(228,179,87,.14);--dm-fact:#86a9e6;--dm-fact-soft:rgba(134,169,230,.14);--dm-dec:#67c79a;--dm-dec-soft:rgba(103,199,154,.14);--dm-danger:var(--dsw-alias-state-error-primary,#f87171);--dm-danger-soft:rgba(248,113,113,.13);--dm-success:var(--dsw-alias-state-success-primary,#34d399);--dm-success-soft:rgba(52,211,153,.13);--dm-shadow:0 1px 2px rgba(0,0,0,.45);--dm-pop:0 18px 44px -20px rgba(0,0,0,.85),0 2px 8px rgba(0,0,0,.45);--dm-overlay-shadow:0 32px 90px -36px rgba(0,0,0,.9),0 2px 8px rgba(0,0,0,.45);}',
+    'body[data-ds-dark-theme] .dm_page,body[data-ds-dark-theme] .dm_select_pop{--dm-bg:var(--dsw-alias-bg-base,#0f1115);--dm-surface:var(--dsw-alias-bg-layer-1,#171a21);--dm-ink:var(--dsw-alias-label-primary,#e8eaf0);--dm-ink2:var(--dsw-alias-label-secondary,#a8aebd);--dm-ink3:var(--dsw-alias-label-tertiary,#8b93a7);--dm-line:var(--dsw-alias-border-l1,rgba(232,234,240,.08));--dm-line2:var(--dsw-alias-border-l2,rgba(232,234,240,.16));--dm-pref:#e4b357;--dm-pref-soft:rgba(228,179,87,.14);--dm-fact:#86a9e6;--dm-fact-soft:rgba(134,169,230,.14);--dm-dec:#67c79a;--dm-dec-soft:rgba(103,199,154,.14);--dm-danger:var(--dsw-alias-state-error-primary,#f87171);--dm-danger-soft:rgba(248,113,113,.13);--dm-success:var(--dsw-alias-state-success-primary,#34d399);--dm-success-soft:rgba(52,211,153,.13);--dm-shadow:0 1px 2px rgba(0,0,0,.45);--dm-pop:0 18px 44px -20px rgba(0,0,0,.85),0 2px 8px rgba(0,0,0,.45);--dm-overlay-shadow:0 32px 90px -36px rgba(0,0,0,.9),0 2px 8px rgba(0,0,0,.45);}',
     '.dm_page::-webkit-scrollbar{width:10px;height:10px;}',
     '.dm_page::-webkit-scrollbar-track{background:transparent;}',
     '.dm_page::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--dm-ink) 18%,transparent);border-radius:8px;border:3px solid transparent;background-clip:content-box;}',
@@ -1547,7 +1579,8 @@ function newImportRunId() {
     '.dm_rail{display:none;}',
     '.dm_medal{display:none;}',
     '.dm_check{display:flex;align-items:flex-start;padding-top:2px;flex-shrink:0;}',
-    '.dm_check input{width:14px;height:14px;margin:0;accent-color:var(--dm-primary);cursor:pointer;opacity:0;transition:opacity .12s;}',
+    // 常驻低透明度（U4）：批量选择入口可发现，不必先 hover 才看见复选框；hover/选中/选择态提至不透明。
+    '.dm_check input{width:14px;height:14px;margin:0;accent-color:var(--dm-primary);cursor:pointer;opacity:.4;transition:opacity .12s;}',
     '.dm_card:hover .dm_check input,.dm_check input:checked,.dm_selecting .dm_check input,.dm_check input:focus-visible{opacity:1;}',
     '@media (hover:none){.dm_check input{opacity:1;}}',
     '.dm_card_main{min-width:0;flex:1;}',
@@ -1630,6 +1663,8 @@ function newImportRunId() {
     '.dm_empty_title{font-size:14px;font-weight:600;color:var(--dm-ink);letter-spacing:-.01em;}',
     '.dm_empty_hint{margin-top:6px;font-size:12.5px;color:var(--dm-ink3);max-width:44ch;margin-left:auto;margin-right:auto;line-height:1.6;}',
     '.dm_hidden_hint{display:flex;align-items:flex-start;gap:9px;margin:14px 0 6px;padding:9px 12px;border:1px solid var(--dm-line);border-radius:7px;background:var(--dm-raised);color:var(--dm-ink2);font-size:12px;line-height:1.55;}',
+    // 刷新失败但已有列表时的可关闭错误横幅（U5）：保留阅读上下文，不整块替换为错误态。
+    '.dm_listerror{display:flex;align-items:flex-start;gap:9px;margin:14px 0 6px;padding:9px 12px;border:1px solid color-mix(in srgb,var(--dm-danger) 30%,transparent);border-radius:7px;background:var(--dm-danger-soft);color:var(--dm-ink2);font-size:12px;line-height:1.55;}',
     '.dm_hidden_hint svg{opacity:.8;flex-shrink:0;margin-top:1px;}',
     // ---- 翻页 ----
     '.dm_pager{display:flex;gap:8px;align-items:center;justify-content:center;margin:18px 0 8px;}',
@@ -1690,8 +1725,15 @@ function newImportRunId() {
     '.dm_learn_row:last-child{border-bottom:0;}',
     '.dm_learn_main{flex:1;min-width:0;display:flex;flex-wrap:wrap;align-items:center;gap:8px;}',
     '.dm_learn_badge{flex-shrink:0;font:600 10px var(--dm-mono);color:var(--dm-primary);background:var(--dm-accent-soft);border:1px solid var(--dm-accent-line);border-radius:99px;padding:1px 7px;}',
-    '.dm_learn_text{font-size:13px;line-height:1.55;color:var(--dm-ink);word-break:break-word;flex:1;min-width:0;}',
+    // 正文默认截断（2 行）：长候选/周报不再把工具栏与记忆列表挤出首屏；点击展开完整内容。
+    '.dm_learn_text{font-size:13px;line-height:1.55;color:var(--dm-ink);word-break:break-word;flex:1;min-width:0;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;}',
+    '.dm_learn_row_auto .dm_learn_text{-webkit-line-clamp:1;}',
+    '.dm_learn_text_open{display:block;-webkit-line-clamp:unset;overflow:visible;}',
+    '.dm_learn_link,.dm_learn_expand{cursor:pointer;}',
+    '.dm_learn_link:hover,.dm_learn_expand:hover{color:var(--dm-primary);}',
+    '.dm_learn_link:focus-visible,.dm_learn_expand:focus-visible{outline:none;box-shadow:var(--dm-ring);border-radius:4px;}',
     '.dm_learn_reason{font:500 10.5px var(--dm-mono);color:var(--dm-ink3);}',
+    '.dm_learn_conflict{flex-shrink:0;font:600 10px var(--dm-mono);color:var(--dm-danger);background:var(--dm-danger-soft);border:1px solid color-mix(in srgb,var(--dm-danger) 30%,transparent);border-radius:99px;padding:1px 7px;}',
     '.dm_learn_time{font:500 11px var(--dm-mono);color:var(--dm-ink3);white-space:nowrap;}',
     '.dm_learn_actions{display:flex;gap:6px;flex-shrink:0;}',
     '.dm_recall{margin-top:14px;border:1px solid var(--dm-line);border-radius:8px;padding:14px;background:var(--dm-inset);}',
@@ -2631,6 +2673,26 @@ function newImportRunId() {
             h(RecallPreview, { t: t, api: props.api, workspace: props.workspace, refreshKey: settingsSignature(props.view), active: props.active }),
             h('div', { className: 'dm_setnote' }, h(Icon, { name: 'info', size: 14, style: { flexShrink: 0, marginTop: 1 } }), t('priorityNote')),
             h('div', { className: 'dm_setnote' }, h(Icon, { name: 'info', size: 14, style: { flexShrink: 0, marginTop: 1 } }), t('enabledNote'))),
+          // 学习设置组（U1）：服务端早已校验 autoLearn/conflictAlert/digest，此前面板缺控件，
+          // 用户只能手改 settings.json。嵌套键整体替换草稿对象，走统一防抖保存。
+          h(SettingsGroup, { icon: 'zap', title: t('groupLearning') },
+            h(SettingRow, { label: t('autoLearnLabel'), desc: t('autoLearnDesc') },
+              h(Slider, {
+                min: bounds.autoWritesMin, max: bounds.autoWritesMax, step: 1,
+                value: (draft.autoLearn && typeof draft.autoLearn.maxWritesPerSession === 'number') ? draft.autoLearn.maxWritesPerSession : bounds.autoWritesMax,
+                onChange: function (v) { props.onChange('autoLearn', { maxWritesPerSession: v }) },
+                label: t('autoLearnLabel'), disabled: props.busy,
+              })),
+            h(SettingRow, { label: t('conflictAlertLabel'), desc: t('conflictAlertDesc') },
+              h(Toggle, { checked: draft.conflictAlert !== false, onChange: set('conflictAlert'), label: t('conflictAlertLabel'), disabled: props.busy })),
+            h(SettingRow, { label: t('digestLabel'), desc: t('digestDesc') },
+              h(Toggle, { checked: !(draft.digest && draft.digest.enabled === false), onChange: function (v) { props.onChange('digest', Object.assign({}, draft.digest, { enabled: v })) }, label: t('digestLabel'), disabled: props.busy })),
+            h(SettingRow, { label: t('digestWeekdayLabel'), desc: t('digestWeekdayDesc') },
+              h(Select, {
+                className: 'dm_setselect', value: String((draft.digest && draft.digest.weekday) || 1), ariaLabel: t('digestWeekdayLabel'), disabled: props.busy, minWidth: 140,
+                onChange: function (v) { props.onChange('digest', Object.assign({}, draft.digest, { weekday: Number(v) })) },
+                options: (bounds.digestWeekdays || [1, 2, 3, 4, 5, 6, 7]).map(function (n) { return { value: String(n), label: t('weekday' + n) } }),
+              }))),
           h(SettingsGroup, { icon: 'lock', title: t('groupPrivacy') },
             h('div', { className: 'dm_guard' },
               h('span', { className: 'dm_guard_icon' }, h(Icon, { name: 'checkCircle', size: 22, strokeWidth: 1.9 })),
@@ -2985,6 +3047,13 @@ function newImportRunId() {
         // 学习分区（v3）：待确认候选 / 最近自动写入 / 审计尾。数据失败不阻塞记忆列表。
         var learningState = useState(null)
         var learning = learningState[0]; var setLearning = learningState[1]
+        // 学习分区行内展开（待确认候选/周报/审计摘要）：默认截断保持首屏紧凑，
+        // 点击正文展开完整内容后再做批准/拒绝判断。
+        var learnExpandedState = useState(null)
+        var learnExpanded = learnExpandedState[0]; var setLearnExpanded = learnExpandedState[1]
+        // 待批候选 >5 条时默认只显示前 5，提供「显示全部/收起」让用户先审后批（U2）。
+        var learnShowAllState = useState(false)
+        var learnShowAll = learnShowAllState[0]; var setLearnShowAll = learnShowAllState[1]
         var toastState = useState(null)
         var toast = toastState[0]; var setToast = toastState[1]
         var toastRef = useRef(null)
@@ -3219,6 +3288,7 @@ function newImportRunId() {
         var learningSeq = useRef(0)
         var learningLoadedRef = useRef(false)
         var learningRetryRef = useRef(0)
+        var learningCwdRef = useRef(undefined)
         var loadLearning = useCallback(function () {
           var seq = ++learningSeq.current
           return api.learning(currentCwd).then(function (doc) {
@@ -3238,10 +3308,20 @@ function newImportRunId() {
           })
         }, [api, currentCwd])
         useEffect(function () {
-          if (phase !== 'ready' || learningLoadedRef.current) return
-          learningLoadedRef.current = true
-          loadLearning()
-        }, [phase, loadLearning])
+          if (phase !== 'ready') return
+          if (!learningLoadedRef.current) {
+            learningLoadedRef.current = true
+            learningCwdRef.current = currentCwd
+            loadLearning()
+            return
+          }
+          // 会话 cd 后 recentAuto 按工作区过滤，须随 currentCwd 重载（C9）；
+          // 首载闸门保留以维护滚动稳定，仅 cwd 真正变化时刷新。
+          if (learningCwdRef.current !== currentCwd) {
+            learningCwdRef.current = currentCwd
+            loadLearning()
+          }
+        }, [phase, currentCwd, loadLearning])
 
         // 设置：加载有效值作为可编辑草稿；改动防抖自动保存（改完即生效）。
         // 加载不覆盖「防抖窗内」未保存的草稿（否则改完立刻点备份/切换会把改动回滚）。
@@ -3298,13 +3378,24 @@ function newImportRunId() {
           if (mode === current) return
           if (dirtyRef.current) { changeSetting('viewMode', mode); return }
           setDraft(function (prev) { return Object.assign({}, prev, { viewMode: mode }) })
+          // 与 saveDraft 同一守卫（C4）：seq 让 reset/重载失效在途响应，token 收敛 saving，
+          // 否则密度保存期间「恢复默认」可点，旧响应到达会复活重置前的草稿。
+          var seq = ++settingsSeq.current
+          var token = ++saveTokenRef.current
+          applySettingsEvent({ type: 'save-start' })
           api.saveSettings({ viewMode: mode }).then(function (view) {
+            if (seq !== settingsSeq.current) return
             setSettings(view)
             if (!dirtyRef.current) setDraft(view.effective)
             setSettingsError('')
+            applySettingsEvent({ type: 'save-ok' })
           }).catch(function (err) {
+            if (seq !== settingsSeq.current) return
             setDraft(function (prev) { return Object.assign({}, prev, { viewMode: current }) })
+            applySettingsEvent({ type: 'save-fail', error: errorText(err, t) })
             showToast('error', errorText(err, t))
+          }).then(function () {
+            if (token === saveTokenRef.current) applySettingsEvent({ type: 'save-settled' })
           })
         }
 
@@ -3629,7 +3720,9 @@ function newImportRunId() {
           var forced = !!(opts && opts.force)
           if (busy && !forced) return
           if (!forced) setBusy(true)
-          api.update(Object.assign({ id: entry.id, workspace: entry.scope === 'workspace' ? workspaceTarget : undefined }, patch)).then(function () {
+          // opts.workspace 覆盖默认 workspaceTarget：学习区按 currentCwd 拉取，动作须同口径。
+          var ws = entry.scope === 'workspace' ? ((opts && opts.workspace) || workspaceTarget) : undefined
+          api.update(Object.assign({ id: entry.id, workspace: ws }, patch)).then(function () {
             bumpDataVersion()
             showToast('ok', t(okKey), action)
             // 写已成功：刷新失败单独兜底（列表错误态由 refreshEntries 自处理），
@@ -3640,13 +3733,14 @@ function newImportRunId() {
         function togglePin(entry) {
           quickUpdate(entry, { pinned: !entry.pinned }, entry.pinned ? 'unpinnedMsg' : 'pinnedMsg')
         }
-        function toggleArchive(entry) {
+        function toggleArchive(entry, opts) {
           var restoring = !!entry.archived
+          var base = opts || {}
           quickUpdate(entry, { archived: !restoring }, restoring ? 'restoredMsg' : 'archivedMsg', restoring ? undefined : {
             label: t('undo'),
             // 撤销不能被列表刷新期间的 busy 守卫静默丢弃（toast 已消失但归档仍生效）。
-            run: function () { quickUpdate(entry, { archived: false }, 'restoredMsg', undefined, { force: true }) },
-          })
+            run: function () { quickUpdate(entry, { archived: false }, 'restoredMsg', undefined, Object.assign({}, base, { force: true })) },
+          }, base)
         }
 
         // 待确认候选：批准=落盘为活跃条目（origin 沿用候选来源），拒绝=只留审计。
@@ -3672,8 +3766,10 @@ function newImportRunId() {
           }).catch(writeFailure).then(function () { setBusy(false) })
         }
         // 撤销自动写入：复用归档/恢复（可逆、留审计），不是物理删除。
+        // 传真实 entry（含 archived）：已归档者按钮给「恢复」而非再归档（C6）；
+        // 学习区按 currentCwd 拉取，workspace 固定 currentCwd 不随作用域下拉漂移（C2）。
         function archiveRecentAuto(entry) {
-          toggleArchive({ id: entry.id, scope: entry.scope, archived: false })
+          toggleArchive(entry, { workspace: currentCwd })
         }
         // v0.30.0：程序性知识候选批准/拒绝/回滚（批准前不索引、不可加载）。
         function approveSkillItem(skill) {
@@ -3683,7 +3779,10 @@ function newImportRunId() {
             bumpDataVersion()
             showToast('ok', t('learningSkillApprovedMsg').replace('{name}', String(skill.name)))
             return loadLearning()
-          }).catch(writeFailure).then(function () { setBusy(false) })
+          }).catch(writeFailure).then(function () {
+            setBusy(false)
+            refreshRef.current().catch(function () {}) // 批准会写全局索引条目，刷新列表（C3）
+          })
         }
         function rejectSkillItem(skill) {
           if (busy) return
@@ -3692,7 +3791,10 @@ function newImportRunId() {
             bumpDataVersion()
             showToast('ok', t('learningSkillRejectedMsg').replace('{name}', String(skill.name)))
             return loadLearning()
-          }).catch(writeFailure).then(function () { setBusy(false) })
+          }).catch(writeFailure).then(function () {
+            setBusy(false)
+            refreshRef.current().catch(function () {}) // 拒绝修订会恢复上一版索引条目，刷新列表（C3）
+          })
         }
         function rollbackSkillItem(skill) {
           if (busy) return
@@ -3701,7 +3803,10 @@ function newImportRunId() {
             bumpDataVersion()
             showToast('ok', t('learningSkillRolledBackMsg').replace('{name}', String(skill.name)))
             return loadLearning()
-          }).catch(writeFailure).then(function () { setBusy(false) })
+          }).catch(writeFailure).then(function () {
+            setBusy(false)
+            refreshRef.current().catch(function () {}) // 回滚改写索引条目版本，刷新列表（C3）
+          })
         }
         // v0.31.0：批量审批（逐项结算，失败数如实展示）。
         function approveAllPending() {
@@ -3714,7 +3819,11 @@ function newImportRunId() {
             bumpDataVersion()
             showToast('ok', t('learningBatchApproved').replace('{n}', String(counts.approved)).replace('{m}', String(counts.failed)))
             return loadLearning()
-          }).catch(writeFailure).then(function () { setBusy(false) })
+          }).catch(writeFailure).then(function () {
+            setBusy(false)
+            // 批量批准真实落盘条目：刷新列表/统计，否则新条目不可见（C3，与单条批准同口径）。
+            refreshRef.current().catch(function () {})
+          })
         }
         function rejectAllPending() {
           if (busy) return
@@ -4081,7 +4190,9 @@ function newImportRunId() {
           var ids = selected.slice()
           var restoring = statusFilter === 'archived'
           setBusy(true)
-          api.archive({ ids: ids, archived: !restoring, workspace: currentCwd }).then(function (payload) {
+          // 用 workspaceTarget（所选作用域目录）而非 currentCwd：浏览其它工作区时
+          // 批量归档/恢复才能命中条目（C2；selection=all 时其值即 currentCwd）。
+          api.archive({ ids: ids, archived: !restoring, workspace: workspaceTarget }).then(function (payload) {
             var result = (payload && payload.result) || {}
             var done = restoring ? (result.restored || []) : (result.archived || [])
             bumpDataVersion()
@@ -4090,7 +4201,7 @@ function newImportRunId() {
               showToast('ok', t(restoring ? 'bulkRestored' : 'bulkArchived').replace('{n}', String(done.length)), {
                 label: t('undo'),
                 run: function () {
-                  api.archive({ ids: done, archived: restoring, workspace: currentCwd }).then(function () {
+                  api.archive({ ids: done, archived: restoring, workspace: workspaceTarget }).then(function () {
                     bumpDataVersion()
                     refreshRef.current().catch(function () {})
                   }).catch(writeFailure)
@@ -4170,6 +4281,18 @@ function newImportRunId() {
           var digestsEarly = Array.isArray(data.digests) ? data.digests : []
           if (pending.length === 0 && recent.length === 0 && pendingSkillsEarly.length === 0 && approvedSkillsEarly.length === 0 && digestsEarly.length === 0) return null
           var rows = []
+          // 行内正文默认截断（CSS line-clamp），点击/回车展开完整内容再判断；
+          // 避免长候选/周报把工具栏与记忆列表挤出首屏。
+          function expandText(key, text) {
+            var open = learnExpanded === key
+            function toggle() { setLearnExpanded(function (prev) { return prev === key ? null : key }) }
+            return h('span', {
+              className: 'dm_learn_text dm_learn_expand' + (open ? ' dm_learn_text_open' : ''),
+              title: text, role: 'button', tabIndex: 0, 'aria-expanded': open,
+              onClick: toggle,
+              onKeyDown: function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle() } },
+            }, text)
+          }
           // v0.31.0：批量审批（仅记忆候选；逐条仍在下方，可单独处理）。
           if (pending.length > 1) {
             rows.push(h('div', { key: 'batch-pending', className: 'dm_learn_row', 'data-testid': 'dm-learning-batch' },
@@ -4178,28 +4301,56 @@ function newImportRunId() {
                 h('button', { className: 'dm_btn dm_btn_mini dm_btn_primary', disabled: busy, onClick: approveAllPending }, t('learningApproveAll')),
                 h('button', { className: 'dm_btn dm_btn_mini', disabled: busy, onClick: rejectAllPending }, t('learningRejectAll')))))
           }
-          pending.slice(0, 5).forEach(function (item) {
+          pending.slice(0, learnShowAll ? pending.length : 5).forEach(function (item) {
+            // U3：候选来源可辨——分类徽章＋作用域（含工作区名）＋疑似冲突计数，
+            // 让跨工作区候选（C1）与冲突候选在批准前可见可辨。
+            var conflictN = Array.isArray(item.conflictWith) ? item.conflictWith.length : 0
+            var cwdShort = ''
+            if (item.scope === 'workspace' && item.cwd) {
+              var trimmed = String(item.cwd).replace(/[\\/]+$/, '')
+              var slash = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'))
+              cwdShort = slash >= 0 ? trimmed.slice(slash + 1) : trimmed
+            }
             rows.push(h('div', { key: 'pending-' + item.id, className: 'dm_learn_row', 'data-testid': 'dm-learning-pending' },
               h('div', { className: 'dm_learn_main' },
                 h('span', { className: 'dm_learn_badge' }, t('learningPendingBadge')),
-                h('span', { className: 'dm_learn_text', title: item.content }, item.content),
+                h(Badge, { category: item.category, t: t }),
+                h('span', { className: 'dm_learn_reason', title: item.cwd || '' }, item.scope === 'workspace' ? t('scopeWorkspace') + (cwdShort ? t('labelSep') + cwdShort : '') : t('scopeGlobal')),
+                conflictN > 0 ? h('span', { className: 'dm_learn_conflict' }, t('learningConflict').replace('{n}', String(conflictN))) : null,
+                expandText('pending-' + item.id, item.content),
                 item.reason ? h('span', { className: 'dm_learn_reason' }, t('learningReason') + item.reason) : null),
               h('div', { className: 'dm_learn_actions' },
                 h('button', { className: 'dm_btn dm_btn_mini dm_btn_primary', disabled: busy, onClick: function () { approvePendingItem(item) } }, t('learningApprove')),
                 h('button', { className: 'dm_btn dm_btn_mini', disabled: busy, onClick: function () { rejectPendingItem(item) } }, t('learningReject')))))
           })
+          // U2：>5 条时提供「显示全部/收起」，先审后批，避免盲批。
+          if (pending.length > 5) {
+            rows.push(h('div', { key: 'pending-toggle', className: 'dm_learn_row', 'data-testid': 'dm-learning-showall' },
+              h('div', { className: 'dm_learn_main' },
+                h('button', { className: 'dm_btn dm_btn_mini', onClick: function () { setLearnShowAll(!learnShowAll) } },
+                  learnShowAll ? t('learningCollapse') : t('learningShowAll').replace('{n}', String(pending.length))))))
+          }
           recent.slice(0, 3).forEach(function (entry) {
-            rows.push(h('div', { key: 'auto-' + entry.id, className: 'dm_learn_row', 'data-testid': 'dm-learning-auto' },
+            // 已归档的自动写入仍会出现在最近列表：按钮须随真实状态给「恢复」，
+            // 否则用户在此归档后无法撤销（旧实现硬编码 archived:false）。
+            var archived = entry.archived === true
+            rows.push(h('div', { key: 'auto-' + entry.id, className: 'dm_learn_row dm_learn_row_auto', 'data-testid': 'dm-learning-auto' },
               h('div', { className: 'dm_learn_main' },
                 h('span', { className: 'dm_learn_badge' }, t('learningAutoBadge')),
-                h('span', { className: 'dm_learn_text', title: entry.content }, entry.content),
-                h('span', { className: 'dm_learn_time' }, relativeTime(entry.updated, null, uiLang()))),
+                h('span', {
+                  className: 'dm_learn_text dm_learn_link', title: entry.content,
+                  role: 'button', tabIndex: 0, 'aria-label': t('jumpToEntry') + t('labelSep') + entry.content,
+                  onClick: function () { jumpToEntry(entry.id) },
+                  onKeyDown: function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); jumpToEntry(entry.id) } },
+                }, entry.content),
+                archived ? h('span', { className: 'dm_learn_reason' }, t('statusArchived')) : null,
+                h('span', { className: 'dm_learn_time' }, settings && settings.effective.relativeTime === false ? formatTime(entry.updated) : relativeTime(entry.updated, Date.now(), uiLang()))),
               h('div', { className: 'dm_learn_actions' },
-                h('button', { className: 'dm_btn dm_btn_mini', disabled: busy, onClick: function () { archiveRecentAuto(entry) } }, t('learningArchive')))))
+                h('button', { className: 'dm_btn dm_btn_mini', disabled: busy, onClick: function () { archiveRecentAuto(entry) } }, archived ? t('restore') : t('learningArchive')))))
           })
           // v0.30.0：程序性知识（skill）候选——批准前不可加载/不索引。
           var pendingSkills = Array.isArray(data.pendingSkills) ? data.pendingSkills : []
-          pendingSkills.slice(0, 5).forEach(function (skill) {
+          pendingSkills.slice(0, learnShowAll ? pendingSkills.length : 5).forEach(function (skill) {
             rows.push(h('div', { key: 'skill-' + skill.id, className: 'dm_learn_row', 'data-testid': 'dm-learning-skill-pending' },
               h('div', { className: 'dm_learn_main' },
                 h('span', { className: 'dm_learn_badge' }, t('learningSkillBadge')),
@@ -4227,7 +4378,7 @@ function newImportRunId() {
             rows.push(h('div', { key: 'digest', className: 'dm_learn_row', 'data-testid': 'dm-learning-digest' },
               h('div', { className: 'dm_learn_main' },
                 h('span', { className: 'dm_learn_badge' }, t('learningDigestBadge')),
-                h('span', { className: 'dm_learn_text', title: String(latestDigest.text || '') }, String(latestDigest.text || '')))))
+                expandText('digest', String(latestDigest.text || '')))))
           }
           var auditRows = auditCounts(Array.isArray(data.audit) ? data.audit : [])
           if (auditRows.length > 0) {
@@ -4240,11 +4391,11 @@ function newImportRunId() {
               skill_archived: t('auditSkill'), skill_restored: t('auditSkill'), skill_candidate_created: t('auditSkill'),
               digest_emitted: t('auditDigest'),
             }
-            var auditText = auditRows.slice(0, 8).map(function (row) { return (auditLabels[row.type] || row.type) + ' ' + row.count }).join(' · ')
+            var auditText = auditRows.slice(0, 8).map(function (row) { return (Object.prototype.hasOwnProperty.call(auditLabels, row.type) ? auditLabels[row.type] : row.type) + ' ' + row.count }).join(' · ')
             rows.push(h('div', { key: 'audit', className: 'dm_learn_row', 'data-testid': 'dm-learning-audit' },
               h('div', { className: 'dm_learn_main' },
                 h('span', { className: 'dm_learn_badge' }, t('learningAuditTitle')),
-                h('span', { className: 'dm_learn_text' }, auditText))))
+                expandText('audit', auditText))))
           }
           return h('section', { className: 'dm_group dm_learn', 'data-testid': 'dm-learning' },
             h('div', { className: 'dm_section_title' }, h(Icon, { name: 'zap', size: 13 }), t('learningTitle'),
@@ -4267,7 +4418,16 @@ function newImportRunId() {
               h('span', { style: { flex: 1 } }, t('hiddenHint').replace('{n}', String(hidden.total)).replace('{s}', String(hidden.superseded)).replace('{e}', String(hidden.expired)).replace('{a}', String(hidden.archived))),
               statusFilter !== 'all' ? h('button', { className: 'dm_btn dm_btn_mini', onClick: function () { changeStatus('all') } }, t('hiddenViewAll')) : null)
             : null
-          if (listError) {
+          // 刷新失败但列表已有内容（如窗口聚焦自动刷新遇宿主短暂 busy）：保留列表与滚动
+          // 上下文，仅在顶部加可关闭错误横幅（U5）；只有空列表才整块替换为错误态。
+          var listErrorBanner = (listError && entries.length > 0)
+            ? h('div', { className: 'dm_listerror', role: 'alert' },
+              h(Icon, { name: 'alert', size: 14, style: { flexShrink: 0, marginTop: 1, color: 'var(--dm-danger)' } }),
+              h('span', { style: { flex: 1 } }, t('listError') + t('labelSep') + listError),
+              h('button', { className: 'dm_btn dm_btn_mini', onClick: function () { refreshEntries() } }, h(Icon, { name: 'undo', size: 12 }), t('retry')),
+              h('button', { className: 'dm_btn dm_btn_mini', 'aria-label': t('close'), title: t('close'), onClick: function () { setListError('') } }, h(Icon, { name: 'x', size: 12 })))
+            : null
+          if (listError && entries.length === 0) {
             return h('div', { className: 'dm_empty', role: 'alert' },
               h(Icon, { name: 'alert', size: 28, style: { color: 'var(--dm-danger)', marginBottom: 10 } }),
               h('div', null, t('listError') + t('labelSep') + listError),
@@ -4313,9 +4473,9 @@ function newImportRunId() {
           function groupBlock(title, body) {
             return h('section', { className: 'dm_group' }, title, h('div', { className: 'dm_group_body' }, body))
           }
-          if (selection !== 'all') return h('div', { 'aria-busy': busy ? 'true' : 'false' }, hiddenHint, groupBlock(null, rows(entries, 0)), pager)
+          if (selection !== 'all') return h('div', { 'aria-busy': busy ? 'true' : 'false' }, listErrorBanner, hiddenHint, groupBlock(null, rows(entries, 0)), pager)
           var groups = groupEntries(entries)
-          return h('div', { 'aria-busy': busy ? 'true' : 'false' }, hiddenHint,
+          return h('div', { 'aria-busy': busy ? 'true' : 'false' }, listErrorBanner, hiddenHint,
             groups.global.length ? groupBlock(h('div', { className: 'dm_section_title' }, h(Icon, { name: 'globe', size: 13 }), t('scopeGlobal'), exactCounts ? h('span', { className: 'dm_section_n' }, groups.global.length + ' ' + t('entriesUnit')) : null), rows(groups.global, 0)) : null,
             groups.workspace.length ? groupBlock(h('div', { className: 'dm_section_title' }, h(Icon, { name: 'folder', size: 13 }), t('scopeWorkspace'), exactCounts ? h('span', { className: 'dm_section_n' }, groups.workspace.length + ' ' + t('entriesUnit')) : null), rows(groups.workspace, groups.global.length)) : null,
             pager)

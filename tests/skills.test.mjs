@@ -64,6 +64,23 @@ test('skills storage: pending is not loadable, approved is; ids and paths are va
   assert.ok(!fs.existsSync(path.join(root, 'skills', '..', 'etc')))
 })
 
+test('restoreSkill returns a skill to its pre-archive status, not unconditionally approved (H5)', () => {
+  const { root } = tmpService()
+  // pending 经 archive→restore 不得绕过审批变 approved（否则可加载/进索引）。
+  const pending = skills.createPendingSkill(root, { name: '待批技能', trigger: '当某事时', body: '步骤' })
+  skills.archiveSkill(root, pending.id)
+  const restored = skills.restoreSkill(root, pending.id)
+  assert.equal(restored.skill.status, 'pending', 'pending must stay pending after archive→restore')
+  assert.throws(() => skills.loadApprovedSkill(root, pending.id), (err) => err.code === 'not-approved')
+  // approved 归档后恢复仍为 approved；恢复后不残留 archivedFrom 字段。
+  const approved = skills.createApprovedSkill(root, { name: '已批技能', trigger: '当另一事时', body: '步骤' })
+  skills.archiveSkill(root, approved.id)
+  const back = skills.restoreSkill(root, approved.id)
+  assert.equal(back.skill.status, 'approved')
+  assert.ok(!('archivedFrom' in back.skill), 'archivedFrom cleared after restore')
+  assert.equal(skills.readSkill(root, approved.id).status, 'approved')
+})
+
 test('approve creates the deterministic skill-index memory entry; revise archives it until re-approved', () => {
   const { root, service } = tmpService()
   const pending = skills.createPendingSkill(root, { name: '构建', trigger: '当构建前端时', body: 'pnpm build' })

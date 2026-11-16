@@ -75,6 +75,59 @@ test('consuming a detected-but-unreminded signal keeps its type in persisted sta
   assert.equal(readState(root).sessions['s-1'].signals['sig-typed-r2'].type, 'repeat_statement', 'R2 path keeps type too')
 })
 
+test('gate accepts the reminder-rendered prefixed signal_id and consumes by bare id (H2)', () => {
+  const root = tmpRoot()
+  const bare = 'abcdef0123456789'
+  const prefixed = 'correction:' + bare
+  const result = learning.commitWithSignal({
+    root, sessionId: 's-1', signalId: prefixed,
+    detectedSignals: [SIGNAL(bare, 'correction')],
+    origin: 'auto', content: '以后回复用中文', category: 'preference', scope: 'global',
+  })
+  assert.equal(result.status, 'active')
+  const session = readState(root).sessions['s-1']
+  assert.ok(session.signals[bare].consumedAt, 'state must be keyed by the bare id')
+  assert.ok(!session.signals[prefixed], 'prefixed key must not leak into state')
+  // 重放：无论带前缀还是裸 id，都按已消费拒绝（一次性消费键一致）。
+  const replay = (signalId) => learning.commitWithSignal({ root, sessionId: 's-1', signalId, detectedSignals: [SIGNAL(bare)], origin: 'auto', content: '另一条', category: 'fact', scope: 'global' })
+  assert.throws(() => replay(prefixed), (e) => e.code === 'signal-consumed')
+  assert.throws(() => replay(bare), (e) => e.code === 'signal-consumed')
+})
+
+test('takeSignal accepts prefixed signal_id and consumes by bare id (H2)', () => {
+  const root = tmpRoot()
+  const bare = 'fedcba9876543210'
+  const out = learning.takeSignal({ root, sessionId: 's-1', signalId: 'skill_hint:' + bare, detectedSignals: [SIGNAL(bare, 'procedural_knowledge')], origin: 'auto' })
+  assert.ok(out.quotaUsed >= 1)
+  assert.ok(readState(root).sessions['s-1'].signals[bare].consumedAt)
+})
+
+test('approvePending keeps the candidate own cwd over the panel workspace (C1)', () => {
+  const root = tmpRoot()
+  // 项目 B 会话产生的 workspace 候选（弱信号 → R2 待确认）。
+  const res = learning.commitWithSignal({
+    root, sessionId: 's-1', signalId: 'sig-b', detectedSignals: [SIGNAL('sig-b', 'unknown')],
+    origin: 'auto', content: '项目B的某个稳定事实值得长期记录', category: 'fact', scope: 'workspace', workspace: '/proj/B',
+  })
+  assert.equal(res.status, 'pending')
+  // 用户在项目 A 打开面板批准：候选须落回 B，而非被面板当前目录 A 覆盖。
+  const approved = learning.approvePending({ root, pendingId: res.pendingId, workspace: '/proj/A' })
+  assert.equal(approved.entry.scope, 'workspace')
+  assert.ok(store.listAll(root, '/proj/B').some((e) => e.id === approved.entry.id), 'lands in original workspace B')
+  assert.ok(!store.listAll(root, '/proj/A').some((e) => e.id === approved.entry.id), 'not misplaced into panel workspace A')
+})
+
+test('approvePending falls back to panel workspace when candidate has no cwd (C1/B3)', () => {
+  const root = tmpRoot()
+  const res = learning.commitWithSignal({
+    root, sessionId: 's-1', signalId: 'sig-nocwd', detectedSignals: [SIGNAL('sig-nocwd', 'unknown')],
+    origin: 'auto', content: '缺工作目录的待确认候选事实', category: 'fact', scope: 'workspace',
+  })
+  assert.equal(res.status, 'pending')
+  const approved = learning.approvePending({ root, pendingId: res.pendingId, workspace: '/proj/A' })
+  assert.ok(store.listAll(root, '/proj/A').some((e) => e.id === approved.entry.id), 'fallback to panel workspace')
+})
+
 test('unknown or expired signal ids are refused at the tool boundary', () => {
   const root = tmpRoot()
   assert.throws(() => learning.commitWithSignal({

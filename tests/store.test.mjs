@@ -480,6 +480,31 @@ test('H13: supersede back-reference write failure rolls back the claim (no half-
   assert.ok(!claimant.supersedes, 'supersede claim must be rolled back')
 })
 
+test('H3: dedup-path supersede back-reference failure rolls back the claim (no stranded hidden target)', () => {
+  const root = tmpRoot()
+  const { entry: target } = store.saveEntry(root, { content: '目标条目', scope: 'global' })
+  const { entry: existing } = store.saveEntry(root, { content: '去重取代条目', scope: 'global' })
+  const targetFile = path.join(root, 'global', `${target.id}.md`)
+  const realRename = fs.renameSync
+  fs.renameSync = function (src, dst) {
+    if (String(dst) === targetFile) throw Object.assign(new Error('EIO: simulated back-reference write failure'), { code: 'EIO' })
+    return realRename.call(fs, src, dst)
+  }
+  let err = null
+  try {
+    // 同内容 → 去重命中 existing；显式 supersedes 指向 target。target 反向指针写失败。
+    store.saveEntry(root, { content: '去重取代条目', scope: 'global', supersedes: target.id })
+  } catch (e) {
+    err = e
+  } finally {
+    fs.renameSync = realRename
+  }
+  assert.ok(err, 'must surface the failure')
+  assert.equal(err.code, 'io')
+  assert.ok(!store.findEntry(root, target.id).superseded_by, 'target must not be stranded hidden')
+  assert.ok(!store.findEntry(root, existing.id).supersedes, 'existing supersede claim rolled back')
+})
+
 test('writeEntryBatch reports progress ticks for large batches (lock heartbeat)', () => {
   const root = tmpRoot()
   const now = new Date().toISOString()

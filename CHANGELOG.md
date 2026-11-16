@@ -3,6 +3,40 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.32.0] - 2026-11-16
+
+### 修复 Fixed — 第十二轮双端审计（宿主 6 + 面板 9）
+- **机密硬拒覆盖缺口（H1，安全）**：凭据赋值正则的硬 `\b` 词边界让 snake_case 复合名整体绕过——`aws_secret_access_key=…`/`client_secret=…`/`db_password=…`/`oauth_consumer_secret:…` 实测可落盘，违反「密码/密钥/token 永不写入」。改用「起始或非字母数字」段边界（`_`/`-` 也算边界，`(?:^|[^A-Za-z0-9])`），关键字须为赋值号前最后一段，散文（`password_policy:`/`max_token_count=`）不误判。**边界式而非前缀组**：`(?:[A-Za-z0-9]+[_-])*` 的贪婪量词会在长字母数字串（大备份/哈希/base64）上灾难性回溯阻塞宿主（ReDoS，live-check 实测超时），边界式保持线性扫描（新增 1.2MB 串性能回归）。
+- **学习闭环 signal_id 格式断裂（H2）**：提醒与工具描述渲染/承诺 `type:id`（`correction:abc123`）且要求「原样传」，但闸门只认裸 hex id——遵循文档的模型必然被 `no-signal` 拒绝。新增 `normalizeSignalId`，`commitWithSignal`/`takeSignal` 入口归一化为裸 id，检测匹配/state 键/一次性消费同口径，两种写法等价。
+- **批量批准跨工作区错位（C1）**：`approvePending` 的 cwd 优先级是 `workspace || item.cwd`（面板值优先），与注释「兜底」意图相反——项目 A 面板「全部批准」会把项目 B 的 workspace 候选落盘到 A。改为 `item.cwd || workspace`（候选自身 cwd 优先，面板值仅兜底），单条/批量同口径。
+- **去重分支取代链半物化（H3）**：去重命中先写 target 反向指针、后写 existing，existing 写失败留下「目标已隐藏却无人声明取代」的搁浅条目。改为先写 existing、后写 target，target 失败回滚 `existing.supersedes`（镜像非去重路径）。
+- **两处写盘边界缺机密复检（H4）**：`createSkill`（面板直接 approved+索引）与 `approvePending`（批准落盘）未复检机密。补 `rejectSecret`/`detectSecret`，服务层硬拒无例外。
+- **skill 恢复无条件 approved（H5）**：pending skill 经 archive→restore 绕过审批变 approved（可加载/进索引）。`archiveSkill` 记录 `archivedFrom`，`restoreSkill` 还原归档前状态（旧文件无字段回落 approved）；序列化仅在归档态携带该字段，普通 skill 逐字节不变。
+- **设置数值非法值强转 0（H6）**：`Number(null|false|'')===0` 骗过 isFinite，手改 settings.json 的 `injectionBudgetChars:null` 会静默关注入。新增 `clampSettingNumber` 拒绝 null/布尔/空串，数字与数字字符串仍夹取。
+- **批量归档/恢复浏览其它工作区全失败（C2）**：`bulkArchiveSelected` 用 `currentCwd` 而非 `workspaceTarget`，切到工作区 X 勾选归档全部 not-found 且误报「已不在列表」。改用 `workspaceTarget`（selection=all 时即 currentCwd）；学习区动作经 `quickUpdate` 的 `opts.workspace` 固定 currentCwd。
+- **批量批准/技能批准/拒绝/回滚后不刷新列表（C3）**：四处收尾仅 `setBusy(false)`，新落盘条目/索引不可见。补 `refreshRef.current()`，与单条批准同口径。
+- **viewMode 直写设置无守卫（C4）**：`setViewMode` 不占 seq/token/saving，密度保存期间「恢复默认」可点、旧响应复活重置前草稿。接入与 `saveDraft` 同一 seq/token/saving 守卫。
+- **学习区时间恒为带年份绝对日期（C5）**：`relativeTime(iso, null)` 中 `Number(null)===0` 骗过 isFinite，近期条目被当成 1970 年后的未来时间。null/undefined 归一为 Date.now()；学习区时间并按 `relativeTime` 设置分支，与卡片同口径。
+- **已归档自动写入仍显示「归档」（C6）**：`archiveRecentAuto` 硬编码 `archived:false`，归档后无法在学习区恢复。传真实 entry，按钮随状态切「恢复/归档」并显示已归档标记。
+- **三级文字色回退值对比度不足（C7）**：浅色 `#8a93a3`≈3.10:1、深色 `#6f7688`≈3.83:1（仅无宿主令牌时生效；实测宿主令牌 `#546072`≈6.38:1 已达标）。回退值改浅 `#6b7280`/深 `#8b93a7`，主题外观不变。
+- **auditCounts 原型键计数被吞（C8）**：`var counts={}` 对 `type:'__proto__'/'constructor'`（audit.jsonl 可手改）计数失真/渲染 garbage。改 `Object.create(null)`，auditLabels 查表加 own-property 守卫。
+- **会话 cd 后学习区不重载（C9）**：recentAuto 按工作区过滤但首载闸门挡住 cwd 变化。新增 cwd 变化重载 effect（保留首载闸门维护滚动稳定）。
+
+### 新增 Added — 面板 UI/UX
+- **学习设置组（U1）**：设置页新增「学习」分组——自动写入额度滑杆（0–5）、疑似冲突提醒开关、确定性周报开关＋星期下拉；服务端早已校验这些键，此前面板缺控件只能手改 settings.json。`bounds` 增 `digestWeekdays`。
+- **待批候选展开全部（U2）**：候选 >5 条时提供「显示全部 N 条/收起」，先审后批，消除盲批；技能待批同理。
+- **候选信息层级（U3）**：待批行加分类徽章＋作用域（含工作区名）＋「疑似冲突 N」警示 pill，跨工作区/冲突候选批准前可见可辨。
+- **复选框常驻可发现（U4）**：列表复选框由 `opacity:0`（仅 hover 可见）改常驻 `opacity:.4`，hover/选中/选择态提至不透明。
+- **刷新失败保留列表（U5）**：已有列表时刷新失败不再整块替换为错误态，改顶部可关闭错误横幅（重试＋关闭），保留阅读与滚动上下文；空列表才整块错误态。
+
+### 变更 Changed
+- **学习分区紧凑化**：行内正文默认截断（待批/周报/审计 2 行、自动写入 1 行），点击/回车展开完整内容；自动写入行点击跳转列表对应条目。长候选/周报不再把工具栏与记忆列表挤出首屏。
+- **动效开关文案**：`animationsDesc` 由「卡片入场、悬停浮起」（0.25.0 已移除）改为实际控制的「吐司滑入、弹窗淡入、骨架屏微光等反馈动效」。
+
+### 验证证据
+- 单元 **516/516**（新增 12 项回归：复合凭据名正/负例、null 数值丢弃、signal_id 归一化＋闸门端到端、takeSignal 前缀、跨工作区批准落回原目录＋无 cwd 兜底、去重分支回滚、skill 归档态还原、auditCounts 原型安全、relativeTime null）；修改文件 `node --check` 全过。
+- live/GUI/吸顶：重载宿主后按 round loop 补验（见 docs/ITERATION.md）。
+
 ## [0.31.1] - 2026-11-16
 
 ### 修复 Fixed — 第十一轮双端审计（5 项：2 中 3 低）

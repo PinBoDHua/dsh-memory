@@ -33,6 +33,33 @@ This file is the self-iteration ledger for dsh-memory: per-round increments, ver
 
 环境注意：GUI 端口每次启动不同，以运行时上下文为准；PowerShell 5.1 输出中文需 `[Console]::OutputEncoding=[Text.Encoding]::UTF8`；`git push` 的 stderr 进度可能被 PS 报 NonZeroExit，需看内容判断。
 
+## 0.32.0 第十二轮双端审计修复 + UI/UX（2026-11-16，用户指令：审计前后端并修复、优化 UI/UX）
+
+- 两个只读审计员（宿主 / 面板）逐行审计 `index.js`+`lib/*` 与 `client/client.js`；lead 逐项端到端复核（含独立 node 正则求值证 H1、真实 GUI 计算样式证 C7 宿主令牌已达标）。确认宿主 6 项（H1 安全 P1 / H2 契约 P2 / H3–H6 P3）＋面板 9 项（C1/C2/C3 P2，C4–C9 P3）。
+- **宿主修复**：H1 机密正则改「起始或非字母数字」段边界识别复合凭据名（**线性安全**——首版用 `(?:[A-Za-z0-9]+[_-])*` 前缀组在 1.2MB 串上灾难性回溯阻塞宿主，live-check 三项超时暴露，改边界式＋ReDoS 性能回归）；H2 `normalizeSignalId` 闸门接受 `type:id`/裸 id；H3 去重分支先写 existing 后写 target＋回滚；H4 createSkill/approvePending 补机密复检；H5 skill `archivedFrom` 归档态还原；H6 `clampSettingNumber` 拒 null/布尔/空串；C1 `approvePending` cwd 改 `item.cwd||workspace`。
+- **面板修复**：C2 批量归档用 workspaceTarget＋学习区动作固定 currentCwd；C3 批量/技能审批后刷新列表；C4 setViewMode 接 seq/token/saving；C5 relativeTime null 归一＋学习区时间随设置；C6 已归档自动写入按钮切「恢复」；C7 ink3 回退色提至 AA（宿主令牌存在时外观不变）；C8 auditCounts `Object.create(null)`＋查表守卫；C9 学习区随 cwd 重载。
+- **UI/UX**：学习分区紧凑化（line-clamp＋点击展开＋自动行跳转，长候选不再挤出首屏）；U1 设置页「学习」组（额度/冲突/周报/星期，bounds.digestWeekdays）；U2 待批 >5 展开全部；U3 待批行分类徽章＋作用域＋疑似冲突 pill；U4 复选框常驻 opacity:.4；U5 刷新失败保留列表＋可关闭错误横幅；动效开关文案修正。
+- TDD：12 项回归先红后绿；单元 **516/516**、`node --check` 全过。GUI 新增 U1/U4/紧凑化/C6 断言。live/GUI/吸顶重载宿主后补验。
+- 真实 GUI 勘察沉淀：学习分区 recentAuto 全文渲染曾把工具栏/列表挤出首屏（截图实证）——次要信息（最近自动写入，列表已有全文）须截断，主要操作（搜索/列表）须首屏可达。
+
+### 第十二轮新发现 backlog（本轮未修）
+
+**宿主**
+- [ ] S1 importId 含 NUL 时回执持久化按首个 NUL 切分 → id 截断/chunk=NaN（需构造 importId；client 用安全 runId）。建议拒控制字符或 lastIndexOf。
+- [ ] S2 ID_PATTERN 无长度上限，超长 id（>252）导入在 Windows 触发路径溢出 → 整批 io 回滚。建议 isValidId 加长度上限。
+- [ ] S3 audit.jsonl 只追加无轮转，auditTail 每次全量读 → /learning 刷新 O(文件大小)。建议尾读/轮转。
+- [ ] S4 装配热路径每次 2–3 次 .lock-learning syscall（learningReminder/pendingNotice/maybeWeeklyDigest）；跨进程高争用可阻塞装配。需实测；可内存周键短路。
+- [ ] S5 memory_search 走 searchDetailed（上限 1000）而非 search（200），schema maximum:200 是否被宿主强制需实测。
+
+**面板**
+- [ ] C2/C3/U2/U5 的完整 GUI 断言缺口（跨工作区批量归档、技能审批刷新、>5 展开、刷新失败横幅需网络失败注入）；本轮已加 U1/U4/紧凑化/C6。
+- [ ] S2 Select 浮层 Tab/Esc 与 Modal 焦点陷阱交互依赖宿主 React 版本（需确认）。
+- [ ] S4 大库导出 >5s 后 a.click() 下载可能失 transient activation（需大库实测）。
+- [ ] S5 recallSettingsKey 含 viewMode/pageSize/animations 等非召回键 → 切密度/页码多触发一次 recall-preview。可收窄签名。
+- [ ] S6 loadLearning 退避重试 setTimeout 未纳入卸载清理（有界 ≤3，卫生项）；api.skills/api.digest/learningArchivedMsg 死键。
+- [ ] U6 窄面板工具栏筛选/动作分组换行秩序；U7 导入预演期瓦片 0 错觉（改骨架）；U8 相似记忆吐司加「查看」动作；U9 设置 footer 吸底＋召回预览溢出计数；U10 分页时分组表头用 stats.byScope 计数；U11 键盘 n 新建/Esc 关吐司；U12 合并重复扫描 info 吐司。
+- 既有未修：H6 索引写入放大分片（大重构）、C11 i18n 单源化、C12 分片预演计数口径、撤销删除用列表快照、settings reset 窄窗口、>1000 链分量端到端。
+
 ## 0.31.1 第十一轮双端审计修复（2026-11-16，用户指令：审计前后端并修复）
 
 - 全量逐行审计 `index.js` + `lib/*`（宿主端）与 `client/client.js`（面板端）；确认 5 项真实缺陷（2 中 3 低），其余面（token/回环/CORS、路径穿越、XSS、锁序、原子写回滚、缓存失效）未见新问题。

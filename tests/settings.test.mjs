@@ -47,6 +47,19 @@ test('sanitize clamps numbers, keeps valid enums/booleans, drops unknown/invalid
   assert.equal(settings.sanitizeSettings({ injectionBudgetChars: 1234.6 }).injectionBudgetChars, 1235)
 })
 
+test('sanitize drops null/boolean/empty numeric values instead of coercing to 0 (H6)', () => {
+  // Number(null)/Number(false)/Number('') 都是 0 且 finite，旧实现会把预算/额度静默归零。
+  for (const bad of [null, false, true, '', '   ']) {
+    assert.ok(!('injectionBudgetChars' in settings.sanitizeSettings({ injectionBudgetChars: bad })), `budget should drop ${JSON.stringify(bad)}`)
+    assert.ok(!('backupRetention' in settings.sanitizeSettings({ backupRetention: bad })), `retention should drop ${JSON.stringify(bad)}`)
+    assert.ok(!('autoLearn' in settings.sanitizeSettings({ autoLearn: { maxWritesPerSession: bad } })), `autoLearn should drop ${JSON.stringify(bad)}`)
+  }
+  // 合法数字与数字字符串（手工编辑 settings.json 常见）仍被接受并夹取。
+  assert.equal(settings.sanitizeSettings({ injectionBudgetChars: '6000' }).injectionBudgetChars, 6000)
+  assert.equal(settings.sanitizeSettings({ backupRetention: 5 }).backupRetention, 5)
+  assert.equal(settings.sanitizeSettings({ autoLearn: { maxWritesPerSession: 3 } }).autoLearn.maxWritesPerSession, 3)
+})
+
 test('readOverlay tolerates missing and corrupt files', () => {
   const root = tmpRoot()
   assert.deepEqual(settings.readOverlay(root), {})

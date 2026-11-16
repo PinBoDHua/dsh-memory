@@ -9,6 +9,7 @@ import {
   SIGNAL_TYPES,
   classifyRisk,
   detectSignals,
+  normalizeSignalId,
   normalizeSignalText,
   renderSignalReminder,
   signalIdFor,
@@ -176,6 +177,21 @@ test('reminder is one line, contains only type/id tokens and quota hint', () => 
   assert.ok(text.includes('explicit_memory:bbbbbbbbbbbbbbbb'))
   assert.ok(text.includes('额度已用尽'))
   assert.equal(renderSignalReminder({ signals: [] }), '')
+})
+
+test('normalizeSignalId strips the type prefix rendered in reminders (H2)', () => {
+  // 提醒渲染 `type:id`，工具描述也写「形如 correction:abc123」；闸门须两种形式等价。
+  assert.equal(normalizeSignalId('correction:aaaaaaaaaaaaaaaa'), 'aaaaaaaaaaaaaaaa')
+  assert.equal(normalizeSignalId('explicit_memory:bbbbbbbbbbbbbbbb'), 'bbbbbbbbbbbbbbbb')
+  assert.equal(normalizeSignalId('aaaaaaaaaaaaaaaa'), 'aaaaaaaaaaaaaaaa')
+  assert.equal(normalizeSignalId(''), '')
+  assert.equal(normalizeSignalId(null), '')
+  assert.equal(normalizeSignalId(undefined), '')
+  // 渲染出的 token 经归一化后必须等于 signalIdFor 的裸 id（端到端格式一致）。
+  const id = signalIdFor(SID, 'correction', '以后回复用中文')
+  const text = renderSignalReminder({ signals: [{ id, type: 'correction', at: 1 }] })
+  const token = text.match(/correction:[0-9a-f]+/)[0]
+  assert.equal(normalizeSignalId(token), id)
 })
 
 test('conflict similarity constant stays below the dedupe-ish repeat threshold', () => {

@@ -35,6 +35,47 @@ test('guard: detects tokens embedded in a sentence', () => {
   assert.ok(detectSecret('npm token: npm_' + rep('z', 36)))
 })
 
+test('guard: rejects compound credential names with identifier prefixes (H1)', () => {
+  // snake_case 复合名此前因 \b 词边界（_ 是词字符）整体绕过凭据赋值正则。
+  const positives = [
+    'aws_secret_access_key=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY',
+    'AWS_SECRET_ACCESS_KEY: abcd1234efgh5678',
+    'client_secret=abc123def456',
+    'secret_access_key: hunter2hunter2',
+    'db_password=hunter2hunter2',
+    'oauth_consumer_secret: xyz987654321',
+    'my_access_key=abcdef123456',
+    'session_token=abcdef123456',
+  ]
+  for (const text of positives) assert.ok(detectSecret(text), `should reject: ${text}`)
+})
+
+test('guard: compound-name hardening does not flag benign policy prose (H1)', () => {
+  const negatives = [
+    'password_policy: 至少八位',
+    'token_budget 是注入预算',
+    'the password= field is required',
+    'max_token_count=123456',
+    'refresh_token_expiry: 3600seconds',
+    '项目使用 pnpm 管理依赖',
+  ]
+  for (const text of negatives) assert.equal(detectSecret(text), null, `should pass: ${text}`)
+})
+
+test('guard: credential scan is linear on long alphanumeric blobs (no ReDoS)', () => {
+  // 大备份/哈希/base64 等长字母数字串不得触发灾难性回溯阻塞宿主（第十二轮 H1 回归）。
+  const blobs = ['x'.repeat(1_200_000), ('Ab3_'.repeat(300_000)), ('a'.repeat(500_000) + 'secret_access_key=' + 'b'.repeat(500_000))]
+  for (const blob of blobs) {
+    const started = Date.now()
+    const hit = detectSecret(blob)
+    const elapsed = Date.now() - started
+    assert.ok(elapsed < 2000, `scan must be fast, took ${elapsed}ms`)
+    // 前两条无凭据赋值（纯填充）；第三条含真实复合凭据赋值，应命中且仍快速。
+    if (blob.startsWith('x'.repeat(100)) || blob.startsWith('Ab3_')) assert.equal(hit, null)
+    else assert.ok(hit, 'embedded compound credential still detected')
+  }
+})
+
 test('guard: prefix mentions without a long token body still pass (no false positives)', () => {
   const negatives = [
     'glpat- 是 GitLab 个人访问令牌的前缀',

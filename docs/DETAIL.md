@@ -23,7 +23,7 @@ Cross-session long-term memory for DeepSeek Harness: durable user preferences, p
 - **一事一条目**：每条记忆一个 Markdown 文件（frontmatter 存元数据），人类可读、可手工编辑，改动立即生效。
 - **取代链**：`memory_save`/`memory_update` 可 supersedes 另一条（目标未被其他条目取代且不成环），旧条目保留但默认隐藏；`memory_update` 传 `supersedes:''` 可撤销取代（旧条目恢复可见），传 `superseded_by:''` 可清除本条自己的悬垂误隐藏标记。面板查重（相似对）对超大簇做候选采样与 top-K 限流（limit ≤200），不会冻结宿主或返回空结果。
 - **新覆旧**：信息变化时原地更新，或走取代链；仅手动遗忘，不自动删除。同内容重复保存命中归档/过期条目时会将其复活为活跃（`memory_save` 输出 `revived: true`）；去重命中时显式提供的 `supersedes`/`pinned`/`expires`/`category`/`tags`/`origin` 会应用到既有条目（输出 `applied: true`，渲染「已应用显式字段更新」），不会静默丢弃；去重命中也会刷新工作区索引的 `lastSeen`（与 update 同口径，最近使用排序不失真）；`supersedes: ''` 显式撤销取代会解除旧目标的反向隐藏，显式空 `tags` 数组会清空标签（与 `memory_update` 同口径）。删除只计入真正落盘成功（unlink）的条目：文件被 Windows 编辑器/AV/同步盘占用时单条返回 `code=busy`（503 可重试）、批量返回 `failed` 列表，绝不谎报「已忘记」。
-- **隐私护栏**：密码/密钥/token（含 Bearer 令牌、带口令连接串，以及 GitLab/npm/Stripe/SendGrid/PyPI/GitHub 等独立令牌格式）在服务层被规则检测硬拒绝——**正文与标签统一检查**（标签同样落盘并可被检索，不能成为旁路）；其他敏感个人信息由指引要求先征得用户同意，敏感话题默认不存。
+- **隐私护栏**：密码/密钥/token（含 Bearer 令牌、带口令连接串，以及 GitLab/npm/Stripe/SendGrid/PyPI/GitHub 等独立令牌格式）在服务层被规则检测硬拒绝——**正文与标签统一检查**（标签同样落盘并可被检索，不能成为旁路）；凭据赋值识别允许标识符前缀的复合名（`aws_secret_access_key`/`client_secret`/`db_password` 等，0.32.0 H1），所有写盘路径无例外（save/update/import/skill 候选/面板 createSkill/批准 pending，0.32.0 H4）；其他敏感个人信息由指引要求先征得用户同意，敏感话题默认不存。
 
 ## Web 管理面板 Panel
 
@@ -36,8 +36,9 @@ Cross-session long-term memory for DeepSeek Harness: durable user preferences, p
 - 0.27.1 可读性：工具栏操作均带可见文字（搜索/作用域/来源/标签、`视图`＋`舒适/紧凑`、导出/导入/查重/刷新），行内钉选/归档/编辑/删除在舒适视图显示「图标＋文字」（紧凑视图保留图标并用 `aria-label` 提供可访问名称）；不再有需要猜含义的纯图标操作。
 - 0.28.0 学习分区：记忆页顶部新增「学习」分组，展示**待确认候选**（逐条「批准/拒绝」，批准后落盘为活跃条目并保留来源，拒绝只留审计）、**最近自动写入**（「归档」= 可逆撤销，恢复后条目文件逐字节相同）与审计尾部；无待确认/自动写入时整块隐藏。数据来自只读端点 `GET /learning`；批准/拒绝走 `POST /learning/approve|reject`（回环 + token；`pendingId` 缺失 400、未知 404、已处理 409/invalid）。
 - 0.29.0 分层与存量治理：设置页召回预览显示**常驻（画像，只读：pinned/constraint 分组）与索引层**、以及「未注入原因：预算不足/单条过长」；工具栏新增「合并重复」弹窗（重复组、可合并/仅报告计数、keeper、合并按钮，Esc 关闭），批量选择浮栏新增「归档所选/恢复所选」（带撤销）；均走回环+token 端点，合并/归档写审计。
-- 0.30.0 程序性知识：学习分区新增「技能待批」（名称/触发条件/版本 + 批准/拒绝）与已批准技能（版本 + 「回滚上一版」）；批准前 skill 不索引、不可加载；数据来自 `GET /skills`，审批/回滚走 `POST /skills/{approve,reject,rollback,archive,restore,create}`（回环+token；未批准加载 409）。
+- 0.30.0 程序性知识：学习分区新增「技能待批」（名称/触发条件/版本 + 批准/拒绝）与已批准技能（版本 + 「回滚上一版」）；批准前 skill 不索引、不可加载；数据来自 `GET /skills`，审批/回滚走 `POST /skills/{approve,reject,rollback,archive,restore,create}`（回环+token；未批准加载 409）。归档记录归档前状态（`archivedFrom`），恢复还原该状态——pending 不会经 archive→restore 绕过审批变 approved（0.32.0 H5）；面板显式 `create` 与批准 pending 落盘前同样硬拒机密（0.32.0 H4）。
 - 0.31.0 批量与摘要：学习分区顶部在候选 >1 时出现「全部批准/全部拒绝」（逐项结算并提示失败数）；新增「最近审计」聚合行（只显示类型计数，不渲染候选正文）与「周报」存档行（最新一期确定性摘要文本）；数据来自 `GET /learning`（含 `digests`）与 `GET /digest`。
+- 0.32.0 学习分区紧凑化与设置：行内正文默认截断（待批/周报/审计 2 行、最近自动写入 1 行），点击/回车展开完整内容，自动写入行点击跳转列表对应条目（长候选不再把工具栏/列表挤出首屏）；待批行显示**分类徽章＋作用域（含工作区名）＋「疑似冲突 N」警示**；候选 >5 条提供「显示全部/收起」先审后批；已归档自动写入按钮随状态切「恢复/归档」。设置页新增**「学习」组**（自动写入额度 0–5 滑杆、疑似冲突提醒开关、确定性周报开关＋星期下拉），与服务端 `autoLearn/conflictAlert/digest` 校验同源。批量批准/技能审批后刷新列表；批量归档/恢复按所选作用域目录命中；会话 cd 后学习区随工作目录重载；刷新失败保留已有列表＋可关闭错误横幅。
 - 数据面：宿主 `webServer` 命名路由 `/plugins/dsh-memory/{status,entries,workspaces,cwd,stats,similar,recall-preview,export,settings,settings/reset,backup,save,update,forget,import,learning,learning/approve,learning/reject,learning/approve-many,learning/reject-many,digest,duplicates,duplicates/merge,archive,skills,skills/create,skills/approve,skills/reject,skills/rollback,skills/archive,skills/restore}`，浏览器同源 fetch；进程级 token（status 下发），写操作校验 `X-RPC-Key`，全部路由仅回环可达。
 - 一个操作，两个调用方：面板与 agent 工具调用同一 `lib/service.js`，语义与失败原因完全一致。工具输出渲染（`renderSaveResult`/`renderSearchResult`/`renderUpdateResult`/`renderForgetResult`）与检索条目映射（`searchResultEntry`）为模块级纯函数，独立单测覆盖（含 lossless JSON 往返）。
 - 样式仅用 `--dsw-alias-*` 主题令牌，自动跟随亮/暗主题；文案中英双语（zh/en）。
@@ -46,7 +47,7 @@ Cross-session long-term memory for DeepSeek Harness: durable user preferences, p
 
 | 工具 | 作用 |
 |---|---|
-| `memory_save` | 写入一条记忆（content 必填；category=preference/fact/decision；scope=global/workspace，默认 workspace；tags 可选；origin 必填 manual/auto；**signal_id 必填**：必须是本会话学习提醒中给出的有效信号，否则 `no-signal`；已消费返回 `signal-consumed`；超出会话额度返回 `autolimit`；R3 候选返回 `rejected-risk`；R2 候选返回 `status:"pending"` 与 pendingId，批准前不生效）。直接用户纠正形成的 preference 自动带 `constraint` 标签。同作用域完全相同的内容自动去重（仅针对未取代条目；若命中的是归档/过期条目则复活为活跃并返回 `revived: true`）。写入后返回相似记忆提示 `similar`（Jaccard≥0.5、最多 3 条、advisory 不阻断），便于取代/更新旧条目、避免并存矛盾。信号驱动的自动写入不接受 `pinned`/`expires`/`supersedes`（须走 `memory_update` 显式修正流）。 |
+| `memory_save` | 写入一条记忆（content 必填；category=preference/fact/decision；scope=global/workspace，默认 workspace；tags 可选；origin 必填 manual/auto；**signal_id 必填**：必须是本会话学习提醒中给出的有效信号，否则 `no-signal`；接受提醒渲染的 `type:id`（如 `correction:abc123`）与裸 id 两种写法（闸门归一化为裸 id，0.32.0 H2）；已消费返回 `signal-consumed`；超出会话额度返回 `autolimit`；R3 候选返回 `rejected-risk`；R2 候选返回 `status:"pending"` 与 pendingId，批准前不生效）。直接用户纠正形成的 preference 自动带 `constraint` 标签。同作用域完全相同的内容自动去重（仅针对未取代条目；若命中的是归档/过期条目则复活为活跃并返回 `revived: true`）。写入后返回相似记忆提示 `similar`（Jaccard≥0.5、最多 3 条、advisory 不阻断），便于取代/更新旧条目、避免并存矛盾。信号驱动的自动写入不接受 `pinned`/`expires`/`supersedes`（须走 `memory_update` 显式修正流）。 |
 | `memory_search` | 关键词检索（大小写不敏感、多词 AND、CJK bigram 模糊），非空查询按相关度×衰减排序；空查询＝按更新时间列出；可按 scope/category/origin/tag 过滤，limit 默认 20、offset 分页；include_superseded/include_expired/include_archived 找回隐藏态（默认 false）。返回 `{entries, hidden}`：hidden 统计被隐藏的匹配数（被取代/过期/归档，按首个排除原因归类），渲染附「可用 include_* 找回」提示。 |
 | `memory_update` | 按 id 新覆旧（content/category/tags 可选更新）；可选 `scope` 在 global ↔ 当前工作区之间移动（可同时 `supersedes` 建立取代链）；supersedes 取代另一条（目标必须未被他条取代且不成环）、expires 设过期日（空串清除）、pinned 钉选、archived 归档/恢复、origin 修正来源标记。 |
 | `memory_forget` | 按 id 永久删除。 |
