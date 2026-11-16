@@ -135,6 +135,16 @@ test('writeOverlay never materializes untouched nested defaults', () => {
   // 再次写普通键不丢失既有嵌套覆盖。
   settings.writeOverlay(root, { autoInject: false })
   assert.deepEqual(settings.readOverlay(root).autoLearn, { maxWritesPerSession: 2 })
+  // 多子键命名空间同样只落显式写过的子键：digest.weekday 默认值不得被物化。
+  settings.writeOverlay(root, { digest: { enabled: false } })
+  const raw3 = JSON.parse(fs.readFileSync(file, 'utf8'))
+  assert.deepEqual(raw3.digest, { enabled: false }, 'untouched default weekday must not be materialized')
+  settings.writeOverlay(root, { digest: { weekday: 3 } })
+  const raw4 = JSON.parse(fs.readFileSync(file, 'utf8'))
+  assert.deepEqual(raw4.digest, { enabled: false, weekday: 3 }, 'previously touched subkeys survive later writes')
+  const eff = settings.effectiveSettings({}, root)
+  assert.equal(eff.digest.enabled, false)
+  assert.equal(eff.digest.weekday, 3)
 })
 
 test('concurrent process writes to different keys do not lose each other (overlay lock)', async () => {

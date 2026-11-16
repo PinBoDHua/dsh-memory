@@ -127,3 +127,55 @@ test('batch approval endpoint approves multiple candidates and reports failures'
   assert.ok(Array.isArray(digest.json().archive))
   assert.ok(typeof digest.json().enabled === 'boolean')
 })
+
+test('audit tail honors the requested limit up to 2000 (digest first-run / export contract)', () => {
+  const { root } = tmpService()
+  for (let i = 0; i < 250; i += 1) learning.appendAudit(root, { type: 'auto_saved', n: i })
+  assert.equal(learning.auditTail(root, 500).length, 250, 'export asks 500; must not truncate at 200')
+  assert.equal(learning.auditTail(root, 2000).length, 250, 'digest first run asks 2000')
+  assert.equal(learning.auditTail(root, 20).length, 20, 'small panel limits still honored')
+})
+
+test('first weekly digest aggregates more than 200 audit events (documented 2000 cap)', () => {
+  const { root, service } = tmpService()
+  const realNow = Date.now()
+  for (let i = 0; i < 250; i += 1) learning.appendAudit(root, { type: 'auto_saved', n: i })
+  const digest = service.maybeWeeklyDigest({ now: realNow })
+  assert.ok(digest && digest.record, 'digest generated')
+  assert.equal(digest.record.counts.auto_saved, 250, 'all 250 events counted, not capped at 200')
+  assert.ok(/自动写入 250/.test(digest.text), digest.text)
+})
+
+test('batch approval accepts a workspace fallback for candidates without cwd (same as single approve)', async () => {
+  const { root, service } = tmpService()
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-memory-ws-'))
+  const candidate = learning.commitWithSignal({
+    root,
+    sessionId: SID,
+    signalId: 'sig-ws',
+    detectedSignals: [sig('sig-ws', 'repeat_statement')],
+    origin: 'auto',
+    content: '工作区候选（创建时无 cwd）',
+    category: 'fact',
+    scope: 'workspace',
+    tags: [],
+    existing: [],
+  })
+  assert.equal(candidate.status, 'pending')
+  const handlers = createHandlers({ service, token: TOKEN, version: '0.31.1-test' })
+  const post = (body) => ({
+    method: 'POST',
+    headers: { host: '127.0.0.1:50562', 'x-rpc-key': TOKEN },
+    socket: { remoteAddress: '127.0.0.1' },
+    async *[Symbol.asyncIterator]() { yield Buffer.from(JSON.stringify(body)) },
+  })
+  const res = { statusCode: null, body: '' }
+  res.writeHead = (s) => { res.statusCode = s }
+  res.end = (payload) => { res.body = payload ?? '' }
+  res.json = () => JSON.parse(res.body)
+  await handlers['learning/approve-many'](post({ pendingIds: [candidate.pendingId], workspace: ws }), res)
+  assert.equal(res.statusCode, 200)
+  assert.equal(res.json().result.approved.length, 1, JSON.stringify(res.json()))
+  assert.equal(res.json().result.failed.length, 0)
+  assert.equal(store.listScope(root, 'workspace', ws).length, 1)
+})

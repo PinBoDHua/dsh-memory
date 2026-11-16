@@ -3,6 +3,18 @@
 本项目的所有重要变更都记录在此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 All notable changes to this project are documented here. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.31.1] - 2026-11-16
+
+### 修复 Fixed — 第十一轮双端审计（5 项：2 中 3 低）
+- **周报/导出审计尾静默截断（中）**：`auditTail` 内部硬上限 200 与调用方契约不符——周报首次聚合传 2000（DETAIL「上限 2000 条」）、导出/备份审计尾传 500，事件超过 200 时少计。上限改为 2000，面板小 limit（20）不受影响。
+- **批量审批吐司恒报 0/0（中）**：面板「全部批准/全部拒绝」回调对已被 api 层 `unwrapResult` 解包的载荷再取 `payload.result`，恒为 `{}`——实际批准/拒绝数与失败数从不展示。新增纯函数 `learningBatchCounts` 直接读解包后的 `{approved|rejected, failed}`。
+- **批量批准缺 workspace 兜底（低）**：`POST /learning/approve-many` 与 `approvePendingMany` 不透传 workspace，创建时缺 cwd 的工作区候选单条批准（面板当前工作目录兜底）可成功、批量却 `no-workspace` 失败。路由/服务/面板三层补齐，与单条批准同口径。
+- **信号消费丢失类型（低）**：消费「当轮检测到但尚未提醒」的信号（如提醒状态写失败后的重试）时，state.json 落 `type:'unknown'`。`commitWithSignal`/`takeSignal` 经 `_detected` 传入真实类型与 ISO 时间戳（TTL 回收可解析）。
+- **设置覆盖层物化未触碰默认子键（低）**：`writeOverlay` 嵌套合并以 `SETTINGS_DEFAULTS` 打底，写 `digest.enabled` 会把默认 `weekday:1` 一并物化进 settings.json（违背「未触碰默认不扩写 overlay」不变量，未来改默认会被旧覆盖钉住）。`mergeLayers` 增加 `seedDefaults` 开关：有效值计算仍打底，覆盖层写入只保留已存在/显式提交的子键。
+
+### 验证证据
+- 单元 **504/504**（新增 5 项回归：auditTail 上限 / 周报 >200 事件聚合 / 批量批准 workspace 兜底 / 信号类型持久化 / 嵌套覆盖层子键最小化 + 批量计数纯函数）；修改文件 `node --check` 全过。live/GUI 脚本需运行中宿主，本轮未跑。
+
 ## [0.31.0] - 2026-11-15
 
 ### 新增 Added — 主动学习 I4：冲突提醒、确定性周报与面板完善

@@ -33,6 +33,16 @@ This file is the self-iteration ledger for dsh-memory: per-round increments, ver
 
 环境注意：GUI 端口每次启动不同，以运行时上下文为准；PowerShell 5.1 输出中文需 `[Console]::OutputEncoding=[Text.Encoding]::UTF8`；`git push` 的 stderr 进度可能被 PS 报 NonZeroExit，需看内容判断。
 
+## 0.31.1 第十一轮双端审计修复（2026-11-16，用户指令：审计前后端并修复）
+
+- 全量逐行审计 `index.js` + `lib/*`（宿主端）与 `client/client.js`（面板端）；确认 5 项真实缺陷（2 中 3 低），其余面（token/回环/CORS、路径穿越、XSS、锁序、原子写回滚、缓存失效）未见新问题。
+- B1 中：`auditTail` 硬上限 200 截断周报首聚合（传 2000）与导出审计尾（传 500）→ 上限改 2000（DETAIL 契约）。
+- F1 中：批量批准/拒绝回调对已 `unwrapResult` 载荷二次解包 → 吐司恒报 0/0；新增纯函数 `learningBatchCounts`。
+- B3 低：`approve-many` 不透传 workspace → 缺 cwd 候选批量批准 no-workspace（单条可成功）；路由/服务/面板补齐。
+- B2 低：消费未提醒信号 state 落 `type:'unknown'` → `_detected` 传真实类型 + ISO 时间戳。
+- B4 低：`writeOverlay` 嵌套合并物化未触碰默认子键（digest.weekday）→ `mergeLayers` 增 `seedDefaults` 开关。
+- TDD：5 项回归先红后绿；验证：单元 **504/504**、`node --check` 全过。live/GUI 需运行中宿主，本轮未跑（重载宿主后按 round loop 补验）。
+
 ## 0.31.0 主动学习 I4（2026-11-15，设计稿 `docs/learning-design.md` §4 I4）
 
 - 疑似冲突：R2 pending 记录 `conflictWith`（确定性包含/相似判定、最多 3 条），保留双方来源，绝不自动覆盖/取代。

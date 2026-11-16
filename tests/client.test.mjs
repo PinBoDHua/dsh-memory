@@ -8,7 +8,18 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import helpers from '../client/client.js'
 
-const { validateDraft, buildCreatePayload, clampPageToTotal, todayUtcIso, localDateStamp, cwdCompareKey, canonicalWorkspaceValue, groupEntries, nextToken, entriesParams, buildEntriesQuery, workspaceOptions, errorKeyFor, shouldQueueToast, partitionSettled, parseTags, unwrapResult, settingsStatusNext, savedToastKey, exportParams, defaultViewSelection, sectionCountsExact, chunkEntries, chunkEntriesPreservingLinks, aggregateImportPlans, shouldFocusToastAction, categoryChipCount, importRejectText, importWriteCount, rebaseRejectedIndexes, parseImportText, validateImportDoc, importSummary, pageSlice, duplicatePlanSummary, auditCounts, entryDetailRows, relativeTime, formatBytes, isExpired, statusOf, originOf, statusQueryFlags, settleBulkDelete, idSetOf, toastRemainingMs, shouldResumeToast, settingsSignature, shouldAutoRefresh } = helpers
+const { validateDraft, buildCreatePayload, clampPageToTotal, todayUtcIso, localDateStamp, cwdCompareKey, canonicalWorkspaceValue, groupEntries, nextToken, entriesParams, buildEntriesQuery, workspaceOptions, errorKeyFor, shouldQueueToast, partitionSettled, parseTags, unwrapResult, settingsStatusNext, savedToastKey, exportParams, defaultViewSelection, sectionCountsExact, chunkEntries, chunkEntriesPreservingLinks, aggregateImportPlans, shouldFocusToastAction, categoryChipCount, importRejectText, importWriteCount, rebaseRejectedIndexes, parseImportText, validateImportDoc, importSummary, pageSlice, duplicatePlanSummary, auditCounts, entryDetailRows, relativeTime, formatBytes, isExpired, statusOf, originOf, statusQueryFlags, settleBulkDelete, idSetOf, toastRemainingMs, shouldResumeToast, settingsSignature, shouldAutoRefresh, learningBatchCounts } = helpers
+
+test('learningBatchCounts reads the unwrapped approve-many/reject-many payload (no double unwrap)', () => {
+  // api.approveLearningMany/rejectLearningMany 已 .then(unwrapResult)：回调拿到的是
+  // {approved|rejected, failed} 本身，再取 payload.result 会恒为 {}（吐司恒报 0/0）。
+  const approved = unwrapResult({ result: { approved: [{ pendingId: 'a' }, { pendingId: 'b' }], failed: [{ pendingId: 'c', code: 'no-workspace' }] } })
+  assert.deepEqual(learningBatchCounts(approved), { approved: 2, rejected: 0, failed: 1 })
+  const rejected = unwrapResult({ result: { rejected: [{ pendingId: 'a' }], failed: [] } })
+  assert.deepEqual(learningBatchCounts(rejected), { approved: 0, rejected: 1, failed: 0 })
+  assert.deepEqual(learningBatchCounts(null), { approved: 0, rejected: 0, failed: 0 })
+  assert.deepEqual(learningBatchCounts({}), { approved: 0, rejected: 0, failed: 0 })
+})
 
 test('auditCounts aggregates audit event types deterministically without content', () => {
   const events = [

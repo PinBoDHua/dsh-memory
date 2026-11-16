@@ -699,6 +699,17 @@ function auditCounts(events) {
   return Object.keys(counts).sort(function (a, b) { return counts[b] - counts[a] || a.localeCompare(b) }).map(function (type) { return { type: type, count: counts[type] } })
 }
 
+  /** 批量批准/拒绝结算计数（纯函数）：api 层已 unwrapResult，回调拿到的是
+   * {approved|rejected, failed} 本身——再取 payload.result 会恒为 {}（吐司恒报 0/0）。 */
+  function learningBatchCounts(payload) {
+    var r = payload || {}
+    return {
+      approved: Array.isArray(r.approved) ? r.approved.length : 0,
+      rejected: Array.isArray(r.rejected) ? r.rejected.length : 0,
+      failed: Array.isArray(r.failed) ? r.failed.length : 0,
+    }
+  }
+
   /** 真实写入条数（imported+updated）；被判重复/拒绝的条目不算「已写入」。 */
   function importWriteCount(totals) {
     var t = totals || {}
@@ -768,7 +779,7 @@ function auditCounts(events) {
     return (mb < 10 ? mb.toFixed(1) : Math.round(mb)) + ' MB'
   }
 
-  var helpers = { validateDraft: validateDraft, buildCreatePayload: buildCreatePayload, clampPageToTotal: clampPageToTotal, todayUtcIso: todayUtcIso, localDateStamp: localDateStamp, cwdCompareKey: cwdCompareKey, canonicalWorkspaceValue: canonicalWorkspaceValue, platformIsWindows: platformIsWindows, groupEntries: groupEntries, nextToken: nextToken, entriesParams: entriesParams, buildEntriesQuery: buildEntriesQuery, workspaceOptions: workspaceOptions, errorKeyFor: errorKeyFor, shouldQueueToast: shouldQueueToast, toastRemainingMs: toastRemainingMs, shouldResumeToast: shouldResumeToast, settingsSignature: settingsSignature, shouldAutoRefresh: shouldAutoRefresh, partitionSettled: partitionSettled, idSetOf: idSetOf, settleBulkDelete: settleBulkDelete, parseTags: parseTags, unwrapResult: unwrapResult, settingsStatusNext: settingsStatusNext, savedToastKey: savedToastKey, exportParams: exportParams, defaultViewSelection: defaultViewSelection, sectionCountsExact: sectionCountsExact, chunkEntries: chunkEntries, chunkEntriesPreservingLinks: chunkEntriesPreservingLinks, parseImportText: parseImportText, validateImportDoc: validateImportDoc, importSummary: importSummary, importWriteCount: importWriteCount, rebaseRejectedIndexes: rebaseRejectedIndexes, aggregateImportPlans: aggregateImportPlans, shouldFocusToastAction: shouldFocusToastAction, categoryChipCount: categoryChipCount, importRejectText: importRejectText, pageSlice: pageSlice, duplicatePlanSummary: duplicatePlanSummary, auditCounts: auditCounts, entryDetailRows: entryDetailRows, relativeTime: relativeTime, formatBytes: formatBytes, isExpired: isExpired, statusOf: statusOf, originOf: originOf, statusQueryFlags: statusQueryFlags }
+  var helpers = { validateDraft: validateDraft, buildCreatePayload: buildCreatePayload, clampPageToTotal: clampPageToTotal, todayUtcIso: todayUtcIso, localDateStamp: localDateStamp, cwdCompareKey: cwdCompareKey, canonicalWorkspaceValue: canonicalWorkspaceValue, platformIsWindows: platformIsWindows, groupEntries: groupEntries, nextToken: nextToken, entriesParams: entriesParams, buildEntriesQuery: buildEntriesQuery, workspaceOptions: workspaceOptions, errorKeyFor: errorKeyFor, shouldQueueToast: shouldQueueToast, toastRemainingMs: toastRemainingMs, shouldResumeToast: shouldResumeToast, settingsSignature: settingsSignature, shouldAutoRefresh: shouldAutoRefresh, partitionSettled: partitionSettled, idSetOf: idSetOf, settleBulkDelete: settleBulkDelete, parseTags: parseTags, unwrapResult: unwrapResult, settingsStatusNext: settingsStatusNext, savedToastKey: savedToastKey, exportParams: exportParams, defaultViewSelection: defaultViewSelection, sectionCountsExact: sectionCountsExact, chunkEntries: chunkEntries, chunkEntriesPreservingLinks: chunkEntriesPreservingLinks, parseImportText: parseImportText, validateImportDoc: validateImportDoc, importSummary: importSummary, importWriteCount: importWriteCount, rebaseRejectedIndexes: rebaseRejectedIndexes, aggregateImportPlans: aggregateImportPlans, shouldFocusToastAction: shouldFocusToastAction, categoryChipCount: categoryChipCount, importRejectText: importRejectText, pageSlice: pageSlice, duplicatePlanSummary: duplicatePlanSummary, auditCounts: auditCounts, learningBatchCounts: learningBatchCounts, entryDetailRows: entryDetailRows, relativeTime: relativeTime, formatBytes: formatBytes, isExpired: isExpired, statusOf: statusOf, originOf: originOf, statusQueryFlags: statusQueryFlags }
 
   // ===== node 测试导出（CJS） =====
   if (typeof module !== 'undefined' && module.exports) {
@@ -3698,10 +3709,10 @@ function newImportRunId() {
           var pendingIds = (Array.isArray(learning && learning.pending) ? learning.pending : []).map(function (item) { return item.id })
           if (pendingIds.length === 0) return
           setBusy(true)
-          api.approveLearningMany({ pendingIds: pendingIds }).then(function (payload) {
-            var result = (payload && payload.result) || {}
+          api.approveLearningMany({ pendingIds: pendingIds, workspace: currentCwd }).then(function (payload) {
+            var counts = learningBatchCounts(payload)
             bumpDataVersion()
-            showToast('ok', t('learningBatchApproved').replace('{n}', String((result.approved || []).length)).replace('{m}', String((result.failed || []).length)))
+            showToast('ok', t('learningBatchApproved').replace('{n}', String(counts.approved)).replace('{m}', String(counts.failed)))
             return loadLearning()
           }).catch(writeFailure).then(function () { setBusy(false) })
         }
@@ -3711,9 +3722,9 @@ function newImportRunId() {
           if (pendingIds.length === 0) return
           setBusy(true)
           api.rejectLearningMany({ pendingIds: pendingIds }).then(function (payload) {
-            var result = (payload && payload.result) || {}
+            var counts = learningBatchCounts(payload)
             bumpDataVersion()
-            showToast('ok', t('learningBatchRejected').replace('{n}', String((result.rejected || []).length)).replace('{m}', String((result.failed || []).length)))
+            showToast('ok', t('learningBatchRejected').replace('{n}', String(counts.rejected)).replace('{m}', String(counts.failed)))
             return loadLearning()
           }).catch(writeFailure).then(function () { setBusy(false) })
         }

@@ -64,6 +64,17 @@ test('R1 auto write creates an active entry, consumes the signal and counts one 
   assert.equal(audit.at(-1).entryId, entries[0].id)
 })
 
+test('consuming a detected-but-unreminded signal keeps its type in persisted state', () => {
+  const root = tmpRoot()
+  write(root, { signalId: 'sig-typed', type: 'new_environment_fact' })
+  const record = readState(root).sessions['s-1'].signals['sig-typed']
+  assert.equal(record.type, 'new_environment_fact', 'type must not fall back to unknown')
+  assert.ok(Number.isFinite(Date.parse(record.at)), 'at must stay parseable ISO for TTL pruning')
+  assert.ok(record.consumedAt)
+  write(root, { signalId: 'sig-typed-r2', type: 'repeat_statement', content: '以后都用 pnpm' })
+  assert.equal(readState(root).sessions['s-1'].signals['sig-typed-r2'].type, 'repeat_statement', 'R2 path keeps type too')
+})
+
 test('unknown or expired signal ids are refused at the tool boundary', () => {
   const root = tmpRoot()
   assert.throws(() => learning.commitWithSignal({
