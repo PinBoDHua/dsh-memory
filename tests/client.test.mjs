@@ -8,7 +8,24 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import helpers from '../client/client.js'
 
-const { validateDraft, buildCreatePayload, clampPageToTotal, todayUtcIso, localDateStamp, cwdCompareKey, canonicalWorkspaceValue, groupEntries, nextToken, entriesParams, buildEntriesQuery, workspaceOptions, errorKeyFor, shouldQueueToast, partitionSettled, parseTags, unwrapResult, settingsStatusNext, savedToastKey, exportParams, defaultViewSelection, sectionCountsExact, chunkEntries, chunkEntriesPreservingLinks, aggregateImportPlans, shouldFocusToastAction, categoryChipCount, importRejectText, importWriteCount, rebaseRejectedIndexes, parseImportText, validateImportDoc, importSummary, pageSlice, duplicatePlanSummary, auditCounts, entryDetailRows, relativeTime, formatBytes, isExpired, statusOf, originOf, statusQueryFlags, settleBulkDelete, idSetOf, toastRemainingMs, shouldResumeToast, settingsSignature, shouldAutoRefresh, learningBatchCounts } = helpers
+const { validateDraft, buildCreatePayload, clampPageToTotal, todayUtcIso, localDateStamp, cwdCompareKey, canonicalWorkspaceValue, groupEntries, nextToken, entriesParams, buildEntriesQuery, workspaceOptions, errorKeyFor, shouldQueueToast, partitionSettled, parseTags, unwrapResult, settingsStatusNext, savedToastKey, exportParams, defaultViewSelection, sectionCountsExact, chunkEntries, chunkEntriesPreservingLinks, aggregateImportPlans, shouldFocusToastAction, categoryChipCount, importRejectText, importWriteCount, rebaseRejectedIndexes, parseImportText, validateImportDoc, importSummary, pageSlice, duplicatePlanSummary, auditCounts, entryDetailRows, relativeTime, formatBytes, isExpired, statusOf, originOf, statusQueryFlags, settleBulkDelete, idSetOf, toastRemainingMs, shouldResumeToast, settingsSignature, shouldAutoRefresh, learningBatchCounts, recallOverflowCounts } = helpers
+
+test('recallOverflowCounts reports per-layer overflow beyond the 20-item preview cap', () => {
+  const manyResident = [
+    ...Array.from({ length: 25 }, () => ({ layer: 'resident' })),
+    ...Array.from({ length: 4 }, () => ({ layer: 'index' })),
+  ]
+  assert.deepEqual(recallOverflowCounts(manyResident, 20), { resident: 5, index: 0 })
+  assert.deepEqual(recallOverflowCounts([], 20), { resident: 0, index: 0 })
+  assert.deepEqual(recallOverflowCounts(null, 20), { resident: 0, index: 0 })
+  const mixed = [
+    ...Array.from({ length: 2 }, () => ({ layer: 'resident' })),
+    ...Array.from({ length: 22 }, () => ({ layer: 'index' })),
+  ]
+  assert.deepEqual(recallOverflowCounts(mixed, 20), { resident: 0, index: 2 })
+  assert.deepEqual(recallOverflowCounts(mixed, 0), { resident: 0, index: 2 }) // 非法上限回落 20
+  assert.deepEqual(recallOverflowCounts(mixed, 5), { resident: 0, index: 17 })
+})
 
 test('learningBatchCounts reads the unwrapped approve-many/reject-many payload (no double unwrap)', () => {
   // api.approveLearningMany/rejectLearningMany 已 .then(unwrapResult)：回调拿到的是

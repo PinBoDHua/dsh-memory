@@ -23,8 +23,8 @@ This file is the self-iteration ledger for dsh-memory: per-round increments, ver
 |---|---|---|
 | `tests/*.test.mjs` | 纯逻辑/服务/路由/存储/锁/设置/守卫/客户端纯函数 | `node --test tests/*.test.mjs` |
 | `scripts/live-check.mjs` | 运行中宿主回环 API 全链路＋客户端 bundle rev | `--port=` 或 `DSH_MEMORY_PORT`；测试条目/设置/备份自动恢复，`--fail-at=<子串>` 失败注入验证异常清理，运行前后数据根快照 diff=0 自检 |
-| `scripts/gui-check.mjs` | 真实浏览器面板：过滤请求参数、下拉键盘、弹窗 Esc 草稿 | `--url=`；Edge headless + CDP（端口默认随机，可用 `--cdp-port=` 固定）；cookie 由 `<DSH_HOME>/.credentials.yaml` 自签；临时记忆清理，设置/备份用例前后快照恢复，运行前后数据根快照 diff=0 自检；中断安全（清理注册表 + SIGINT/SIGTERM/异常统一 abort；`--abort-after=<ms>` 注入验证） |
-| `scripts/gui-sticky-check.mjs` | 吸顶工具栏布局回归（只读、不写数据） | `--url=`；滚动后断言工具栏贴滚动容器顶（gap≤1px）且上方无露出带暴露卡片；`--probe=1` 受控实验（sticky 停驻位 = top + 容器 padding-top）；退出 0 绿 / 1 红 / 2 无法判定 |
+| `scripts/gui-check.mjs` | 真实浏览器面板：过滤请求参数、下拉键盘、弹窗 Esc 草稿、390/760 响应式 | `--url=`；Edge headless + CDP（端口默认随机，可用 `--cdp-port=` 固定）；cookie 由 `<DSH_HOME>/.credentials.yaml` 自签；临时记忆清理，设置/备份用例前后快照恢复，运行前后数据根快照 diff=0 自检；中断安全（清理注册表 + SIGINT/SIGTERM/异常统一 abort；`--abort-after=<ms>` 注入验证）；0.33.0 起 390 断言先收起宿主侧栏并条件等待面板宽度 |
+| `scripts/gui-sticky-check.mjs` | 吸顶工具栏布局回归（只读、不写数据） | `--url=`；滚动后断言工具栏贴滚动容器顶（gap≤1px）且上方无露出带暴露卡片；`--probe=1` 受控实验（sticky 停驻位 = top + 容器 padding-top）；`--narrow=<px>` 只读窄屏诊断（溢出→1）；`--top=1` 仅首屏截图（诊断，不参与红绿）；退出 0 绿 / 1 红 / 2 无法判定 |
 | `scripts/data-snapshot.mjs` | live/gui 共用的数据根快照/差异纯函数 | 条目内容 sha256、backups 内容 sha256、settings/meta；junk 清单（`.tmp-*`、`.lock-*`、非预期文件）；刻意排除 access.json/index.json 与派生 `.cache/`；`tests/data-snapshot.test.mjs` 覆盖 |
 | `scripts/verify-lock.mjs` | 验证脚本互斥锁 | 数据根 `.lock-verify`（data-snapshot 忽略其存在）；并发第二个脚本码 `busy` 快速退出；陈旧锁按 mtime 自愈、owner 死 PID 立即自愈；`tests/verify-lock.test.mjs` 覆盖 |
 | `scripts/watchdog.mjs` | live/gui 强杀看门狗 | 父进程启动时写清理 manifest（root/测试标记/settings 原始内容/backups 基线），detached 子进程每 1.5s 检查父存活；被 taskkill/CI 超时杀死后自动删测试条目、恢复 settings、删除新增备份与残留锁；正常结束由 cleanup 注册表停掉；`tests/watchdog.test.mjs` 覆盖，真实 `taskkill /F` 实测通过 |
@@ -32,6 +32,17 @@ This file is the self-iteration ledger for dsh-memory: per-round increments, ver
 | `scripts/eval-replay.mjs` | 学习机制确定性回放（v0.28.0） | `node scripts/eval-replay.mjs [--json] [--keep]`；FI-1…FI-10：无信号/伪造信号/manual 绕过、直接纠正→constraint、重复交代与信号重放、会话写入上限、5 次会话召回、首次新会话召回、注入顺序、R2/R3 分级、撤销恢复逐字节、v2→v3 迁移与失败注入；每个场景独立临时数据根，结束即删，不触碰真实数据 |
 
 环境注意：GUI 端口每次启动不同，以运行时上下文为准；PowerShell 5.1 输出中文需 `[Console]::OutputEncoding=[Text.Encoding]::UTF8`；`git push` 的 stderr 进度可能被 PS 报 NonZeroExit，需看内容判断。
+
+## 0.33.0 面板 U6–U9 收尾 + 验收修复（2026-11-19，用户指令：审计验收最新修改并修复 B1–B4）
+
+- 审计对象：工作树相对 f799fc7（0.32.0）的未提交面板改动（`client/client.js` + 两个 GUI 脚本）。审计结论「不通过」：1 项 GUI 红、发布收尾缺失、U9 半交付、两项既有验收行为回归；本轮修复后通过。
+- **B1** gui-check 390：先收起宿主侧栏（`收起侧边栏`）＋ `waitUntil` 面板宽度 ≥ `min(width,320)` 再断言；失败信息记录 `innerWidth/hostSidebarCollapsed`，不再依赖固定 400ms。
+- **B2** 版本/文档：升 0.33.0；补 CHANGELOG/DETAIL/ITERATION；DETAIL 的统计/工具栏/设置/chips 旧视觉描述同步为 0.33.0 实现。
+- **B3** U9 后半：新增 `recallOverflowCounts` 纯函数、常驻/索引溢出提示、单测；GUI 在大导入 319 条后切设置页断言溢出计数。
+- **B4**：0.27.1「1264px 单行」改为按可用宽度自动换行（空间足够时单行；1400px 带宿主左栏、内容约 1046px 时为两行，实测工具栏 97px；收起侧栏后单行），写入 CHANGELOG/DETAIL；移除 ≤520px 对行内操作文字的隐藏，GUI 断言 760/390 舒适视图文字可见。
+- **P2/P3**：「查看相似」action toast `autoFocus:false`；学习动态折叠时不再输出悬空 `aria-controls`；`jumpToEntry` 重置作用域；520px 复选框列宽 24px；清理审计临时文件与 `CON`，仓库只留 3 个源文件改动。
+- 验证：单元 **518/518**（新增 1 项）；live **246/246**；GUI **126/126**；吸顶 **2/2**；数据根快照前后一致、零残留。
+- backlog：U6/U7/U8/U9 已完成；U10–U12 保留。新增 P3：设置 footer 滚到底仍有 64px 空隙（`dm_page` padding-bottom），后续可修。
 
 ## 0.32.0 第十二轮双端审计修复 + UI/UX（2026-11-16，用户指令：审计前后端并修复、优化 UI/UX）
 
@@ -57,7 +68,8 @@ This file is the self-iteration ledger for dsh-memory: per-round increments, ver
 - [ ] S4 大库导出 >5s 后 a.click() 下载可能失 transient activation（需大库实测）。
 - [ ] S5 recallSettingsKey 含 viewMode/pageSize/animations 等非召回键 → 切密度/页码多触发一次 recall-preview。可收窄签名。
 - [ ] S6 loadLearning 退避重试 setTimeout 未纳入卸载清理（有界 ≤3，卫生项）；api.skills/api.digest/learningArchivedMsg 死键。
-- [ ] U6 窄面板工具栏筛选/动作分组换行秩序；U7 导入预演期瓦片 0 错觉（改骨架）；U8 相似记忆吐司加「查看」动作；U9 设置 footer 吸底＋召回预览溢出计数；U10 分页时分组表头用 stats.byScope 计数；U11 键盘 n 新建/Esc 关吐司；U12 合并重复扫描 info 吐司。
+- [x] U6 窄面板工具栏筛选/动作分组换行秩序；U7 导入预演期瓦片 0 错觉；U8 相似记忆吐司加「查看」动作；U9 设置 footer 吸底＋召回预览溢出计数（0.33.0 完成）。
+- [ ] U10 分页时分组表头用 stats.byScope 计数；U11 键盘 n 新建/Esc 关吐司；U12 合并重复扫描 info 吐司。
 - 既有未修：H6 索引写入放大分片（大重构）、C11 i18n 单源化、C12 分片预演计数口径、撤销删除用列表快照、settings reset 窄窗口、>1000 链分量端到端。
 
 ## 0.31.1 第十一轮双端审计修复（2026-11-16，用户指令：审计前后端并修复）

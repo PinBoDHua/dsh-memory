@@ -36,6 +36,15 @@ const USER_DATA = path.join(os.tmpdir(), `dsh-memory-gui-profile-${process.pid}`
 const EDGE = process.env.EDGE_PATH ?? 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe'
 const DSH_HOME = process.env.DSH_HOME ?? path.join(os.homedir(), '.dsh')
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+// 条件等待（不固定 sleep）：用于等宿主布局/异步渲染稳定，避免慢机器上的假红。
+async function waitUntil(fn, timeout = 4000, interval = 100) {
+  const start = Date.now()
+  while (Date.now() - start < timeout) {
+    if (await fn()) return true
+    await sleep(interval)
+  }
+  return false
+}
 
 // ===== 真实数据根快照/恢复（设置页破坏性用例前后保持一致） =====
 let ROOT = ''
@@ -457,11 +466,31 @@ async function main() {
     })()`)
     const pkgVersion = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version
     check('标题旁显示插件版本号且与 package.json 一致', versionState.text === 'v' + pkgVersion && /版本|version/i.test(versionState.title), JSON.stringify({ ...versionState, pkgVersion }))
+    const actionNames = await evaluate(`(() => [...document.querySelectorAll('.dm_card_actions button')].map((el) => ({ visible: (el.textContent || '').trim(), aria: el.getAttribute('aria-label') || '' })))()`)
+    check('卡片操作的可访问名称包含对应记忆',
+      actionNames.length > 0 && actionNames.every((item) => item.aria.startsWith(item.visible) && item.aria.length > item.visible.length),
+      JSON.stringify(actionNames.slice(0, 3)))
 
-    // v0.28.0：学习分区（/learning）——真实数据有「待确认」或「最近自动写入」时必须
-    // 在记忆页顶部可见（标题「学习」+ 至少一行）；两者都为空时不得渲染空壳占位。
+    // 学习动态：待办默认展开，普通动态先收起；展开后内容仍与 /learning 一致。
     await sleep(1200)
     const learningDoc = await apiJson('/learning')
+    const learningActionable = Number(learningDoc?.pendingCount || 0) + (learningDoc?.pendingSkills || []).length
+    const learningMustExist = learningActionable > 0 || (learningDoc?.recentAuto || []).length > 0 || (learningDoc?.approvedSkills || []).length > 0 || (learningDoc?.digests || []).length > 0
+    const learningDisclosure = await evaluate(`(() => {
+      const section = document.querySelector('[data-testid="dm-learning"]')
+      const toggle = section ? section.querySelector('.dm_learn_toggle') : null
+      return { exists: Boolean(section), expanded: toggle ? toggle.getAttribute('aria-expanded') : null, controls: toggle ? toggle.getAttribute('aria-controls') : null }
+    })()`)
+    check('学习动态按待办展开/收起，摘要带 aria-expanded',
+      !learningMustExist || (learningDisclosure.exists && learningDisclosure.expanded === String(learningActionable > 0) &&
+        (learningDisclosure.expanded === 'true' ? learningDisclosure.controls === 'dm-learning-body' : learningDisclosure.controls === null)),
+      JSON.stringify({ actionable: learningActionable, ui: learningDisclosure }))
+    await evaluate(`(() => {
+      const toggle = document.querySelector('[data-testid="dm-learning"] .dm_learn_toggle')
+      if (toggle && toggle.getAttribute('aria-expanded') === 'false') toggle.click()
+      return true
+    })()`)
+    await sleep(250)
     const learningUi = await evaluate(`(() => {
       const section = document.querySelector('[data-testid="dm-learning"]')
       if (!section) return { exists: false, rows: 0, pendingRows: 0, title: '' }
@@ -469,10 +498,10 @@ async function main() {
         exists: true,
         rows: section.querySelectorAll('.dm_learn_row').length,
         pendingRows: section.querySelectorAll('[data-testid="dm-learning-pending"]').length,
+        bodyExists: Boolean(section.querySelector('#dm-learning-body')),
         title: (section.querySelector('.dm_section_title') || {}).textContent || '',
       }
     })()`)
-    const learningMustExist = (learningDoc?.pendingCount || 0) > 0 || (learningDoc?.recentAuto || []).length > 0
     check('学习分区随 /learning 数据出现（标题「学习」+ 非空行）',
       learningMustExist
         ? learningUi.exists && learningUi.rows > 0 && /学习|Learning/.test(learningUi.title)
@@ -483,6 +512,7 @@ async function main() {
         const btn = document.querySelector('[data-testid="dm-learning-auto"] button')
         return Boolean(btn) && /归档|Archive/.test((btn.textContent || '').trim())
       })()`))
+    check('学习动态展开时 aria-controls 目标存在', !learningMustExist || learningUi.bodyExists, JSON.stringify(learningUi))
 
     // v0.29.0：存量治理入口——「合并重复」弹窗（精确重复组摘要或空态），只读打开、Esc 关闭。
     const dupOpened = await evaluate(`(() => {
@@ -544,6 +574,16 @@ async function main() {
       }
     })()`)
     check('U1 设置页学习组控件齐全（额度/冲突/周报/星期）', learnSettings.hasGroup && learnSettings.quota && learnSettings.conflict && learnSettings.digest && learnSettings.weekday, JSON.stringify(learnSettings))
+    const settingsA11y = await evaluate(`(() => {
+      const descriptions = [...document.querySelectorAll('.dm_setrow_desc')]
+      const footer = document.querySelector('.dm_setfooter')
+      return {
+        descriptions: descriptions.length,
+        linked: descriptions.every((el) => el.id && document.querySelector('[aria-describedby~="' + el.id + '"]')),
+        footerPosition: footer ? getComputedStyle(footer).position : 'missing',
+      }
+    })()`)
+    check('设置说明关联控件，保存状态栏吸底', settingsA11y.descriptions > 0 && settingsA11y.linked && settingsA11y.footerPosition === 'sticky', JSON.stringify(settingsA11y))
     await evaluate(`(() => { const tab = [...document.querySelectorAll('[role="tab"]')].find((el) => /记忆|Memories/.test(el.textContent || '')); if (tab) tab.click(); return Boolean(tab) })()`)
     await sleep(1200)
     // 紧凑化 + C6：造一条长自动写入 → 自动行单行截断、工具栏仍在首屏；归档后按钮变「恢复」并可还原。
@@ -555,7 +595,8 @@ async function main() {
     if (uxId) uxIds.push(uxId)
     check('UX 验收临时自动写入已创建', Boolean(uxId), String(uxId))
     const clickRefresh = () => evaluate(`(() => { const btn = [...document.querySelectorAll('.dm_toolbar button')].find((el) => /^(刷新|Refresh)$/.test((el.textContent || '').trim())); if (btn) btn.click(); return Boolean(btn) })()`)
-    await clickRefresh(); await sleep(1500)
+    const openLearning = () => evaluate(`(() => { const toggle = document.querySelector('[data-testid="dm-learning"] .dm_learn_toggle'); if (toggle && toggle.getAttribute('aria-expanded') === 'false') toggle.click(); return Boolean(toggle) })()`)
+    await clickRefresh(); await sleep(1500); await openLearning(); await sleep(250)
     await evaluate(`(() => { const p = document.querySelector('.dm_page'); if (p) p.scrollTop = 0; return true })()`)
     await sleep(400)
     const uxCompact = await evaluate(`(() => {
@@ -762,6 +803,14 @@ async function main() {
     const archivedReq = lastEntriesRequest()
     check('面板状态过滤随请求上行（status=archived）', archivedClicked && archivedReq !== undefined && /[?&]status=archived(&|$)/.test(archivedReq), archivedReq)
     check('隐藏态视图放宽全部 include_*', archivedReq !== undefined && archivedReq.includes('include_superseded=true') && archivedReq.includes('include_expired=true') && archivedReq.includes('include_archived=true'), archivedReq)
+    const mutedFocus = await evaluate(`(() => {
+      const card = document.querySelector('.dm_card_muted')
+      if (!card) return { skipped: true }
+      const content = card.querySelector('.dm_content')
+      if (content) content.focus()
+      return { skipped: false, cardOpacity: getComputedStyle(card).opacity, contentOpacity: content ? getComputedStyle(content).opacity : null }
+    })()`)
+    check('隐藏态卡片不整体降透明度，键盘聚焦后正文清晰', mutedFocus.skipped || (mutedFocus.cardOpacity === '1' && mutedFocus.contentOpacity === '1'), JSON.stringify(mutedFocus))
     // 0.24.20：统计请求与列表同口径（status/include_*），否则「全部状态/已归档」视图头部数字与列表矛盾。
     const statsArchivedReq = lastStatsRequest()
     check('统计请求同步 status/include_archived（视图一致）', statsArchivedReq !== undefined && /[?&]status=archived(&|$)/.test(statsArchivedReq) && statsArchivedReq.includes('include_archived=true'), statsArchivedReq)
@@ -1010,8 +1059,17 @@ async function main() {
         await send('DOM.enable')
         const { root } = await send('DOM.getDocument', { depth: -1 })
         const { nodeId } = await send('DOM.querySelector', { nodeId: root.nodeId, selector: 'input[type=file]' })
+        await send('Network.emulateNetworkConditions', { offline: false, latency: 1000, downloadThroughput: -1, uploadThroughput: -1 })
         await send('DOM.setFileInputFiles', { files: [file], nodeId })
+        await sleep(350)
+        const pendingPreview = await evaluate(`(() => {
+          const tiles = [...document.querySelectorAll('.dm_import_pending .dm_tile_num')]
+          const confirm = [...document.querySelectorAll('.dm_dialog button')].find((b) => /确认导入|Import/.test((b.textContent || '').trim()) && b.classList.contains('dm_btn_primary'))
+          return { pending: document.querySelector('.dm_import_pending') !== null, values: tiles.map((el) => (el.textContent || '').trim()), confirmDisabled: confirm ? confirm.disabled : null }
+        })()`)
+        check('导入预演中显示占位符而非假 0，确认保持禁用', pendingPreview.pending && pendingPreview.values.length >= 4 && pendingPreview.values.every((v) => v === '—') && pendingPreview.confirmDisabled === true, JSON.stringify(pendingPreview))
         await sleep(2200)
+        await send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 })
         const planState = await evaluate(`(() => {
           const dialog = document.querySelector('.dm_dialog')
           return {
@@ -1071,6 +1129,16 @@ async function main() {
           const pairDoc = await apiJson(`/entries?query=${encodeURIComponent('__gui_shard_299')}&scope=global&limit=50&include_superseded=true`)
           const older = (pairDoc?.entries || []).find((e) => e.id === bigIds[299])
           check('分片导入保留跨片取代链（旧条目仍隐藏）', Boolean(older) && older.superseded_by === bigIds[300], JSON.stringify(older && { id: older.id, superseded_by: older.superseded_by }))
+          // U9：大库下的召回预览每层只列前 20 条，必须显式显示溢出计数。
+          await evaluate(`(() => { const tab = document.querySelector('#dm-tab-settings'); if (tab) tab.click(); return Boolean(tab) })()`)
+          await sleep(1600)
+          const recallOverflowUi = await evaluate(`(() => {
+            const hint = document.querySelector('[data-testid="dm-recall-overflow-index"], [data-testid="dm-recall-overflow-resident"]')
+            return { items: document.querySelectorAll('.dm_recall_item').length, hint: hint ? (hint.textContent || '').trim() : null, layers: (document.querySelector('[data-testid="dm-recall-layers"]') || {}).textContent || '' }
+          })()`)
+          check('U9 召回预览超过 20 条显示溢出计数', recallOverflowUi.items >= 20 && Boolean(recallOverflowUi.hint) && /\d+/.test(recallOverflowUi.hint), JSON.stringify(recallOverflowUi))
+          await evaluate(`(() => { const tab = document.querySelector('#dm-tab-memories'); if (tab) tab.click(); return Boolean(tab) })()`)
+          await sleep(900)
         } finally {
           await send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 })
           await forgetIds(bigEntries.map((e) => e.id))
@@ -1867,7 +1935,60 @@ async function main() {
       await sleep(800)
     }
 
-    // 9) 无 JS 异常 + 截图（先截图：cleanup 钩子会杀 Edge，不能再发 CDP 请求）
+    // 9) 窄屏布局：工具栏按搜索/筛选/操作换行，插件自身不产生横向滚动。
+    // 宿主在 1400 下默认展开左侧栏（实测占 280px，插件面板只剩 1046px）；窄屏断言
+    // 测的是插件面板自身，先收起宿主侧栏并等布局生效，否则会把宿主 chrome 的宽度
+    // 误判成插件横向溢出（本轮审计 B1）。
+    const hostSidebarCollapsed = await evaluate(`(() => {
+      const btn = [...document.querySelectorAll('button,[role="button"]')]
+        .find((el) => /收起.*侧边栏|collapse.*sidebar/i.test(el.getAttribute('aria-label') || '') && el.getBoundingClientRect().width > 0)
+      if (!btn) return false
+      btn.click()
+      return true
+    })()`)
+    if (hostSidebarCollapsed) await sleep(500)
+    for (const width of [760, 390]) {
+      await send('Emulation.setDeviceMetricsOverride', { width, height: 850, deviceScaleFactor: 1, mobile: false })
+      // 等侧栏收起/媒体查询落定：面板宽度至少要能容纳一个可用面板，不靠固定 sleep。
+      await waitUntil(async () => {
+        const w = await evaluate(`(() => { const p = document.querySelector('.dm_page'); return p ? p.clientWidth : 0 })()`)
+        return w >= Math.min(width, 320)
+      }, 4000)
+      await sleep(150)
+      const narrow = await evaluate(`(() => {
+        const page = document.querySelector('.dm_page')
+        const search = document.querySelector('.dm_searchwrap')
+        const actions = document.querySelector('.dm_toolbar_actions')
+        const pr = page ? page.getBoundingClientRect() : null
+        const ar = actions ? actions.getBoundingClientRect() : null
+        return {
+          pageWidth: page ? page.clientWidth : 0,
+          scrollWidth: page ? page.scrollWidth : 0,
+          searchWidth: search ? Math.round(search.getBoundingClientRect().width) : 0,
+          actionsInside: !pr || !ar || (ar.left >= pr.left - 1 && ar.right <= pr.right + 1),
+          innerWidth: window.innerWidth,
+          hostSidebarCollapsed: ${hostSidebarCollapsed},
+          overflow: pr ? [...page.querySelectorAll('*')].filter((el) => { const r = el.getBoundingClientRect(); return r.width > 0 && (r.right > pr.right + 1 || r.left < pr.left - 1) }).slice(0, 6).map((el) => ({ cls: String(el.className || el.tagName).slice(0, 60), text: (el.textContent || '').trim().replace(/\\s+/g, ' ').slice(0, 40), rect: [Math.round(el.getBoundingClientRect().left), Math.round(el.getBoundingClientRect().right)] })) : [],
+        }
+      })()`)
+      check(`窄屏 ${width}px 无横向溢出且搜索/操作可用`, narrow.pageWidth >= Math.min(width, 320) && narrow.scrollWidth <= narrow.pageWidth + 1 && narrow.searchWidth > 80 && narrow.actionsInside, JSON.stringify(narrow))
+      const narrowLabels = await evaluate(`(() => {
+        const page = document.querySelector('.dm_page')
+        const el = document.querySelector('.dm_card_actions .dm_act_label')
+        return { found: Boolean(el), compact: !!(page && page.classList.contains('dm_compact')), display: el ? getComputedStyle(el).display : null }
+      })()`)
+      check(`窄屏 ${width}px 舒适视图保留行内操作文字（0.27.1）`, narrowLabels.found && (narrowLabels.compact || narrowLabels.display !== 'none'), JSON.stringify(narrowLabels))
+      if (width === 390) {
+        const narrowShot = await send('Page.captureScreenshot', { format: 'png' })
+        const narrowPath = SHOT.replace(/\.png$/i, '') + '-narrow.png'
+        writeFileSync(narrowPath, Buffer.from(narrowShot.data, 'base64'))
+        console.log(`  · 窄屏截图：${narrowPath}`)
+      }
+    }
+    await send('Emulation.setDeviceMetricsOverride', { width: 1400, height: 950, deviceScaleFactor: 1, mobile: false })
+    await sleep(400)
+
+    // 10) 无 JS 异常 + 截图（先截图：cleanup 钩子会杀 Edge，不能再发 CDP 请求）
     check('页面无未捕获 JS 异常', consoleLines.every((line) => !line.startsWith('exception:')), JSON.stringify(consoleLines.slice(0, 5)))
     const shot = await send('Page.captureScreenshot', { format: 'png' })
     writeFileSync(SHOT, Buffer.from(shot.data, 'base64'))

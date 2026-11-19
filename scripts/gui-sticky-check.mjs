@@ -9,7 +9,9 @@
  * 用法 Run:
  *   node scripts/gui-sticky-check.mjs --url=http://127.0.0.1:<GUI端口>/ [--shot=out.png]
  *   --probe=1：受控实验模式（临时改 DOM 样式，测量 sticky 停驻位与 top/padding-top 关系）。
- * 退出码：0=绿；1=红（露出带/未贴顶）；2=无法判定（列表太短滚不动）。
+ *   --narrow=390：只读窄屏诊断，列出越出插件滚动容器的元素并截图，不写业务数据。
+ *   --top=1：只截取首屏，不滚动、不写业务数据。
+ * 退出码：0=绿；1=红（露出带/未贴顶/窄屏溢出）；2=无法判定（列表太短滚不动）。
  * 登录 cookie 与 gui-check 同一自签算法，仅用于回环地址。
  */
 import { spawn } from 'node:child_process'
@@ -146,6 +148,43 @@ async function main() {
     })()`)
     await sleep(2000)
     if (!opened || !(await evaluate(`document.querySelector('.dm_page') !== null`))) throw new Error('记忆面板未打开')
+
+    // 只读窄屏诊断：列出越出插件滚动容器的实际元素，不必为布局问题跑整套写数据验收。
+    const narrowWidth = Number(argOf('narrow') || 0)
+    if (narrowWidth > 0) {
+      if (narrowWidth < 760) {
+        await send('Emulation.setDeviceMetricsOverride', { width: 760, height: 850, deviceScaleFactor: 1, mobile: false })
+        await sleep(300)
+      }
+      await send('Emulation.setDeviceMetricsOverride', { width: narrowWidth, height: 850, deviceScaleFactor: 1, mobile: false })
+      await sleep(500)
+      const narrow = await evaluate(`(() => {
+        const page = document.querySelector('.dm_page')
+        const pr = page.getBoundingClientRect()
+        const overflow = [...page.querySelectorAll('*')].map((el) => {
+          const r = el.getBoundingClientRect()
+          return { el, r }
+        }).filter(({ r }) => r.width > 0 && (r.right > pr.right + 1 || r.left < pr.left - 1)).slice(0, 20).map(({ el, r }) => ({
+          tag: el.tagName, cls: String(el.className || '').slice(0, 80), id: el.id,
+          text: (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 50),
+          left: Math.round(r.left), right: Math.round(r.right), width: Math.round(r.width),
+        }))
+        return { pageWidth: page.clientWidth, scrollWidth: page.scrollWidth, pageLeft: pr.left, pageRight: pr.right, overflow }
+      })()`)
+      console.log('  · 窄屏诊断:', JSON.stringify(narrow, null, 1))
+      const shot = await send('Page.captureScreenshot', { format: 'png' })
+      writeFileSync(SHOT, Buffer.from(shot.data, 'base64'))
+      console.log(`  · 截图: ${SHOT}`)
+      process.exitCode = narrow.scrollWidth <= narrow.pageWidth + 1 ? 0 : 1
+      return
+    }
+
+    if (argOf('top') !== undefined) {
+      const shot = await send('Page.captureScreenshot', { format: 'png' })
+      writeFileSync(SHOT, Buffer.from(shot.data, 'base64'))
+      console.log(`  · 首屏截图: ${SHOT}`)
+      return
+    }
 
     const rest = await evaluate(`(() => {
       const page = document.querySelector('.dm_page')
